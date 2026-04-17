@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "Cisco Meraki",
+  "id": "rknightion-meraki-datasource",
+  "metrics": true,
+  "alerting": true,
+  "backend": false,
+  "info": {
+    "keywords": ["meraki", "cisco", "network", "observability"],
+    "description": "Query Cisco Meraki network data. Configured via the Cisco Meraki app plugin.",
+    "author": {
+      "name": "Rob Knight",
+      "url": "https://github.com/rknightion"
+    },
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=12.3.0",
+    "plugins": [
+      {
+        "type": "app",
+        "id": "rknightion-meraki-app",
+        "name": "Cisco Meraki"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+apiVersion: 1
+
+datasources:
+  - name: Cisco Meraki
+    uid: rknightion-meraki-ds
+    type: rknightion-meraki-datasource
+    access: proxy
+    isDefault: false
+    editable: false
+    jsonData: {}
+
+deleteDatasources:
+  - name: Cisco Meraki
+    orgId: 1

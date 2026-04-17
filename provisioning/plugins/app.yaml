@@ -1,0 +1,10 @@
+apiVersion: 1
+
+apps:
+  - type: 'rknightion-meraki-app'
+    org_id: 1
+    org_name: 'Main Org.'
+    disabled: false
+    jsonData:
+      # API key must be injected by the user at runtime (or via env-substitution in secureJsonData).
+      isApiKeySet: false

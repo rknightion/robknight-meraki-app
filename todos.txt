@@ -1,0 +1,731 @@
+================================================================================
+CISCO MERAKI GRAFANA PLUGIN — ROADMAP, DECISIONS, AND HANDOFF DOC
+================================================================================
+
+Target reader: a future LLM / contributor picking this project up after v0.1. This
+file is a compact but complete handoff: architectural decisions that are LOCKED
+IN, code conventions to follow, the v0.2+ phase plan, and the gotchas that will
+bite you if you don't read them.
+
+Last updated: 2026-04-17 (right after v0.1 MVP was feature-complete).
+
+Repo: /Users/rob/repos/grafana-meraki-plugin
+Git: not yet initialised as of writing. Plan doc: /Users/rob/.claude/plans/we-are-building-a-wobbly-pancake.md
+
+================================================================================
+0. TL;DR — WHAT WORKS TODAY (v0.1 MVP)
+================================================================================
+
+• Full stack builds green:
+    npm run typecheck            -> clean
+    npm run lint                 -> 0 errors, 2 Select-deprecation warnings
+    npm run test:ci              -> 0 tests (Jest scaffold present, no specs yet)
+    npm run build                -> webpack emits dist/module.js + dist/datasource/module.js
+    mage -v                      -> 6 platform binaries in dist/gpx_meraki_*
+    go test ./pkg/...            -> 3 packages pass (meraki, plugin, plugin/query)
+    go vet ./pkg/...             -> clean
+
+• User flow that works end-to-end today:
+    1. Install plugin, enable it.
+    2. Open Apps -> Cisco Meraki -> Configuration, paste Meraki API key, optionally
+       override base URL, optionally set shared fraction for HA.
+    3. Click "Test connection" -> calls GET /organizations via the Go backend.
+    4. Navigate to Home / Organizations / Sensors pages. Sensors shows real
+       native-timeseries data for MT devices (temperature, humidity, door,
+       water, CO2, PM2.5, TVOC, noise, battery, indoorAirQuality).
+
+• Query kinds implemented on backend: organizations, networks, devices,
+  deviceStatusOverview, sensorReadingsLatest, sensorReadingsHistory.
+
+================================================================================
+1. LOCKED-IN ARCHITECTURE DECISIONS (do not revisit without strong reason)
+================================================================================
+
+1.1  Plugin ID namespace
+     - v0.1 IDs: "rknightion-meraki-app"        (app plugin)
+                 "rknightion-meraki-datasource" (nested data source)
+     - Go module: github.com/robknight/grafana-meraki-plugin
+     - At first SIGNED release, the user (Rob Knight) plans to migrate to his
+       Grafana staff org "robknight". Expect a plugin-ID rename to
+       "robknight-meraki-app" + "robknight-meraki-datasource" at that point.
+       CHANGELOG already notes this.
+     - The Go module path can stay as-is (github.com/robknight/...). Plugin ID
+       and Go module path are independent.
+
+1.2  Plugin type: App + nested DS + shared Go backend
+     - The APP plugin has a Go backend (gpx_meraki). The app owns:
+       • the Meraki API key (in app.secureJsonData.merakiApiKey)
+       • the meraki.Client instance (rate limiter + cache + HTTP client)
+       • resource endpoints: POST /resources/query, POST /resources/metricFind,
+         GET /resources/ping
+       • CheckHealth (calls GET /organizations)
+     - The DATA SOURCE plugin is FRONTEND-ONLY. It has no backend binary.
+       Its datasource.ts implements query() and metricFindQuery() by POSTing to
+       the app's resource endpoints via getBackendSrv().fetch.
+     - Rationale: one place to configure the API key, one Go binary to build,
+       one rate limiter / cache shared across every query and every dashboard
+       panel. This is the same pattern Grafana's Synthetic Monitoring app uses.
+
+1.3  NO Prometheus / exporter dependency
+     - The plugin does NOT depend on a Prometheus data source.
+     - The plugin does NOT scrape, read, or import anything from the reference
+       Python exporter at /Users/rob/repos/meraki-dashboard-exporter.
+     - The exporter is READ-ONLY REFERENCE MATERIAL for:
+       • Which Meraki endpoints exist and what they return
+       • Per-endpoint rate-limit + pagination quirks
+       • Dashboard panel layouts to reproduce as scenes
+     - Every query from a scene goes directly to api.meraki.com via our Go
+       backend — "Infinity-style" but with a typed query-kind contract.
+
+1.4  Scenes everywhere. No provisioned static JSON dashboards.
+     - Every observability flow is built as a @grafana/scenes page under
+       src/pages/<Area>/. DO NOT add JSON dashboards under
+       provisioning/dashboards/. If a v0.2+ phase wants a dashboard, build it
+       as a SceneApp page.
+
+1.5  Authentication
+     - API key stored on the APP plugin in secureJsonData.merakiApiKey. Read
+       server-side only via settings.DecryptedSecureJSONData. NEVER expose the
+       key to the browser.
+     - The nested DS has NO API-key field (ConfigEditor shows a message
+       directing users to the app config page).
+
+1.6  Rate limiting
+     - Per-instance, per-org token bucket. 10 req/s default, burst 20, jitter
+       ±10%. Implementation: pkg/meraki/ratelimit.go (token bucket with test
+       hooks for Clock/Sleep/Rand).
+     - Config knob: AppJsonData.sharedFraction (0 < x <= 1). Operators with N
+       Grafana replicas set this to 1/N.
+     - Distributed limiter is INTENTIONALLY deferred. Rely on the server-side
+       429 + Retry-After as the natural coordinator across replicas.
+
+1.7  Caching
+     - In-memory TTL LRU, pkg/meraki/cache.go (wraps hashicorp/golang-lru/v2).
+     - Key: sha256(orgID + path + sorted params) via CacheKey().
+     - Per-kind TTLs (keep consistent with what's used in pkg/plugin/query/*):
+         Organizations:          1h
+         Networks:                15m
+         Devices:                5m
+         DeviceStatusOverview:   1m
+         SensorReadingsLatest:    30s
+         SensorReadingsHistory:   1m
+     - No Redis, no cross-replica cache. Per-plugin-instance only in v0.1+.
+
+1.8  Time-range handling
+     - pkg/meraki/timerange.go defines EndpointTimeRange with MaxTimespan and
+       AllowedResolutions, plus KnownEndpointRanges map.
+     - Resolve() applies:
+         • 60s freshness floor (subtract from `now` before computing t1)
+         • Timespan clamp to MaxTimespan (emits Annotation if truncated)
+         • Resolution quantization UPWARD to nearest allowed bucket
+     - Current KnownEndpointRanges covers sensor history, apiRequests,
+       wireless usage history, channel util history, uplinksLossAndLatency.
+       ADD new entries when implementing v0.2+ timeseries endpoints.
+
+1.9  Snapshot vs. timeseries conventions
+     - Native timeseries only from: sensor readings history, wireless usage
+       history, channel utilization history, uplinksLossAndLatency.
+     - Snapshot endpoints (deviceStatusOverview, deviceStatuses, switch port
+       statuses, VPN statuses) return point-in-time frames meant for Stat or
+       Table viz. DO NOT try to synthesize timeseries from snapshots.
+     - Future: a tiny opt-in 24h x 1min in-process ring buffer for
+       deviceStatuses state transitions — NOT implemented yet; add in a v0.3+
+       phase if users ask.
+
+1.10 Frame-notice error pattern
+     - Per-query errors become `data.Notice{Severity: Error, Text: ...}` on a
+       placeholder frame. A single bad query does NOT kill the whole panel.
+     - See pkg/plugin/query/dispatch.go for the wrapping logic. Keep this
+       pattern for every new query kind.
+
+1.11 URL-sync for scenes
+     - Every scene page with drilldowns or tabs uses `routePath: 'path/*'`
+       with a trailing `*`. Deep links must be bookmarkable.
+
+================================================================================
+2. CODE CONVENTIONS (follow these when adding to the project)
+================================================================================
+
+2.1  Query-kind contract lives in TWO places, keep them in sync:
+     Frontend: src/datasource/types.ts       (QueryKind enum + MerakiQuery interface)
+     Backend:  pkg/plugin/query/dispatch.go  (QueryKind string constants + MerakiQuery struct)
+
+2.2  Adding a new query kind (7-step recipe):
+     1. Add the kind to BOTH src/datasource/types.ts (QueryKind enum) and
+        pkg/plugin/query/dispatch.go (constants).
+     2. Add an endpoint wrapper in pkg/meraki/ if not already present.
+     3. Add an EndpointTimeRange entry in pkg/meraki/timerange.go if the
+        endpoint is timeseries.
+     4. Create pkg/plugin/query/<kind>.go with a handler:
+          func handleXxx(ctx, client, q MerakiQuery, tr TimeRange) (*data.Frame, error)
+     5. Wire the handler into dispatch.go's switch.
+     6. For metricFind (variable hydration), extend pkg/plugin/query/metricfind.go.
+     7. Add to QueryEditor.tsx (src/datasource/QueryEditor.tsx) so users can
+        select the kind manually.
+
+2.3  Adding a new scene page (6-step recipe):
+     1. src/pages/<Area>/<area>Scene.ts  — EmbeddedScene factory
+     2. src/pages/<Area>/<area>Page.ts   — SceneAppPage with routePath
+     3. Import the page in src/components/App/App.tsx and add to pages[]
+     4. Add an entry to "includes" in src/plugin.json with the URL
+     5. Variables: reuse from src/scene-helpers/variables.ts when possible;
+        define new factories there, NOT inline in the scene file
+     6. Panels: reuse from src/scene-helpers/panels.ts; define new ones there
+
+2.4  Frame column naming (consistency across kinds):
+     - Use the Meraki-native JSON field names when they're sensible
+       (e.g. "serial", "name", "model", "networkId", "orgId").
+     - For historical timeseries, use "ts" for the time column (matches how
+       Meraki returns timestamps) and bundle labels on the value field via
+       data.Field.Labels.
+
+2.5  DO NOT edit files in .config/ that carry the scaffold warning
+     ("DO NOT EDIT THIS FILE DIRECTLY"). EXCEPTIONS already made in v0.1:
+     • .config/bundler/copyFiles.ts  — added svg/png globs so nested plugins'
+       img/ dirs get copied to dist/<nested>/img/. Note this for future
+       scaffold upgrades (may need re-apply).
+     • .config/docker-compose-base.yaml  — changed container name + volume
+       path + log filter + allow-unsigned to use the new plugin ID.
+     • .config/supervisord/supervisord.conf — updated path + binary name.
+
+2.6  Provisioning
+     - provisioning/datasources/meraki.yaml: stable UID "rknightion-meraki-ds".
+       This UID is hardcoded in src/scene-helpers/datasource.ts as
+       MERAKI_DS_UID. If you rename the UID, update both.
+     - provisioning/plugins/app.yaml: auto-enables the app plugin on startup.
+
+2.7  Dependencies
+     - Frontend: scaffolded with @grafana/create-plugin. No new npm deps
+       required for v0.1. New v0.2+ work should prefer @grafana/* first.
+     - Backend (go.mod): hashicorp/golang-lru/v2 and golang.org/x/time added
+       for v0.1. Further deps should be justified in a PR description.
+
+================================================================================
+3. REPOSITORY LAYOUT (as of v0.1)
+================================================================================
+
+  src/
+    module.tsx                  # App plugin entry
+    plugin.json                 # id: rknightion-meraki-app
+    constants.ts                # PLUGIN_ID, ROUTES, DEFAULT_MERAKI_BASE_URL
+    types.ts                    # AppJsonData, AppSecureJsonData, shared enums
+    components/
+      App/App.tsx               # Mounts SceneApp with [Home, Organizations, Sensors]
+      AppConfig/AppConfig.tsx   # API key + base URL + shared fraction + test btn
+      testIds.ts                # data-testid constants
+    pages/
+      Home/{homePage.ts, homeScene.ts, HomeIntro.tsx}
+      Organizations/{organizationsPage.ts, organizationsScene.ts}
+      Sensors/{sensorsPage.ts, sensorsScene.ts}
+    scene-helpers/
+      datasource.ts             # MERAKI_DS_REF + UIDs
+      variables.ts              # orgVariable, networkVariable, sensorMetricVariable
+      panels.ts                 # makeStatPanel, organizationsTable, deviceStatusStat,
+                                # sensorTimeseries, sensorLatestTiles
+      links.ts                  # organizationDetailUrl, sensorsUrl
+    datasource/                 # Nested DS (frontend-only)
+      plugin.json               # id: rknightion-meraki-datasource, backend: false
+      module.ts
+      datasource.ts             # MerakiDataSource extends DataSourceApi
+      QueryEditor.tsx
+      ConfigEditor.tsx
+      types.ts                  # QueryKind enum, MerakiQuery interface
+      img/logo.svg
+    utils/
+      utils.plugin.ts           # PluginPropsContext
+      utils.routing.ts          # prefixRoute helper
+
+  pkg/
+    main.go                     # app.Manage("rknightion-meraki-app", ...)
+    plugin/
+      app.go                    # App struct, loadSettings, buildClient,
+                                # Client(), Configured(), CheckHealth
+      resources.go              # /ping, /query, /metricFind
+      resources_test.go         # unit tests for handlers
+      datasource.go             # (NOT YET — deferred; DS has no backend in v0.1)
+      query/
+        dispatch.go             # Handle, HandleMetricFind, types, error-frame wrapper
+        organizations.go
+        networks.go
+        devices.go
+        device_status_overview.go
+        sensor_readings.go      # latest + history
+        metricfind.go
+        dispatch_test.go        # httptest smoke test
+    meraki/
+      client.go                 # HTTP client, auth, retry, UA, GetAll/Get
+      ratelimit.go              # Per-org token bucket with jitter
+      cache.go                  # TTL LRU
+      errors.go                 # UnauthorizedError, NotFoundError, RateLimitError,
+                                # ServerError, PartialSuccessError
+      pagination.go             # Link rel=next parser
+      timerange.go              # EndpointTimeRange, KnownEndpointRanges, Resolve,
+                                # quantizeUp, FreshnessFloor
+      organizations.go          # Organization type, GetOrganizations, GetOrganization
+      networks.go               # Network type, GetOrganizationNetworks
+      devices.go                # Device type, GetOrganizationDevices,
+                                # GetOrganizationDevicesStatusOverview
+      sensor.go                 # SensorReading* types, GetOrganizationSensorReadingsLatest,
+                                # GetOrganizationSensorReadingsHistory
+      ratelimit_test.go         # 50-parallel-goroutine fairness
+      cache_test.go
+      timerange_test.go
+      pagination_test.go
+      export_test.go            # exposes TTLCache.clock for tests
+
+  provisioning/
+    datasources/meraki.yaml     # auto-provisions Meraki DS with uid=rknightion-meraki-ds
+    plugins/app.yaml            # auto-enables the app plugin
+
+  tests/
+    appConfig.spec.ts           # Playwright: save API key form
+    appNavigation.spec.ts       # Playwright: Home/Organizations/Sensors render
+    fixtures.ts
+
+  .github/workflows/
+    ci.yml                      # typecheck, lint, jest, build, golangci-lint,
+                                # mage buildAll + test, Playwright, plugin-validator
+    release.yml                 # sign + publish on tag
+
+  .config/                      # scaffold; mostly untouched (see section 2.5)
+  docker-compose.yaml
+  Magefile.go
+  package.json
+  go.mod
+  tsconfig.json                 # extends .config/tsconfig.json
+  eslint.config.mjs             # extends @grafana/eslint-config
+  README.md
+  CHANGELOG.md
+
+================================================================================
+4. IMMEDIATE POLISH ITEMS (do these before starting a new phase)
+================================================================================
+
+P.1  Wire MaxDataPoints into sensor-history resolution quantization.
+     Currently sensor_readings.go calls Resolve(from, to, 0, nil). Thread
+     QueryRequest.MaxDataPoints into the handler so Grafana's panel width
+     controls resolution.
+     File: pkg/plugin/query/sensor_readings.go
+     Accept: plot a 6h timeseries on a wide panel -> 1-min resolution; on a
+     narrow panel -> 5-min resolution. No 400s.
+
+P.2  Migrate QueryEditor's Select to Combobox.
+     Lint warns 2x: "Select is deprecated. Use Combobox component instead".
+     File: src/datasource/QueryEditor.tsx lines 49 and 91.
+     Note: Combobox doesn't support isMulti in all Grafana versions — may need
+     to keep Select for the multi-metric field or use a different pattern.
+
+P.3  Add Jest unit tests for src/scene-helpers/panels.ts and variables.ts.
+     Currently "test:ci" reports "No tests found". Good candidates:
+       - orgVariable() emits a QueryVariable with the right datasource ref
+       - makeStatPanel() skips orgId for kind=Organizations
+       - sensorTimeseries() includes the partitionByValues transform
+
+P.4  Region URL presets in AppConfig.
+     Add a dropdown next to the base URL field with common region presets:
+       Global / US:     https://api.meraki.com/api/v1     (default)
+       Canada:          https://api.meraki.ca/api/v1
+       China:           https://api.meraki.cn/api/v1
+       India:           https://api.meraki.in/api/v1
+       US Federal:      https://api.gov-meraki.com/api/v1
+     Keep the raw input so power users can override.
+
+P.5  Graceful "plugin not configured" UX on scenes.
+     Today if the API key is not set, scene queries fail silently. Detect
+     this (either by calling /resources/ping, which returns {configured: bool},
+     or by intercepting 412 from /resources/query) and show a "Configure the
+     Meraki app to see data" banner with a link to /plugins/rknightion-meraki-app.
+
+P.6  README screenshots.
+     Add 2-3 screenshots under src/img/screenshots/ showing:
+       1. Configuration page after test-connection
+       2. Home page with stats
+       3. Sensors timeseries
+     Reference them in src/plugin.json info.screenshots.
+
+P.7  Plugin logo.
+     src/img/logo.svg is the default scaffolded logo. Replace with a
+     Meraki-themed design (respecting Cisco trademark guidance — use generic
+     network iconography, NOT the Meraki brand mark).
+
+P.8  Go test for pkg/plugin/query/sensor_readings.go.
+     dispatch_test.go has a smoke test for organizations only. Add a
+     sensor-readings test stubbing the Meraki /sensor/readings/history
+     endpoint and asserting a timeseries frame comes back with the right
+     columns (ts, serial, metric, value).
+
+================================================================================
+5. V0.2 — MR (WIRELESS ACCESS POINTS)
+================================================================================
+
+Goal: a "Wireless" scene with per-AP drilldown. Second most-demoable after
+sensors because channel utilization and client counts are naturally timeseries.
+
+5.1  New endpoints (add wrappers under pkg/meraki/):
+     - GET /organizations/{orgId}/wireless/devices/channelUtilization/history
+       -> wireless.go: GetOrganizationWirelessChannelUtilHistory
+       -> timerange entry already in KnownEndpointRanges
+     - GET /networks/{networkId}/wireless/usageHistory
+       -> wireless.go: GetNetworkWirelessUsageHistory
+       -> timerange entry already present
+     - GET /networks/{networkId}/wireless/ssids
+       -> wireless.go: GetNetworkWirelessSsids
+     - GET /devices/{serial}/wirelessClients
+       -> wireless.go: GetDeviceWirelessClients (per-AP client list)
+     - GET /organizations/{orgId}/devices/availabilities
+       -> devices.go: GetOrganizationDevicesAvailabilities
+
+5.2  New query kinds (frontend + backend):
+     WirelessUsage, WirelessChannelUtil, NetworkSsids, ApClients,
+     DeviceAvailabilities.
+
+5.3  New scene: src/pages/AccessPoints/
+     - AccessPointsScene with $org + $network + $ap variables
+     - Panels:
+       • Client count per AP (stat grid or table, from devices + a short
+         clients lookup)
+       • Channel utilization timeseries (per-AP, wifi band labels)
+       • SSID usage over time (stacked timeseries by SSID name)
+       • AP status table (up/down, firmware, model, last reported)
+     - Drilldown: click AP row -> ApDetailScene with tabs:
+       • Overview (stat tiles)
+       • Clients (table)
+       • RF (channel util, data rates)
+
+5.4  Exporter references:
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/mr/collector.py:22-150
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/mr/performance.py
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/mr/wireless.py
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/mr/clients.py
+     /Users/rob/repos/meraki-dashboard-exporter/dashboards/mr-access-points.json (visual ref)
+
+5.5  Cache TTLs: usage history 1m, channelUtil history 1m, ssids 5m,
+     apClients 1m, deviceAvailabilities 1m.
+
+5.6  Verification: against a lab org with MR devices, panels render real
+     timeseries for the last 24h, variable cascade works, drilldown resolves.
+
+================================================================================
+6. V0.3 — ALERTS + ASSURANCE
+================================================================================
+
+Goal: an "Alerts" scene that lists active alerts with severity filter and a
+timeline.
+
+6.1  Endpoint: GET /organizations/{orgId}/alerts
+     (paginated with startingAfter cursor — pagination.go may need a
+     startingAfter-aware branch; right now it only follows Link rel=next).
+
+6.2  Query kind: Alerts, with optional severity + type filter.
+
+6.3  Scene: src/pages/Alerts/AlertsScene.tsx
+     - Table of active alerts (sortable by severity, affected device, start time)
+     - Timeline panel (BarChart binned by hour)
+     - Filter variable: $severity (info/warning/critical)
+
+6.4  Cross-links:
+     - Home page: stat tile "5 most recent alerts" linking to Alerts page
+     - Org detail (once it has tabs): Alerts tab scoped to the org
+
+6.5  Exporter reference:
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/alerts.py
+
+6.6  TTL: 30s (alerts are volatile).
+
+================================================================================
+7. V0.4 — MS (SWITCHES)
+================================================================================
+
+Goal: a "Switches" scene whose centerpiece is a port map — a table with
+color-coded link-speed thresholds and drilldown per port.
+
+7.1  Endpoints:
+     - GET /organizations/{orgId}/switch/ports/statuses/bySwitch   (PREFERRED — org-level)
+     - GET /devices/{serial}/switch/ports/statuses                 (fallback per-device)
+     - GET /devices/{serial}/switch/ports                          (port config)
+     - GET /devices/{serial}/switch/ports/{portId}/packetCounters  (drilldown)
+     - GET /organizations/{orgId}/switch/ports/usage/byDevice       (if available — may vary)
+
+7.2  Query kinds: SwitchPortStatuses, SwitchPortConfig,
+     SwitchPortPacketCounters.
+
+7.3  Scene: src/pages/Switches/SwitchesScene.tsx
+     - Switch list (stat: port count, PoE draw, status)
+     - Per-switch port map (table with one row per port):
+       • Columns: port, link speed, duplex, client count, PoE power (W)
+       • ConfigOverrideRule on link-speed column: green >= 1G, yellow 100M,
+         orange 10M, red down
+       • Drilldown: click port -> PortDetailScene with packet counters
+         timeseries (may only be last-5-min snapshots; wrap with the
+         ring-buffer idea from section 1.9 if timeseries is wanted)
+
+7.4  Exporter reference:
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/ms.py:25-150
+     /Users/rob/repos/meraki-dashboard-exporter/dashboards/ms-switches.json
+
+7.5  Watch out for: switches in STACK groups — org-level status endpoint
+     returns one row per port on each stack member. Make sure the port map
+     groups by stack correctly.
+
+================================================================================
+8. V0.5 — MX (SECURITY APPLIANCES) + VPN
+================================================================================
+
+8.1  Endpoints:
+     - GET /organizations/{orgId}/appliance/vpn/statuses
+     - GET /organizations/{orgId}/devices/uplinksLossAndLatency
+     - GET /networks/{networkId}/appliance/vpn/siteToSiteVpn
+     - GET /organizations/{orgId}/appliance/uplink/statuses
+
+8.2  Query kinds: VpnStatuses, DeviceUplinks, ApplianceUplinkStatuses.
+
+8.3  Scene: src/pages/Appliances/
+     - Uplink status timeline (2-min-granularity loss + latency)
+     - VPN peer matrix (table: peer, last reachable, loss%, latency)
+     - Firewall rule count (stat)
+
+8.4  Watch out: uplinksLossAndLatency has MaxTimespan=5min. For longer
+     windows the API returns 400. Use KnownEndpointRanges to clamp.
+
+8.5  Exporter reference:
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/mx.py
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/mx_vpn.py
+     /Users/rob/repos/meraki-dashboard-exporter/dashboards/mx-security-appliances.json
+
+================================================================================
+9. V0.6 — LICENSING + API USAGE + CLIENT OVERVIEW
+================================================================================
+
+9.1  Endpoints:
+     - GET /organizations/{orgId}/licenses/overview
+     - GET /organizations/{orgId}/licenses                 (paginated)
+     - GET /organizations/{orgId}/apiRequests/overview
+     - GET /organizations/{orgId}/clients/overview
+     - GET /organizations/{orgId}/summary/top/...          (clients/devices/ssids/switchesByEnergyUsage)
+
+9.2  Query kinds: LicensesOverview, LicensesList, ApiRequestsOverview,
+     ClientsOverview, TopN.
+
+9.3  Scenes:
+     - src/pages/Licensing/                               (expiry warnings + table)
+     - src/pages/ApiUsage/                                (request rate, 4xx/5xx)
+     - src/pages/ClientInsights/                          (top-N widgets)
+
+9.4  Monitor.LicenseExpirationWarningDays equivalent: annotate licenses
+     expiring within 30 days with a red "expiring" badge in the frame.
+
+9.5  Watch out: apiRequests has MaxTimespan=31d (already in timerange table).
+
+9.6  Exporter reference:
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/organization_collectors/
+     /Users/rob/repos/meraki-dashboard-exporter/dashboards/api-usage-licensing.json
+     /Users/rob/repos/meraki-dashboard-exporter/dashboards/client-overview.json
+
+================================================================================
+10. V0.7 — MV (CAMERAS) + MG (CELLULAR GATEWAYS)
+================================================================================
+
+10.1 Smallest user bases; lowest priority but closes the product family list.
+     Keep scenes thin.
+
+10.2 MV endpoints:
+     - GET /organizations/{orgId}/camera/onboarding/statuses
+     - GET /devices/{serial}/camera/analytics/overview
+     Scene: camera status table, motion event count (if available).
+
+10.3 MG endpoints:
+     - GET /organizations/{orgId}/cellularGateway/uplink/statuses
+     - GET /devices/{serial}/cellularGateway/port/forwarding/rules
+     Scene: cellular signal strength, uplink status per MG device.
+
+10.4 Exporter references:
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/mv.py
+     /Users/rob/repos/meraki-dashboard-exporter/src/meraki_dashboard_exporter/collectors/devices/mg.py
+
+================================================================================
+11. V0.8 — CROSS-FAMILY DRILLDOWNS + EVENTS / WEBHOOKS
+================================================================================
+
+11.1 Wire up deep drilldowns:
+     - Home -> Org detail -> specific device (MR/MS/MX/MT/etc.) in one
+       click chain
+     - Alerts -> affected device in same-tab drilldown
+     - Sensors -> individual sensor page (history for every metric)
+
+11.2 Network events: GET /networks/{networkId}/events
+     Paginated, volatile (TTL 30s). New query kind NetworkEvents.
+
+11.3 Webhook receiver (OPTIONAL — defer if not requested):
+     The exporter has a webhook receiver. In the plugin, we'd need to expose
+     a resource endpoint that accepts Meraki webhooks and appends into the
+     deviceStatuses ring buffer (section 1.9). This is a NICE-TO-HAVE and
+     adds deployment complexity (users have to configure Meraki to POST to
+     Grafana). Don't build unless a user asks.
+
+================================================================================
+12. GOTCHAS / THINGS THAT WILL BITE YOU
+================================================================================
+
+G.1  Meraki rate limits are PER-ORGANIZATION, not per-key. Exceeding returns
+     429 with Retry-After. Our limiter is keyed by orgID for this reason.
+
+G.2  Partial-success 200 responses. Some Meraki endpoints return HTTP 200
+     with body `{"items": [...], "errors": [...]}`. client.go detects these
+     and surfaces as PartialSuccessError — but the body still contains
+     partial data. If a handler wants to present partial data with an error
+     notice, it should inspect the error type and extract .items.
+
+G.3  Link header AND startingAfter. client.EachPage/GetAll follows Link
+     rel=next. Some newer endpoints use `startingAfter` as a query param
+     instead. If a v0.2+ endpoint paginates differently, extend
+     pagination.go OR loop in the endpoint wrapper itself.
+
+G.4  Meraki timestamps lag 30-120s behind "now". FreshnessFloor=60s in
+     timerange.go subtracts that. Don't remove it or your timeseries tails
+     will be empty.
+
+G.5  Timespan caps per endpoint (see KnownEndpointRanges):
+     - organizations/.../sensor/readings/history:                 730 days
+     - organizations/.../apiRequests(/overview):                    31 days
+     - networks/.../wireless/usageHistory:                          31 days
+     - organizations/.../wireless/devices/channelUtilization/history: 31 days
+     - organizations/.../devices/uplinksLossAndLatency:              5 minutes
+     Passing a longer window is a 400. Resolve() clamps.
+
+G.6  Resolution quantization: Meraki only accepts a fixed set per endpoint.
+     Always round UP to the nearest allowed bucket. quantizeUp() handles it.
+
+G.7  The nested DS has NO backend. DO NOT add `"backend": true` to
+     src/datasource/plugin.json — that would make Grafana try to launch a
+     separate gpx_rknightion-meraki-datasource binary that doesn't exist.
+
+G.8  Each plugin instance has its own Go process. If you later add a
+     DS-level Go backend, the app and DS will NOT share memory. Design
+     around that (e.g. both call the same Meraki client independently, OR
+     the DS delegates to the app via resource calls — which is what v0.1
+     already does and is the reason the DS is frontend-only).
+
+G.9  The MERAKI_DS_UID constant ("rknightion-meraki-ds") lives in two
+     places: provisioning/datasources/meraki.yaml AND
+     src/scene-helpers/datasource.ts. Keep them aligned.
+
+G.10 When a user hasn't configured the API key, /resources/query returns 412
+     Precondition Failed. Scene queries fail silently today — see polish
+     item P.5 above.
+
+G.11 plugin-validator in CI runs against dist/<plugin-id>.zip and currently
+     only validates the app plugin (not the nested DS). When we publish,
+     we'll need to package both — the release.yml workflow may need
+     extension.
+
+G.12 Scaffold tsconfig reports JSX errors in the IDE because it uses a bare
+     config when the LSP can't chain through .config/tsconfig.json. These
+     are NOT real errors — `npm run typecheck` is authoritative.
+
+G.13 Mage isn't globally installed on dev machines by default. CI installs
+     it via magefile/mage-action. Locally: `go install github.com/magefile/mage@latest`.
+
+G.14 .config/ is scaffold-managed. Upgrades via `npx @grafana/create-plugin@latest update`
+     may revert our edits in .config/bundler/copyFiles.ts,
+     .config/docker-compose-base.yaml, and .config/supervisord/supervisord.conf.
+     After any scaffold upgrade, RE-CHECK those files.
+
+G.15 Plugin config save requires `window.location.reload()`, NOT
+     `locationService.reload()`. SPA-level reload keeps `plugin.meta` stale in
+     the React tree AND does not trigger Grafana to re-instantiate the backend
+     plugin with the new secureJsonData. Symptom if you get this wrong: user
+     clicks Save, nothing visibly changes, Test Connection stays disabled, and
+     other pages report "not configured" until the user manually hits browser
+     refresh. See src/components/AppConfig/AppConfig.tsx — it pairs a brief
+     success Alert with a ~600ms delayed window.location.reload().
+
+G.16 AppConfig is NOT wrapped in a `<form onSubmit>`. Use a `<div>` with
+     `type="button"` + onClick on the Save button. Reasons: (a) Grafana's
+     outer plugin-settings page may or may not wrap us in its own <form>
+     across versions; a nested submit is fragile, (b) keyboard-enter
+     submission on an API-key field is a mild foot-gun (accidental submits).
+     The Save button is the only action surface — keep it that way.
+
+================================================================================
+13. REFERENCE POINTS
+================================================================================
+
+13.1 Exporter (READ-ONLY reference, not a dependency):
+     /Users/rob/repos/meraki-dashboard-exporter/
+     Most useful for:
+     - Endpoint URLs and parameter shapes:
+         src/meraki_dashboard_exporter/collectors/**/*.py
+     - Rate limiter algorithm (already ported to Go):
+         src/meraki_dashboard_exporter/core/rate_limiter.py
+     - Dashboard visual blueprints:
+         dashboards/*.json
+
+13.2 Meraki API docs via ctx7 CLI (authoritative for endpoint params):
+     npx ctx7@latest docs /openapi/api_meraki_api_v1_openapispec "<question>"
+     npx ctx7@latest docs /websites/developer_cisco_meraki "<question>"
+
+13.3 Grafana plugin docs via ctx7:
+     npx ctx7@latest docs /grafana/plugin-tools "<question>"
+     npx ctx7@latest docs /grafana/grafana-plugin-examples "<question>"
+
+13.4 @grafana/scenes:
+     https://grafana.com/developers/scenes
+     Plan doc has the scene patterns cheat-sheet.
+
+13.5 Plugin publishing prerequisites:
+     https://grafana.com/legal/plugins/#plugin-publishing-and-signing-criteria
+
+================================================================================
+14. ACCEPTANCE CRITERIA FOR EVERY PHASE
+================================================================================
+
+Before tagging a new version, require ALL of:
+  [ ] `npm run typecheck` clean
+  [ ] `npm run lint`       0 errors (warnings OK)
+  [ ] `npm run test:ci`    passes
+  [ ] `npm run build`      no upstream-unrelated errors
+  [ ] `go test ./pkg/...`  passes
+  [ ] `go vet ./pkg/...`   clean
+  [ ] `mage -v`            builds all 6 platforms
+  [ ] `mage test`          passes
+  [ ] Playwright e2e       at least Home + Configuration pass
+  [ ] plugin-validator     `metadatavalid` analyzer clean on dist/*.zip
+  [ ] Manual smoke test    against a lab org with the new device family
+  [ ] CHANGELOG updated    with a clear "Added / Changed / Fixed" section
+  [ ] README screenshots   reflect the new UI (if visible changes)
+
+================================================================================
+15. OPEN QUESTIONS / DEFERRED DECISIONS (revisit when relevant)
+================================================================================
+
+Q.1  Distributed rate limiter (Redis / etcd) — not planned for v0.x. Revisit
+     only if a user reports multi-replica 429 storms despite sharedFraction
+     tuning.
+
+Q.2  Infinity-style free-form query editor — not planned. We prefer the
+     typed QueryKind contract. If a user asks for "I want to call arbitrary
+     Meraki endpoints", point them at the Infinity datasource.
+
+Q.3  Caching across replicas — not planned for v0.x. In-process LRU only.
+
+Q.4  Unified config form that writes to BOTH app and DS settings — not
+     needed because the DS is frontend-only. If we ever add a DS backend,
+     revisit (and consider the shared-client patterns in section G.8).
+
+Q.5  Multi-tenancy (multiple API keys per plugin instance) — not planned
+     for v0.x. Users who need multiple Meraki orgs can provision multiple
+     Grafana instances or wait for a v1 multi-key feature.
+
+Q.6  Alert rule templates — Grafana now supports plugin-shipped alert
+     rules. Could ship sample rules for high-CPU APs, offline devices,
+     licensing soon-to-expire, etc. Good v0.6+ addition.
+
+Q.7  Namespace rename to robknight-* at publish time — planned but not done.
+     Do as a single atomic commit: rename every occurrence of
+     "rknightion-meraki-app" and "rknightion-meraki-datasource", rebuild,
+     verify, ship. Watch for the two constants in
+     src/scene-helpers/datasource.ts and the provisioning yaml UIDs.
+
+================================================================================
+END OF FILE
+================================================================================

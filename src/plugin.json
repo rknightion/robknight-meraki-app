@@ -1,0 +1,54 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "app",
+  "name": "Cisco Meraki",
+  "id": "rknightion-meraki-app",
+  "backend": true,
+  "executable": "gpx_meraki",
+  "info": {
+    "keywords": ["meraki", "cisco", "network", "observability", "wireless", "switch", "sensor"],
+    "description": "Observability layer for Cisco Meraki networks and devices via the Meraki Dashboard API.",
+    "author": {
+      "name": "Rob Knight",
+      "url": "https://github.com/rknightion"
+    },
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "screenshots": [],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "includes": [
+    {
+      "type": "page",
+      "name": "Home",
+      "path": "/a/%PLUGIN_ID%/home",
+      "addToNav": true,
+      "defaultNav": true
+    },
+    {
+      "type": "page",
+      "name": "Organizations",
+      "path": "/a/%PLUGIN_ID%/organizations",
+      "addToNav": true
+    },
+    {
+      "type": "page",
+      "name": "Sensors",
+      "path": "/a/%PLUGIN_ID%/sensors",
+      "addToNav": true
+    }
+  ],
+  "dependencies": {
+    "grafanaDependency": ">=12.3.0",
+    "plugins": [
+      {
+        "type": "datasource",
+        "id": "rknightion-meraki-datasource",
+        "name": "Cisco Meraki"
+      }
+    ]
+  }
+}
