@@ -32,6 +32,66 @@ export interface AppJsonData {
    * that only runs MR/MS/MT isn't cluttered with empty pages.
    */
   showEmptyFamilies?: boolean;
+  /**
+   * Bundled alert-rules install state. Mirrors the Go-side
+   * `pkg/plugin.appAlertsConfig` shape. Populated by the AppConfig UI and
+   * by the `/alerts/reconcile` resource endpoint. Persistence note: the
+   * runtime `lastReconciledAt` + `lastReconcileSummary` fields are ALSO
+   * written to a plugin-local JSON file by the backend so /alerts/status
+   * can answer after a plugin restart without waiting for Grafana to push
+   * fresh jsonData — the jsonData mirror here is the authoritative copy
+   * once the frontend saves settings.
+   */
+  alerts?: AlertsConfig;
+}
+
+/**
+ * Per-group install state: whether the group is globally installed +
+ * per-template enabled flags. A group with `installed=false` means the
+ * reconciler will DELETE every rule under it regardless of `rulesEnabled`.
+ * Mirrors `pkg/plugin.appAlertsGroupState`.
+ */
+export interface AlertsGroupState {
+  installed: boolean;
+  rulesEnabled: Record<string, boolean>;
+}
+
+/**
+ * Summary counters from the most recent reconcile run. Four numbers (no
+ * UIDs) — the detailed per-rule outcome lives in the synchronous
+ * `ReconcileResult` returned from POST /alerts/reconcile, not here.
+ */
+export interface AlertsReconcileSummary {
+  created: number;
+  updated: number;
+  deleted: number;
+  failed: number;
+}
+
+/**
+ * App-wide bundled alerts configuration. Mirrors the Go-side
+ * `pkg/plugin.appAlertsConfig` shape. Every field is optional so a fresh
+ * install serialises as `{}` rather than a partially-populated object.
+ */
+export interface AlertsConfig {
+  /**
+   * group-id → group state. Absent entries are treated as `installed=false`.
+   */
+  groups?: Record<string, AlertsGroupState>;
+  /**
+   * Threshold overrides, indexed `[groupId][templateId][thresholdKey]`.
+   * The innermost value type is `unknown` because thresholds are a union
+   * of string / number / boolean / string[] depending on the template's
+   * schema — the UI layer validates against the Go-provided schema in
+   * `/alerts/templates` rather than at the type boundary.
+   */
+  thresholds?: Record<string, Record<string, Record<string, unknown>>>;
+  /**
+   * ISO-8601 timestamp of the most recent reconcile. Absent on fresh
+   * installs.
+   */
+  lastReconciledAt?: string;
+  lastReconcileSummary?: AlertsReconcileSummary;
 }
 
 /**

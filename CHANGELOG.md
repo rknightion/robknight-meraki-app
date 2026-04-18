@@ -14,6 +14,8 @@ UX.
   (§4.5.2).
 - CheckHealth now probes Grafana's alert provisioning API and reports the
   externalServiceAccounts feature-toggle state.
+- Resource endpoints for the bundled alert rules — templates registry, live
+  status, reconcile, uninstall-all (§4.5.5).
 
 ### Developer
 
