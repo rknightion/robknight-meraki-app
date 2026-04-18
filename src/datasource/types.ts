@@ -19,6 +19,9 @@ export enum QueryKind {
   SensorReadingsLatest = 'sensorReadingsLatest',
   SensorReadingsHistory = 'sensorReadingsHistory',
   SensorAlertSummary = 'sensorAlertSummary',
+  /* §4.4.3-1e — floor-plan layout + latest readings per MT sensor.
+   * Wide frame; lat/lng are nullable so the panel falls back to a grid
+   * layout when a floor plan has no anchor coordinates configured. */
 
   /* Wireless (MR) — phase 5. */
   WirelessChannelUtil = 'wirelessChannelUtil',
@@ -114,6 +117,14 @@ export enum QueryKind {
    * and the new Org Health page (§4.4.4). */
   ConfigurationChangesAnnotation = 'configurationChangesAnnotation',
   AlertsMttrSummary = 'alertsMttrSummary',
+
+  /* §4.4.3-1a — MR panels: per-network client-count timeseries, failed-
+   * connection wide table, per-network latency timeseries, and org-wide
+   * radio/band-status snapshot. */
+  WirelessClientCountHistory = 'wirelessClientCountHistory',
+  WirelessFailedConnections = 'wirelessFailedConnections',
+  WirelessLatencyStats = 'wirelessLatencyStats',
+  DeviceRadioStatus = 'deviceRadioStatus',
 }
 
 export interface MerakiQuery extends DataQuery {
