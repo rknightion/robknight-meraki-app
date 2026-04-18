@@ -61,4 +61,21 @@ test.describe('Meraki app navigation', () => {
     await gotoPage(`/${ROUTES.Events}`);
     await expect(page.getByRole('heading', { name: 'Events' })).toBeVisible();
   });
+
+  test('Clients page renders the tabbed nav', async ({ gotoPage, page }) => {
+    await gotoPage(`/${ROUTES.Clients}`);
+    await expect(page.getByRole('heading', { name: 'Clients' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Top talkers' })).toBeVisible();
+  });
+
+  test('Per-client drilldown route renders the MAC as page title', async ({
+    gotoPage,
+    page,
+  }) => {
+    // The drilldown is bookmarkable — hitting the URL directly should resolve
+    // to a SceneAppPage whose title is the route-param MAC.
+    const mac = '00:11:22:33:44:55';
+    await gotoPage(`/${ROUTES.Clients}/${encodeURIComponent(mac)}`);
+    await expect(page.getByRole('heading', { name: mac })).toBeVisible();
+  });
 });

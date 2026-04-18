@@ -8,6 +8,14 @@ top-level pages.
 
 ### Added
 
+- **New Clients page** with top talkers, new clients, MAC/IP search, and
+  session history (v0.5 §4.4.4-A). Adds three new query kinds
+  (`clientsList`, `clientLookup`, `clientSessions`); reuses existing
+  `clientsOverview`. Note: Meraki's `/clients/search` endpoint accepts
+  `mac` only (not IP or hostname), so the search tab is MAC-only with
+  partial-match support. Per-client latency history sourced from
+  `/networks/{id}/wireless/clients/{id}/latencyHistory` (wireless-only;
+  wired clients render an empty series).
 - **Cross-cutting panels — v0.5 §4.4.3-1f.**
   - New `orgChangeFeed` query kind: server-side union of
     `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the

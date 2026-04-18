@@ -18,6 +18,9 @@ const KIND_OPTIONS: Array<{ label: string; value: QueryKind; description?: strin
   { label: 'Sensor readings (history)', value: QueryKind.SensorReadingsHistory, description: 'Native timeseries of sensor metrics.' },
   { label: 'Configuration changes', value: QueryKind.ConfigurationChanges, description: 'Organization change log (who changed what, when). Supports networkId + adminId filters.' },
   { label: 'Device availability changes', value: QueryKind.DeviceAvailabilityChanges, description: 'Device state-transition feed (online/offline flaps). Additive to the current-state availabilities kind.' },
+  { label: 'Clients (per network)', value: QueryKind.ClientsList, description: 'Fan-out /networks/{id}/clients across selected networks. Optional MAC filter via metrics[0].' },
+  { label: 'Client lookup', value: QueryKind.ClientLookup, description: 'Org-wide /clients/search by MAC. Empty/not-found returns a notice instead of an error.' },
+  { label: 'Client sessions', value: QueryKind.ClientSessions, description: 'Per-client wireless latency history. networkIds[0] = network, metrics[0] = client id (MAC or key).' },
 ];
 
 const SENSOR_METRIC_OPTIONS: Array<{ label: string; value: string }> = [

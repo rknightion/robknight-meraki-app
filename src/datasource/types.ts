@@ -148,6 +148,17 @@ export enum QueryKind {
    * networkEvents for the Home "what just changed in 24h" tile. Always a
    * fixed 24h lookback regardless of dashboard time range. */
   OrgChangeFeed = 'orgChangeFeed',
+
+  /* §4.4.4-A — Clients page kinds. ClientsOverview already exists (phase 9
+   * — `clientsOverview` enum value above). The three new kinds:
+   *  - ClientsList:    fan-out /networks/{id}/clients across selected networks.
+   *  - ClientLookup:   /organizations/{id}/clients/search?mac=...
+   *                    (zero-row + Info notice when MAC not found).
+   *  - ClientSessions: per-client wireless latency history; one frame per
+   *                    traffic category with labels on the value field. */
+  ClientsList = 'clientsList',
+  ClientLookup = 'clientLookup',
+  ClientSessions = 'clientSessions',
 }
 
 export interface MerakiQuery extends DataQuery {

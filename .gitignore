@@ -45,3 +45,6 @@ ci/
 
 .eslintcache
 .superpowers/
+
+# Agent worktrees (transient — spawned by the Claude harness)
+.claude/worktrees/

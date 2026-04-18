@@ -103,6 +103,13 @@
     },
     {
       "type": "page",
+      "name": "Clients",
+      "path": "/a/%PLUGIN_ID%/clients",
+      "addToNav": true,
+      "icon": "users-alt"
+    },
+    {
+      "type": "page",
       "name": "Configuration",
       "path": "/a/%PLUGIN_ID%/configuration",
       "addToNav": true,
