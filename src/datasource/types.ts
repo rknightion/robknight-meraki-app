@@ -22,6 +22,7 @@ export enum QueryKind {
   /* §4.4.3-1e — floor-plan layout + latest readings per MT sensor.
    * Wide frame; lat/lng are nullable so the panel falls back to a grid
    * layout when a floor plan has no anchor coordinates configured. */
+  SensorFloorPlan = 'sensorFloorPlan',
 
   /* Wireless (MR) — phase 5. */
   WirelessChannelUtil = 'wirelessChannelUtil',

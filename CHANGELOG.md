@@ -78,6 +78,23 @@ top-level pages.
   count), 5 m (failed connections + latency), 15 m (radio status).
   `KnownEndpointRanges` clamps the three timeseries endpoints to 7 d
   with a 5-min resolution floor.
+- **Query kind `sensorFloorPlan`** — wraps
+  `GET /networks/{networkId}/floorPlans` and joins it with the latest
+  sensor readings into a single wide frame (floor_plan_id,
+  floor_plan_name, serial, metric, value, x, y). `x`/`y` are nullable so
+  the panel can branch to a grid layout when anchor coordinates are
+  absent; when no floor plan is configured for a network the handler
+  emits a zero-row frame plus an info-severity `data.Notice` explaining
+  why. 15 m TTL (v0.5 §4.4.3-1e).
+- **Sensors page — MT panels** — floor-plan heatmap (with grid fallback
+  when anchors are missing), AQI composite tile (weighted CO₂ + TVOC +
+  PM2.5; band definitions + citations in
+  `src/scene-helpers/sensorMetrics.ts`), and battery timeline with a
+  red/amber threshold flagging any sensor below 20% (v0.5 §4.4.3-1e).
+- **`Device.FloorPlanID`** — exposed on the org-devices decode so a
+  future inverse join (device → plan) is cheap. Not consumed by the
+  current handler, which uses the pre-joined `devices[]` array on the
+  floor-plan list response.
 
 ## 0.4.0 (Unreleased)
 
