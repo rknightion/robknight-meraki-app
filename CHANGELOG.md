@@ -8,6 +8,37 @@ top-level pages.
 
 ### Added
 
+- **Appliances (MX) panels — v0.5 §4.4.3-1c.**
+  - WAN loss / latency **distribution histograms** on the Uplinks tab
+    (reshape of the existing `deviceUplinksLossLatency` feed via the
+    Grafana `histogram` transform — no new backend kind).
+  - MX uplink **failover event timeline** + detail table backed by a new
+    `applianceFailoverEvents` query kind that filters the existing
+    `/networks/{id}/events` feed to the canonical uplink-change event
+    types (`uplink_change`, `cellular_up`, `cellular_down`, `failover`,
+    `wan_failover`). No new Meraki endpoint — pure Go filter on top of
+    the existing events wrapper; 30 s TTL.
+  - MX **traffic shaping** snapshot panel on the Firewall tab (new
+    `applianceTrafficShaping` query kind) covering default-rules, global
+    bandwidth caps, default uplink, load balancing, active-active AutoVPN,
+    immediate failover, and traffic-preference counts. Backed by
+    `/networks/{id}/appliance/trafficShaping` +
+    `/networks/{id}/appliance/trafficShaping/uplinkSelection` with a 5 m
+    TTL.
+
+### Changed
+
+- **UX change — Appliances VPN tab.** The VPN peer-matrix table has been
+  **REPLACED** with a source × peer reachability **heatmap** (new
+  `applianceVpnHeatmap` query kind). The previous matrix became hard to
+  read on meshes with more than a handful of peers; the heatmap grid
+  lets operators eyeball AutoVPN health at a glance. The aggregated
+  `vpnPeerStatsTable` is retained on the same tab for per-pair detail.
+  `applianceVpnStatuses` stays on the wire contract for the peer-status
+  table (kept as a separate kind so existing tests + the flattened-row
+  consumers can still bind to the old shape; the matrix panel factory
+  is no longer wired into the scene).
+
 - **Query kind `configurationChangesAnnotation`** — reshapes the existing
   configurationChanges feed into a four-column annotation frame (time,
   title, text, tags) for scene `AnnotationDataLayer` overlays. Reuses the

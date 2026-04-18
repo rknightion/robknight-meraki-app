@@ -106,6 +106,15 @@ export enum QueryKind {
   AlertsOverviewByNetwork = 'alertsOverviewByNetwork',
   AlertsOverviewHistorical = 'alertsOverviewHistorical',
 
+  /* §4.4.3-1c — MX panels: traffic shaping snapshot + uplink-failover event
+   * timeline + VPN heatmap reshape that REPLACES the legacy peer-matrix panel
+   * on the Appliances / VPN tab. applianceVpnHeatmap is a new kind (not a
+   * reshape of applianceVpnStatuses) because the existing kind is still used
+   * by the flattened peer-status table. */
+  ApplianceTrafficShaping = 'applianceTrafficShaping',
+  ApplianceFailoverEvents = 'applianceFailoverEvents',
+  ApplianceVpnHeatmap = 'applianceVpnHeatmap',
+
   /* §4.4.2 — v0.5 Phase 0 plumbing.
    * ConfigurationChangesAnnotation reshapes the existing configurationChanges
    * feed into a Grafana annotation frame (time/title/text/tags) for data-layer

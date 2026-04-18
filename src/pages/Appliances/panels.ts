@@ -637,6 +637,241 @@ export function applianceSettingsCard(networkId: string): VizPanel {
     .build();
 }
 
+// §4.4.3-1c — WAN loss/jitter/latency histogram ------------------------------
+
+/**
+ * Histogram panel over the existing 5-minute uplink probe feed — NO new
+ * backend kind. The `DeviceUplinksLossLatency` handler emits one frame per
+ * (serial, uplink, ip, metric) timeseries; we add the Grafana `histogram`
+ * transform to bucket the value column into buckets, then render with the
+ * `histogram` viz.
+ *
+ * Why a transform-based panel rather than a new handler: server-side bucket
+ * counts would lose the per-series split (each uplink gets its own legend
+ * entry under the default histogram viz). Keeping the per-series frame shape
+ * and applying the transform at render time gets us "one histogram per
+ * uplink" with zero backend churn. Matches the plan step 11 recipe.
+ *
+ * bucketSize default: metric-specific (5% for loss, 10 ms for latency). The
+ * histogram transform auto-picks when omitted but the defaults tend to be
+ * too fine at lab scale (one bucket per unique sample).
+ */
+export function uplinkLossLatencyHistogram(
+  serial: string,
+  metric: 'lossPercent' | 'latencyMs'
+): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.DeviceUplinksLossLatency,
+    serials: [serial],
+    maxDataPoints: 500,
+  });
+
+  // Filter to the requested metric (same pattern as uplinkLossLatencyTimeseries)
+  // then feed the value column into the histogram transform so the viz picks
+  // up a `(BucketMin, BucketMax, count-per-series)` shape instead of the raw
+  // timeseries.
+  const transformed = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'filterFieldsByName',
+        options: {
+          include: {
+            pattern: `/^ts$|${metric}$/`,
+          },
+        },
+      },
+      {
+        id: 'histogram',
+        options: {
+          bucketSize: metric === 'lossPercent' ? 5 : 10,
+          // Combine all series before bucketing so the viz renders one
+          // distribution — set to `false` to get one histogram per uplink.
+          combine: false,
+        },
+      },
+    ],
+  });
+
+  const title =
+    metric === 'lossPercent' ? 'WAN loss distribution' : 'WAN latency distribution';
+  const description =
+    metric === 'lossPercent'
+      ? 'Packet-loss distribution over the selected range (5-minute probe samples, bucketed).'
+      : 'Latency distribution over the selected range (5-minute probe samples, bucketed).';
+
+  const builder = PanelBuilders.histogram()
+    .setTitle(title)
+    .setDescription(description)
+    .setData(transformed)
+    .setNoValue('No probe data in the selected range.')
+    .setColor({ mode: FieldColorModeId.PaletteClassic })
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any);
+
+  if (metric === 'lossPercent') {
+    builder.setUnit('percent').setMin(0).setMax(100);
+  } else {
+    builder.setUnit('ms');
+  }
+
+  return builder.build();
+}
+
+// §4.4.3-1c — VPN peer heatmap (REPLACES the legacy peer matrix) ------------
+
+/**
+ * Heatmap panel backed by the new `ApplianceVpnHeatmap` kind. One cell per
+ * (sourceNetwork × peerNetwork) pair, coloured green (reachable) or red
+ * (unreachable). This REPLACES the previous `vpnPeerMatrixTable()` panel
+ * on the VPN tab — documented as a UX change in the CHANGELOG.
+ *
+ * Why a heatmap over a matrix table: with more than a handful of peers the
+ * table becomes unreadable; the heatmap grid lets operators eyeball the
+ * health of an AutoVPN mesh at a glance. For small meshes (≤2 peers) the
+ * previous peer-stats table (`vpnPeerStatsTable`) remains on the tab so
+ * single-peer deployments don't lose the detail view.
+ */
+export function vpnPeerHeatmap(): VizPanel {
+  const runner = oneQuery({ kind: QueryKind.ApplianceVpnHeatmap });
+
+  return PanelBuilders.heatmap()
+    .setTitle('VPN peer reachability')
+    .setDescription(
+      'One cell per AutoVPN peer-pair. Green = reachable, red = unreachable. Hover a cell for the raw reachability string.'
+    )
+    .setData(runner)
+    .setNoValue('No VPN peers configured in the selected organization.')
+    .setOption('calculate', false as any)
+    .setOption('cellGap', 2 as any)
+    .setOption('color', {
+      mode: 'scheme',
+      scheme: 'RdYlGn',
+      steps: 2,
+      min: 0,
+      max: 1,
+    } as any)
+    .setOption('yAxis', { axisLabel: 'Source network' } as any)
+    .setOption('tooltip', { show: true, yHistogram: false } as any)
+    .build();
+}
+
+// §4.4.3-1c — MX traffic shaping snapshot table -----------------------------
+
+/**
+ * One-row-per-network traffic-shaping + uplink-selection config snapshot.
+ * Requires at least one `networkId`; scenes typically pass `['$network']`
+ * but an org-wide view can pass multiple IDs to see every site at once.
+ */
+export function applianceTrafficShapingTable(networkIds: string[]): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.ApplianceTrafficShaping,
+    networkIds,
+  });
+  return PanelBuilders.table()
+    .setTitle('MX traffic shaping')
+    .setDescription(
+      'Per-network traffic-shaping config: default-rules flag, global bandwidth caps, and uplink-selection policy (defaultUplink, load balancing, immediate failover, traffic-preference counts).'
+    )
+    .setData(runner)
+    .setNoValue('No traffic shaping configuration reported for the selected networks.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('globalLimitUpKbps').overrideUnit('Kbits');
+      b.matchFieldsWithName('globalLimitDownKbps').overrideUnit('Kbits');
+      b.matchFieldsWithName('defaultUplink').overrideCustomFieldConfig('width', 120);
+      b.matchFieldsWithName('loadBalancingEnabled').overrideCustomFieldConfig('width', 140);
+      b.matchFieldsWithName('activeActiveAutoVpn').overrideCustomFieldConfig('width', 150);
+      b.matchFieldsWithName('immediateFailover').overrideCustomFieldConfig('width', 140);
+    })
+    .build();
+}
+
+// §4.4.3-1c — MX uplink failover event timeline -----------------------------
+
+/**
+ * State-timeline panel over MX uplink-change events from
+ * /networks/{id}/events, filtered server-side to the canonical uplink-change
+ * event vocabulary (`uplink_change`, `cellular_up`, `cellular_down`,
+ * `failover`, `wan_failover`). No new Meraki endpoint.
+ *
+ * The state-timeline viz expects (time, stringValue) pairs per series;
+ * we bind the `type` column as the value so each row draws a coloured band
+ * keyed to its event type.
+ *
+ * `networkIds` may be empty — the backend fans out across every appliance
+ * network in the org (capped at `networkEventsAllFanoutCap`, with a notice
+ * when truncated).
+ */
+export function applianceFailoverTimeline(networkIds?: string[]): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.ApplianceFailoverEvents,
+    networkIds,
+  });
+
+  // Keep only the time + type columns so the state-timeline draws one band
+  // per event type without getting confused by the supplementary columns
+  // (networkId, uplink, description). The table panel below shows the rest.
+  const filtered = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: {
+            networkId: true,
+            deviceSerial: true,
+            deviceName: true,
+            uplink: true,
+            description: true,
+            drilldownUrl: true,
+          },
+          renameByName: {},
+        },
+      },
+    ],
+  });
+
+  return PanelBuilders.statetimeline()
+    .setTitle('MX uplink failover timeline')
+    .setDescription(
+      'WAN uplink state changes (uplink_change, cellular_up/down, failover) for the selected networks. Each coloured band is one event.'
+    )
+    .setData(filtered)
+    .setNoValue('No uplink-change events in the selected range.')
+    .setOption('mergeValues', false as any)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'single' } as any)
+    .build();
+}
+
+/**
+ * Companion detail table to {@link applianceFailoverTimeline}. Shows the
+ * same events with all columns (networkId, serial, uplink, description) so
+ * operators can click a serial to drill into the failing appliance.
+ */
+export function applianceFailoverEventsTable(networkIds?: string[]): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.ApplianceFailoverEvents,
+    networkIds,
+  });
+  return PanelBuilders.table()
+    .setTitle('Failover events')
+    .setDescription('Detailed MX uplink-change events with device + uplink context.')
+    .setData(hideColumns(runner, ['drilldownUrl']))
+    .setNoValue('No uplink-change events in the selected range.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('deviceSerial').overrideLinks([
+        {
+          title: 'Open appliance',
+          url: `${PLUGIN_BASE_URL}/${ROUTES.Appliances}/\${__value.raw:percentencode}\${__url.params}`,
+        },
+      ]);
+      b.matchFieldsWithName('type').overrideCustomFieldConfig('width', 140);
+      b.matchFieldsWithName('uplink').overrideCustomFieldConfig('width', 100);
+      b.matchFieldsWithName('deviceSerial').overrideCustomFieldConfig('width', 160);
+    })
+    .build();
+}
+
 // Per-appliance overview KPIs ------------------------------------------------
 
 /**

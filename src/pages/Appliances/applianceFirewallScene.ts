@@ -10,7 +10,11 @@ import {
   VariableValueSelectors,
 } from '@grafana/scenes';
 import { networkVariableForProductTypes } from '../../scene-helpers/variables';
-import { applianceSettingsCard, portForwardingTable } from './panels';
+import {
+  applianceSettingsCard,
+  applianceTrafficShapingTable,
+  portForwardingTable,
+} from './panels';
 
 /**
  * Per-appliance Firewall tab — port forwarding rules and appliance
@@ -49,6 +53,11 @@ export function applianceFirewallScene(_serial: string): EmbeddedScene {
         new SceneFlexItem({
           minHeight: 200,
           body: applianceSettingsCard('$network'),
+        }),
+        // v0.5 §4.4.3-1c — MX traffic-shaping + uplink-selection snapshot.
+        new SceneFlexItem({
+          minHeight: 220,
+          body: applianceTrafficShapingTable(['$network']),
         }),
       ],
     }),

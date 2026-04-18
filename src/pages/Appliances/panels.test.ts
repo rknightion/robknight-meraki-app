@@ -1,11 +1,16 @@
 import { VizPanel } from '@grafana/scenes';
 import {
+  applianceFailoverEventsTable,
+  applianceFailoverTimeline,
+  applianceTrafficShapingTable,
   applianceUplinksOverviewRow,
   mxStatusKpiRow,
   mxUplinksUsageByNetworkTable,
   mxUplinksUsageHistoryTimeseries,
+  uplinkLossLatencyHistogram,
   uplinkLossLatencyHistoryTimeseries,
   uplinkLossLatencyTimeseries,
+  vpnPeerHeatmap,
 } from './panels';
 
 describe('mxStatusKpiRow', () => {
@@ -99,6 +104,56 @@ describe('mxUplinksUsageHistoryTimeseries', () => {
 describe('mxUplinksUsageByNetworkTable', () => {
   it('returns a table VizPanel', () => {
     const panel = mxUplinksUsageByNetworkTable();
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('table');
+  });
+});
+
+// v0.5 §4.4.3-1c ------------------------------------------------------------
+
+describe('uplinkLossLatencyHistogram', () => {
+  it('returns a histogram VizPanel for lossPercent with percent unit', () => {
+    const panel = uplinkLossLatencyHistogram('Q2XX-APPL-0001', 'lossPercent');
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('histogram');
+    expect(panel.state.fieldConfig.defaults.unit).toBe('percent');
+  });
+
+  it('returns a histogram VizPanel for latencyMs with ms unit', () => {
+    const panel = uplinkLossLatencyHistogram('Q2XX-APPL-0001', 'latencyMs');
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('histogram');
+    expect(panel.state.fieldConfig.defaults.unit).toBe('ms');
+  });
+});
+
+describe('vpnPeerHeatmap', () => {
+  it('returns a heatmap VizPanel', () => {
+    const panel = vpnPeerHeatmap();
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('heatmap');
+  });
+});
+
+describe('applianceTrafficShapingTable', () => {
+  it('returns a table VizPanel', () => {
+    const panel = applianceTrafficShapingTable(['$network']);
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('table');
+  });
+});
+
+describe('applianceFailoverTimeline', () => {
+  it('returns a state-timeline VizPanel', () => {
+    const panel = applianceFailoverTimeline();
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('state-timeline');
+  });
+});
+
+describe('applianceFailoverEventsTable', () => {
+  it('returns a table VizPanel', () => {
+    const panel = applianceFailoverEventsTable();
     expect(panel).toBeInstanceOf(VizPanel);
     expect(panel.state.pluginId).toBe('table');
   });

@@ -11,6 +11,9 @@ import {
 } from '@grafana/scenes';
 import { orgVariable } from '../../scene-helpers/variables';
 import {
+  applianceFailoverEventsTable,
+  applianceFailoverTimeline,
+  uplinkLossLatencyHistogram,
   uplinkLossLatencyHistoryTimeseries,
   uplinkLossLatencyTimeseries,
 } from './panels';
@@ -66,6 +69,30 @@ export function applianceUplinksScene(serial: string): EmbeddedScene {
               }),
             ],
           }),
+        }),
+        // v0.5 §4.4.3-1c — WAN L/L distribution histograms side by side.
+        new SceneFlexItem({
+          minHeight: 300,
+          body: new SceneFlexLayout({
+            direction: 'row',
+            children: [
+              new SceneFlexItem({
+                body: uplinkLossLatencyHistogram(serial, 'lossPercent'),
+              }),
+              new SceneFlexItem({
+                body: uplinkLossLatencyHistogram(serial, 'latencyMs'),
+              }),
+            ],
+          }),
+        }),
+        // v0.5 §4.4.3-1c — MX uplink failover event timeline + detail table.
+        new SceneFlexItem({
+          minHeight: 220,
+          body: applianceFailoverTimeline(),
+        }),
+        new SceneFlexItem({
+          minHeight: 280,
+          body: applianceFailoverEventsTable(),
         }),
       ],
     }),

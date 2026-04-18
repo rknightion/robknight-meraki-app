@@ -10,13 +10,17 @@ import {
   VariableValueSelectors,
 } from '@grafana/scenes';
 import { networkVariableForProductTypes } from '../../scene-helpers/variables';
-import { vpnPeerMatrixTable, vpnPeerStatsTable } from './panels';
+import { vpnPeerHeatmap, vpnPeerStatsTable } from './panels';
 
 /**
- * Per-appliance VPN tab — the peer matrix sits above the aggregated stats
- * table. The tab inherits $org from the app shell and exposes a
- * multi-select $network variable so operators can scope the matrix to a
- * single site; leaving it on "All" shows every peer across the org.
+ * Per-appliance VPN tab — a peer heatmap sits above the aggregated stats
+ * table. v0.5 §4.4.3-1c REPLACED the previous peer-matrix table with the
+ * heatmap so larger AutoVPN meshes stay readable; the stats table is
+ * retained for small meshes / per-pair detail.
+ *
+ * The scene inherits $org from the app shell and exposes a multi-select
+ * $network variable so operators can scope the heatmap to a single site;
+ * leaving it on "All" shows every peer across the org.
  *
  * This scene receives the selected appliance's serial for API symmetry
  * with the other detail tabs, but the VPN frames are emitted per-network
@@ -40,8 +44,8 @@ export function applianceVpnScene(_serial: string): EmbeddedScene {
       direction: 'column',
       children: [
         new SceneFlexItem({
-          minHeight: 360,
-          body: vpnPeerMatrixTable(),
+          minHeight: 380,
+          body: vpnPeerHeatmap(),
         }),
         new SceneFlexItem({
           minHeight: 320,
