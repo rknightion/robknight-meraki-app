@@ -162,6 +162,12 @@ const (
 	KindSwitchStp          QueryKind = "switchStp"
 	KindSwitchMacTable     QueryKind = "switchMacTable"
 	KindSwitchVlansSummary QueryKind = "switchVlansSummary"
+
+	// §4.4.3-1f — cross-cutting. Union of configurationChanges + networkEvents
+	// over the last 24 hours for the Home "what just changed" tile. Always a
+	// fixed 24h lookback; panel time range is ignored so the Home tile is
+	// stable regardless of dashboard picker.
+	KindOrgChangeFeed QueryKind = "orgChangeFeed"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -349,6 +355,9 @@ var handlers = map[QueryKind]handlerFn{
 	KindSwitchStp:          handleSwitchStp,
 	KindSwitchMacTable:     handleSwitchMacTable,
 	KindSwitchVlansSummary: handleSwitchVlansSummary,
+
+	// §4.4.3-1f — Home "what just changed" tile.
+	KindOrgChangeFeed: handleOrgChangeFeed,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

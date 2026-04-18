@@ -143,6 +143,11 @@ export enum QueryKind {
   SwitchStp = 'switchStp',
   SwitchMacTable = 'switchMacTable',
   SwitchVlansSummary = 'switchVlansSummary',
+
+  /* §4.4.3-1f — cross-cutting. Server-side union of configurationChanges +
+   * networkEvents for the Home "what just changed in 24h" tile. Always a
+   * fixed 24h lookback regardless of dashboard time range. */
+  OrgChangeFeed = 'orgChangeFeed',
 }
 
 export interface MerakiQuery extends DataQuery {
