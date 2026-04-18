@@ -19,7 +19,7 @@ import {
 } from '../../scene-helpers/panels';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import { recentAlertsTile } from '../Alerts/panels';
-import { deviceMemoryPressureTimeseries } from './panels';
+import { deviceMemoryPressureTimeseries, orgChangeFeedTile } from './panels';
 
 export function homeScene() {
   return new EmbeddedScene({
@@ -59,6 +59,13 @@ export function homeScene() {
         new SceneFlexItem({
           minHeight: 260,
           body: recentAlertsTile('$org'),
+        }),
+        // §4.4.3-1f stub — "what changed in 24h" tile. §4.4.5 (Home merge)
+        // will polish the styling (icon column, drilldown links). Placed
+        // here so the backend handler has a visible integration point.
+        new SceneFlexItem({
+          minHeight: 260,
+          body: orgChangeFeedTile(),
         }),
         // Device memory pressure — shows per-device memory % over time.
         // Placed before the inventory table so operators see system health

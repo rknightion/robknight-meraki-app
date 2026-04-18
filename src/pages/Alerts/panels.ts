@@ -352,6 +352,73 @@ export function recentAlertsTile(orgId?: string): VizPanel {
     .build();
 }
 
+// §4.4.3-1f — MTTR summary panels ---------------------------------------------
+
+/**
+ * Runner for the `alertsMttrSummary` wide KPI frame. One row with five fields:
+ *   mttrMeanSeconds | mttrP50Seconds | mttrP95Seconds | resolvedCount | openCount
+ * See `pkg/plugin/query/mttr.go::handleAlertsMttrSummary` for the emit shape.
+ */
+function mttrSummaryRunner(orgId?: string): SceneQueryRunner {
+  return new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [
+      {
+        refId: 'A',
+        kind: QueryKind.AlertsMttrSummary,
+        orgId: orgId ?? '$org',
+      },
+    ],
+  });
+}
+
+function mttrStat(
+  title: string,
+  runner: SceneQueryRunner,
+  field: 'mttrMeanSeconds' | 'mttrP50Seconds' | 'mttrP95Seconds' | 'resolvedCount' | 'openCount',
+  unit?: string
+): VizPanel {
+  const builder = PanelBuilders.stat()
+    .setTitle(title)
+    .setData(
+      new SceneDataTransformer({
+        $data: runner,
+        transformations: [
+          { id: 'filterFieldsByName', options: { include: { names: [field] } } },
+        ],
+      })
+    )
+    .setNoValue('0')
+    .setOption('reduceOptions', {
+      values: false,
+      calcs: ['lastNotNull'],
+      fields: '',
+    } as any)
+    .setOption('colorMode', 'none' as any);
+  if (unit) {
+    builder.setUnit(unit);
+  }
+  return builder.build();
+}
+
+/**
+ * MTTR KPI row: mean / p50 / p95 resolution time plus resolved + open counts.
+ *
+ * Shared runner across all five tiles — the backend emits a single wide frame
+ * with one field per KPI (todos.txt §G.20 pattern). The first three tiles use
+ * Grafana's `s` (seconds) unit so the stat viz auto-scales to minutes/hours.
+ */
+export function alertsMttrKpiRow(orgId?: string): VizPanel[] {
+  const runner = mttrSummaryRunner(orgId);
+  return [
+    mttrStat('MTTR mean', runner, 'mttrMeanSeconds', 's'),
+    mttrStat('MTTR p50', runner, 'mttrP50Seconds', 's'),
+    mttrStat('MTTR p95', runner, 'mttrP95Seconds', 's'),
+    mttrStat('Resolved', runner, 'resolvedCount'),
+    mttrStat('Open', runner, 'openCount'),
+  ];
+}
+
 // §3.4 — Alerts overview byNetwork + historical --------------------------------
 
 /**

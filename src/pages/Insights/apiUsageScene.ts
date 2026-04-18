@@ -15,6 +15,7 @@ import { orgVariable } from '../../scene-helpers/variables';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import {
   apiRequestsByIntervalChart,
+  apiRequestRateWith429Overlay,
   apiRequestsKpiRow,
 } from './panels';
 
@@ -68,6 +69,11 @@ export function apiUsageScene(): EmbeddedScene {
         new SceneFlexItem({
           height: 380,
           body: apiRequestsByIntervalChart(),
+        }),
+        // §4.4.3-1f — request-rate timeseries with 429 overlay.
+        new SceneFlexItem({
+          height: 380,
+          body: apiRequestRateWith429Overlay(),
         }),
       ],
     }),

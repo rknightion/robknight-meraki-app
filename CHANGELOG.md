@@ -8,6 +8,27 @@ top-level pages.
 
 ### Added
 
+- **Cross-cutting panels — v0.5 §4.4.3-1f.**
+  - New `orgChangeFeed` query kind: server-side union of
+    `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the
+    last 24 hours, filtered to severity>=warn events (category+type
+    keyword heuristic; Meraki's /events endpoint has no native severity
+    field). Fetched in parallel via `golang.org/x/sync/errgroup`, sorted
+    newest-first, capped at 10 rows.
+  - **Home "what changed in 24h" tile** (stub — §4.4.5 polish) backed by
+    `orgChangeFeed`.
+  - **Alerts MTTR KPI row** (5 tiles: mean / p50 / p95 / resolved / open)
+    over the existing `alertsMttrSummary` kind.
+  - **License renewal calendar** status panel on the Licensing tab,
+    reshaping the existing `licensesList` feed with threshold-coloured
+    `daysUntilExpiry` cells. No new kind.
+  - **API request rate + 429 overlay** timeseries on the API Usage tab,
+    reshaping the existing `apiRequestsByInterval` feed. 429 class
+    rendered as a red line above the stacked request-rate area.
+  - **Config-change annotations** (`configurationChangesAnnotation`) on
+    the appliance Uplinks tab + per-sensor detail page, via
+    `dataLayers.AnnotationsDataLayer`.
+
 - **Appliances (MX) panels — v0.5 §4.4.3-1c.**
   - WAN loss / latency **distribution histograms** on the Uplinks tab
     (reshape of the existing `deviceUplinksLossLatency` feed via the

@@ -332,6 +332,61 @@ export function licensesTable(): VizPanel {
     .build();
 }
 
+// §4.4.3-1f — license renewal calendar ----------------------------------------
+
+/**
+ * Status-list-ish panel over the existing `licensesList` frame, focused on the
+ * days-to-expiry column. Uses the shared `LICENSE_EXPIRY_THRESHOLDS` ramp so
+ * licenses close to renewal render red, farther-off licenses render green.
+ *
+ * No new query kind — this is a different visualisation of the same feed that
+ * backs `licensesTable`. It sits above the full inventory table on the
+ * licensing tab so operators see the "who needs attention" summary first.
+ *
+ * Scope: filtered to the `$licenseState` variable (matching `licensesTable`),
+ * hides ids / pagination columns, and adds a colour-background cell on
+ * `daysUntilExpiry` for a visual calendar feel.
+ */
+export function licenseRenewalCalendar(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.LicensesList,
+    metrics: ['$licenseState'],
+  });
+
+  const data = hideColumns(runner, [
+    'headLicenseId',
+    'id',
+    'activationDate',
+    'seatCount',
+    'networkId',
+  ]);
+
+  return PanelBuilders.table()
+    .setTitle('License renewal calendar')
+    .setDescription(
+      'License inventory sorted by days-to-expiry. Red cells indicate licenses ' +
+        'expiring within 7 days; orange within 30; green otherwise.'
+    )
+    .setData(data)
+    .setNoValue('No licenses visible for the selected state.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('daysUntilExpiry')
+        .overrideThresholds({
+          mode: ThresholdsMode.Absolute,
+          steps: LICENSE_EXPIRY_THRESHOLDS.map((t) => ({
+            value: t.value as number,
+            color: t.color,
+          })),
+        })
+        .overrideCustomFieldConfig('cellOptions', { type: 'color-background' } as any);
+      b.matchFieldsWithName('expirationDate').overrideCustomFieldConfig('width', 180);
+      b.matchFieldsWithName('licenseType').overrideCustomFieldConfig('width', 160);
+      b.matchFieldsWithName('state').overrideCustomFieldConfig('width', 120);
+      b.matchFieldsWithName('daysUntilExpiry').overrideCustomFieldConfig('width', 150);
+    })
+    .build();
+}
+
 // API Usage panels -----------------------------------------------------------
 
 /**
@@ -455,6 +510,69 @@ export function apiRequestsByIntervalChart(): VizPanel {
         mode: 'fixed',
         fixedColor: 'purple',
       } as any);
+    })
+    .build();
+}
+
+// §4.4.3-1f — API usage estimation (request-rate + 429 overlay) ---------------
+
+/**
+ * Timeseries panel that reshapes the existing `apiRequestsByInterval` frames
+ * into a request-rate view with the 429 class as a highlighted overlay.
+ *
+ * The handler already emits one frame per HTTP class (`2xx`, `4xx`, `429`,
+ * `5xx`) with a baked `DisplayNameFromDS`. This panel stacks the non-429
+ * classes as a cumulative request-rate area and renders `429` as a red
+ * overlay line — operators spot the rate-limit bumps against the background
+ * traffic curve. NO new backend kind: pure visualisation override.
+ *
+ * Sits alongside the existing stacked bar chart on the API Usage tab — the
+ * two views answer different questions (volume distribution vs rate + 429
+ * pressure).
+ */
+export function apiRequestRateWith429Overlay(): VizPanel {
+  return PanelBuilders.timeseries()
+    .setTitle('API request rate + 429 overlay')
+    .setDescription(
+      'Request rate by HTTP class with 429 rate-limited responses overlaid ' +
+        'as a red line. Spikes in the 429 overlay indicate the org is ' +
+        'approaching (or hitting) its Meraki API quota.'
+    )
+    .setData(
+      oneQuery({
+        kind: QueryKind.ApiRequestsByInterval,
+        maxDataPoints: 300,
+      })
+    )
+    .setNoValue('No API activity in the selected range.')
+    .setCustomFieldConfig('fillOpacity', 15)
+    .setCustomFieldConfig('lineWidth', 1)
+    .setCustomFieldConfig('stacking', { mode: 'normal' } as any)
+    .setOption('legend', {
+      showLegend: true,
+      displayMode: 'list',
+      placement: 'bottom',
+    } as any)
+    .setOverrides((b) => {
+      b.matchFieldsWithNameByRegex('.*2xx.*').overrideColor({
+        mode: 'fixed',
+        fixedColor: 'green',
+      } as any);
+      b.matchFieldsWithNameByRegex('.*4xx.*').overrideColor({
+        mode: 'fixed',
+        fixedColor: 'orange',
+      } as any);
+      b.matchFieldsWithNameByRegex('.*5xx.*').overrideColor({
+        mode: 'fixed',
+        fixedColor: 'purple',
+      } as any);
+      // 429 gets special treatment: red line, no stacking, thicker line so it
+      // floats above the stacked-area rate curve.
+      b.matchFieldsWithNameByRegex('.*429.*')
+        .overrideColor({ mode: 'fixed', fixedColor: 'red' } as any)
+        .overrideCustomFieldConfig('lineWidth', 3)
+        .overrideCustomFieldConfig('fillOpacity', 0)
+        .overrideCustomFieldConfig('stacking', { mode: 'none' } as any);
     })
     .build();
 }

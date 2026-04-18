@@ -15,6 +15,7 @@ import { orgVariable } from '../../scene-helpers/variables';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import {
   cotermExpirationStat,
+  licenseRenewalCalendar,
   licensesTable,
   licensingKpiRow,
 } from './panels';
@@ -70,6 +71,13 @@ export function licensingScene(): EmbeddedScene {
         new SceneFlexItem({
           height: 120,
           body: cotermExpirationStat(),
+        }),
+        // §4.4.3-1f — license renewal calendar: status table with
+        // colour-coded daysUntilExpiry cells. Sits above the full inventory
+        // so operators see the "who needs renewal" summary first.
+        new SceneFlexItem({
+          minHeight: 320,
+          body: licenseRenewalCalendar(),
         }),
         new SceneFlexItem({
           minHeight: 500,

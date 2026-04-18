@@ -17,6 +17,7 @@ import {
   alertsKpiRow,
   alertsByNetworkTable,
   alertsHistoricalTimeseries,
+  alertsMttrKpiRow,
   alertsTable,
   alertsTimelineBarChart,
 } from './panels';
@@ -38,6 +39,9 @@ import { severityVariable } from './variables';
  */
 export function alertsScene(): EmbeddedScene {
   const kpiItems = alertsKpiRow().map(
+    (panel) => new SceneCSSGridItem({ body: panel })
+  );
+  const mttrItems = alertsMttrKpiRow().map(
     (panel) => new SceneCSSGridItem({ body: panel })
   );
 
@@ -69,6 +73,17 @@ export function alertsScene(): EmbeddedScene {
         new SceneFlexItem({
           height: 260,
           body: alertsTimelineBarChart(),
+        }),
+        // §4.4.3-1f — MTTR KPI row: mean / p50 / p95 resolution time + resolved + open counts.
+        new SceneFlexItem({
+          height: 120,
+          body: new SceneCSSGridLayout({
+            templateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            autoRows: '100px',
+            rowGap: 1,
+            columnGap: 1,
+            children: mttrItems,
+          }),
         }),
         // §3.4 — Historical severity trend and by-network breakdown.
         new SceneFlexItem({
