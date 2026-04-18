@@ -383,7 +383,7 @@ func (a *App) handleAlertsReconcile(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	m := &merakiAdapter{c: a.client}
+	m := a.merakiForAlerts()
 	result, rerr := alerts.Reconcile(req.Context(), api, m, a.alertsRegistry, body.toInternal())
 	a.persistReconcileSummary(result)
 	if rerr != nil {

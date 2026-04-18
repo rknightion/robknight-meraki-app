@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -15,6 +16,20 @@ import (
 	"github.com/robknight/grafana-meraki-plugin/pkg/meraki"
 	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/alerts"
 )
+
+// e2eMockEnv gates the Go-level stub wiring for Playwright e2e tests. When
+// set to "1" the App swaps both GrafanaAPI (→ alerts.InMemoryGrafana) and the
+// Meraki adapter (→ fixed-list stub) at construction time, and Configured()
+// treats the plugin as configured even without an API key. This lets the
+// /alerts/* reconcile+uninstall surface be exercised hermetically from
+// Playwright without a live Grafana alerting API or a real Meraki key. See
+// pkg/plugin/alerts/CLAUDE.md "E2E mock" for the full rationale.
+const e2eMockEnv = "E2E_MOCK_GRAFANA"
+
+// isE2EMockEnabled is a tiny helper to keep the os.Getenv check co-located
+// with the gate comment so it's easy to audit. A function (not a package
+// var) because env changes mid-process would otherwise be invisible.
+func isE2EMockEnabled() bool { return os.Getenv(e2eMockEnv) == "1" }
 
 var (
 	_ backend.CallResourceHandler   = (*App)(nil)
@@ -55,6 +70,18 @@ type App struct {
 	// a Grafana restart. Nil-safe: if the store failed to init we still
 	// serve status with a zero-valued summary.
 	alertsStore *alertsStore
+
+	// e2eMockEnabled mirrors isE2EMockEnabled() at construction time. It is
+	// captured once (rather than re-checking the env on every request) so
+	// the stub surface stays stable for the lifetime of a plugin instance —
+	// in particular Configured() returns a consistent value per request.
+	e2eMockEnabled bool
+
+	// alertsMerakiOverride, when non-nil, is returned from merakiForAlerts()
+	// in place of the real &merakiAdapter{c: a.client}. Only populated in
+	// e2e-mock mode; production path leaves this nil so reconcile fans out
+	// to the live Meraki client as normal.
+	alertsMerakiOverride alerts.MerakiAPI
 }
 
 // LabelMode controls how per-device series are labeled on timeseries panels
@@ -156,10 +183,61 @@ func NewApp(_ context.Context, s backend.AppInstanceSettings) (instancemgmt.Inst
 			return NewGrafanaClient(cfg)
 		},
 	}
+
+	// E2E hook: when E2E_MOCK_GRAFANA=1, swap the Grafana provisioning
+	// surface for an in-memory stub AND substitute a fixed two-org Meraki
+	// adapter so reconcile runs end-to-end without a real API key. Done
+	// AFTER the production wiring above so re-reading the file is obvious
+	// about which branch is the default path. See pkg/plugin/alerts/CLAUDE.md
+	// "E2E mock" for the rationale.
+	if isE2EMockEnabled() {
+		app.e2eMockEnabled = true
+		stub := alerts.NewInMemoryGrafana()
+		app.newGrafanaAPI = func(_ *backend.GrafanaCfg) (alerts.GrafanaAPI, error) {
+			return stub, nil
+		}
+		// Probe still returns "ready" — the status banner under e2e must
+		// not look unavailable or the UI disables the Reconcile button.
+		app.newGrafanaProber = func(_ *backend.GrafanaCfg) (GrafanaProber, error) {
+			return e2eReadyProber{}, nil
+		}
+		app.alertsMerakiOverride = e2eMockMerakiOrgs()
+		logger.Info("e2e mock mode enabled: /alerts/* handlers are hermetic")
+	}
+
 	mux := http.NewServeMux()
 	app.registerRoutes(mux)
 	app.CallResourceHandler = httpadapter.New(mux)
 	return app, nil
+}
+
+// e2eReadyProber is a trivial GrafanaProber used only when E2E_MOCK_GRAFANA=1.
+// It returns "ready" so CheckHealth + /alerts/status surface the same
+// "bundle available" path they would on a real Grafana with the toggle on.
+type e2eReadyProber struct{}
+
+func (e2eReadyProber) Probe(_ context.Context) (bool, string, error) {
+	return true, "ready", nil
+}
+
+// e2eMockMerakiOrgs returns the two fixed orgs the e2e spec depends on. The
+// IDs are pinned because reconciler UIDs include the org ID, so the same
+// fixture values make the diff assertions deterministic across runs.
+func e2eMockMerakiOrgs() alerts.MerakiAPI {
+	return staticMerakiAPI{
+		orgs: []alerts.Organization{
+			{ID: "111111", Name: "Mock Org A"},
+			{ID: "222222", Name: "Mock Org B"},
+		},
+	}
+}
+
+type staticMerakiAPI struct {
+	orgs []alerts.Organization
+}
+
+func (s staticMerakiAPI) GetOrganizations(_ context.Context) ([]alerts.Organization, error) {
+	return s.orgs, nil
 }
 
 func loadSettings(s backend.AppInstanceSettings) (Settings, error) {
@@ -242,8 +320,28 @@ func (a *App) Client() *meraki.Client {
 
 // Configured reports whether an API key is present. Resource handlers that require it should
 // short-circuit with a 412 when this returns false.
+//
+// E2E override: when the process is running with E2E_MOCK_GRAFANA=1 the
+// plugin reports itself as configured even without a live Meraki client so
+// Playwright specs can exercise /alerts/reconcile. Non-alert handlers (/query,
+// /metricFind) still dereference a.client directly, so this override is only
+// observable on the alert-bundle surface.
 func (a *App) Configured() bool {
+	if a.e2eMockEnabled {
+		return true
+	}
 	return a.client != nil
+}
+
+// merakiForAlerts returns the alerts.MerakiAPI the reconcile handler should
+// use. In production this is the live &merakiAdapter{c: a.client}; in e2e
+// mock mode it's the fixed two-org fixture. Kept on App (rather than built
+// inline in resources.go) so tests can audit which adapter is in play.
+func (a *App) merakiForAlerts() alerts.MerakiAPI {
+	if a.alertsMerakiOverride != nil {
+		return a.alertsMerakiOverride
+	}
+	return &merakiAdapter{c: a.client}
 }
 
 // CheckHealth validates the configured API key by calling GET /organizations

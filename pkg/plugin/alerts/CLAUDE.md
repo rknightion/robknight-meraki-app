@@ -150,3 +150,37 @@ overrides still live in jsonData; they're authored by the AppConfig UI and
 propagated via the normal Grafana settings-save flow.
 
 See `pkg/plugin/alerts_store.go` for the implementation.
+
+## E2E mock (§4.5.8)
+
+`e2e_mock.go` in this package provides `InMemoryGrafana`, a drop-in
+`GrafanaAPI` implementation that captures every CRUD call into in-memory
+maps. It is wired in from `pkg/plugin/app.go` when the plugin process is
+launched with `E2E_MOCK_GRAFANA=1` — at that point the App swaps BOTH
+surfaces:
+
+- `newGrafanaAPI` → a shared `*InMemoryGrafana` (same instance for every
+  request, so a Playwright session sees one coherent Grafana).
+- `newGrafanaProber` → `e2eReadyProber` (always-ready).
+- `alertsMerakiOverride` → a two-org static `MerakiAPI` (ids `111111`,
+  `222222`). This lets Reconcile fan out to real template rendering
+  without a live Meraki API key.
+- `Configured()` → returns true so `/alerts/reconcile` passes its
+  precondition gate.
+
+**Scope:** only the `/alerts/*` handler surface is affected. `/query` and
+`/metricFind` still dereference `a.client` directly and will 412 when no
+key is configured, which is fine — Playwright alerts spec doesn't touch
+those endpoints.
+
+**Activation:** opt-in per run. `.config/docker-compose-base.yaml` does
+NOT set the flag by default; a developer running the alerts spec exports
+`E2E_MOCK_GRAFANA=1` before `docker compose up` (see
+`.config/AGENTS/e2e-testing.md` for the full procedure). Setting it by
+default would mask real-Grafana regressions on the dev lab.
+
+**Non-hermetic alternative:** render + banner tests in `tests/alerts.spec.ts`
+use Playwright `page.route()` to intercept `/resources/alerts/{templates,
+status}` client-side, which doesn't need the env var. That's the cheaper
+path when the test only needs to assert a specific response shape; use the
+Go stub when you need to exercise the real reconciler diff algorithm.
