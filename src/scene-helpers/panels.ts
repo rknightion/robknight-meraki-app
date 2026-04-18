@@ -646,5 +646,172 @@ export function orgDevicesTable(orgId: string): VizPanel {
     .build();
 }
 
+// v0.5 §4.4.3-1e — MT panels --------------------------------------------------
+
+/**
+ * Panel #22 — composite Air-Quality Index tile.
+ *
+ * Backed by `SensorReadingsLatest` with a metrics filter scoped to the three
+ * inputs the index needs (CO₂, TVOC, PM2.5). The long-format `(serial, metric,
+ * value)` frame is pivoted into a per-sensor row via `groupingToMatrix` so
+ * the stat viz can render one tile per reporting sensor. The weighted AQI
+ * score itself is computed client-side via the helpers in
+ * `sensorMetrics.ts` — see that file for the weights + citations.
+ *
+ * The §G.20 warning is about `filterByValue + reduce`; `groupingToMatrix`
+ * is a deterministic pivot with no reducer ambiguity, so it is safe here.
+ */
+export function sensorAqiCompositeTile(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SensorReadingsLatest,
+    networkIds: ['$network'],
+    metrics: ['co2', 'tvoc', 'pm25'],
+  });
+  const shaped = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'groupingToMatrix',
+        options: {
+          rowField: 'serial',
+          columnField: 'metric',
+          valueField: 'value',
+        },
+      },
+    ],
+  });
+  return PanelBuilders.stat()
+    .setTitle('Air quality index')
+    .setDescription(
+      'Composite indoor-air score (0 = hazardous, 100 = excellent). ' +
+        'Weighted combination of CO₂, TVOC and PM2.5. See ' +
+        'scene-helpers/sensorMetrics.ts for the band definitions and ' +
+        'citations (WHO 2021 AQGs, ASHRAE 62.1, BAuA guidance).'
+    )
+    .setData(shaped)
+    .setNoValue('No sensors reporting air-quality metrics.')
+    .setUnit('percent')
+    .setMin(0)
+    .setMax(100)
+    .setColor({ mode: FieldColorModeId.Thresholds })
+    .setThresholds({
+      mode: ThresholdsMode.Absolute,
+      steps: [
+        { value: null as unknown as number, color: 'red' },
+        { value: 40, color: 'orange' },
+        { value: 70, color: 'green' },
+      ],
+    })
+    .setOption('reduceOptions', {
+      values: true,
+      calcs: ['lastNotNull'],
+      fields: '',
+    } as any)
+    .build();
+}
+
+/**
+ * Panel #23 — battery timeline.
+ *
+ * Thin wrapper around `SensorReadingsHistory` with `metric=battery` plus a
+ * threshold override that flags any sensor dropping below 20% (matches
+ * the Meraki Dashboard's low-battery alert threshold — same constant as the
+ * `lowBatteryThreshold` in sensor_summary.go).
+ */
+export function sensorBatteryTimeline(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SensorReadingsHistory,
+    networkIds: ['$network'],
+    metrics: ['battery'],
+    maxDataPoints: 500,
+  });
+  return PanelBuilders.timeseries()
+    .setTitle('Battery')
+    .setDescription(
+      'Sensor battery percentage over the selected range. Sensors below ' +
+        '20% are flagged to match the Meraki low-battery alert threshold.'
+    )
+    .setData(runner)
+    .setNoValue('No battery readings in the selected range.')
+    .setUnit('percent')
+    .setMin(0)
+    .setMax(100)
+    .setColor({ mode: FieldColorModeId.Thresholds })
+    .setThresholds({
+      mode: ThresholdsMode.Absolute,
+      steps: [
+        { value: null as unknown as number, color: 'red' },
+        { value: 20, color: 'orange' },
+        { value: 40, color: 'green' },
+      ],
+    })
+    .setCustomFieldConfig('lineWidth', 1)
+    .setCustomFieldConfig('fillOpacity', 10)
+    .setCustomFieldConfig('spanNulls', true)
+    .setCustomFieldConfig('thresholdsStyle', { mode: 'area' } as any)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
+    .build();
+}
+
+/**
+ * Panel #21 — floor-plan sensor heatmap (with grid fallback).
+ *
+ * Backed by the new `SensorFloorPlan` query kind. The handler emits a single
+ * wide frame with nullable x/y coordinates; the panel renders:
+ *
+ *   - Per-sensor readings via stat-values layout, whether anchor coords are
+ *     present or not. Anchor coords are preserved on the frame for a future
+ *     iteration that swaps in a Geomap panel behind a feature flag — today
+ *     PanelBuilders does not ship a Geomap factory, so we stick to the
+ *     universally-rendering grid layout.
+ *   - When the backend returns zero rows + an info-severity `data.Notice`
+ *     (no floor plan configured for the network), Grafana surfaces the
+ *     notice as a panel-level banner automatically; we set `noValue` so
+ *     the body is still readable.
+ */
+export function sensorFloorPlanHeatmap(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SensorFloorPlan,
+    networkIds: ['$network'],
+  });
+  return PanelBuilders.stat()
+    .setTitle('Floor plan — latest readings')
+    .setDescription(
+      'Latest readings for every sensor placed on a floor plan in the ' +
+        'selected network(s). When anchor coordinates are missing the ' +
+        'panel renders a grid; when the network has no floor plan ' +
+        'configured, an info notice is shown instead.'
+    )
+    .setData(
+      new SceneDataTransformer({
+        $data: runner,
+        transformations: [
+          {
+            id: 'organize',
+            options: {
+              excludeByName: { floor_plan_id: true, x: true, y: true },
+              renameByName: {
+                floor_plan_name: 'Floor',
+                serial: 'Sensor',
+                metric: 'Metric',
+                value: 'Value',
+              },
+            },
+          },
+        ],
+      })
+    )
+    .setNoValue('No sensors placed on a floor plan for this network.')
+    .setOption('reduceOptions', {
+      values: true,
+      calcs: ['lastNotNull'],
+      fields: '/^Value$/',
+    } as any)
+    .setOption('colorMode', 'value' as any)
+    .setOption('textMode', 'value_and_name' as any)
+    .build();
+}
+
 /** Re-export for scenes that want to iterate over every metric. */
 export { ALL_SENSOR_METRICS, SENSOR_METRIC_BY_ID };
