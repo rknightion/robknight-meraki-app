@@ -105,6 +105,15 @@ export enum QueryKind {
   /* §3.4 — Alerts overview byNetwork + historical. */
   AlertsOverviewByNetwork = 'alertsOverviewByNetwork',
   AlertsOverviewHistorical = 'alertsOverviewHistorical',
+
+  /* §4.4.2 — v0.5 Phase 0 plumbing.
+   * ConfigurationChangesAnnotation reshapes the existing configurationChanges
+   * feed into a Grafana annotation frame (time/title/text/tags) for data-layer
+   * overlay. AlertsMttrSummary aggregates resolvedAt-startedAt across alerts
+   * into mean/p50/p95 + counts — shared between the MTTR chart (§4.4.3 1f)
+   * and the new Org Health page (§4.4.4). */
+  ConfigurationChangesAnnotation = 'configurationChangesAnnotation',
+  AlertsMttrSummary = 'alertsMttrSummary',
 }
 
 export interface MerakiQuery extends DataQuery {

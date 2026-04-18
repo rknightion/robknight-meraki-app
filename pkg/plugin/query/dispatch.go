@@ -124,6 +124,14 @@ const (
 	// §3.4 — Alerts overview byNetwork + historical.
 	KindAlertsOverviewByNetwork  QueryKind = "alertsOverviewByNetwork"
 	KindAlertsOverviewHistorical QueryKind = "alertsOverviewHistorical"
+
+	// §4.4.2 — v0.5 Phase 0 plumbing. configurationChangesAnnotation reshapes
+	// the configurationChanges feed into a Grafana annotation frame for
+	// data-layer overlay. alertsMttrSummary aggregates alert resolution times
+	// into a single wide KPI frame shared by the MTTR chart (§4.4.3 1f) and
+	// the new Org Health page (§4.4.4).
+	KindConfigurationChangesAnnotation QueryKind = "configurationChangesAnnotation"
+	KindAlertsMttrSummary              QueryKind = "alertsMttrSummary"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
