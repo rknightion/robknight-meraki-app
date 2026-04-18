@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 (Unreleased)
+
+V0.5 panels + pages roadmap — todos.txt §4.4. Additive scene work with no
+new backend transport; new query-kind handlers feed new panels and five new
+top-level pages.
+
+### Added
+
+- **Query kind `configurationChangesAnnotation`** — reshapes the existing
+  configurationChanges feed into a four-column annotation frame (time,
+  title, text, tags) for scene `AnnotationDataLayer` overlays. Reuses the
+  same Meraki endpoint + 5 m TTL as `configurationChanges`; cache is
+  shared so enabling annotations on a timeseries panel does not add a
+  Meraki round-trip (v0.5 §4.4.2).
+- **Query kind `alertsMttrSummary`** — aggregates resolvedAt - startedAt
+  across assurance alerts into a single-row wide frame with
+  `mttrMeanSeconds`, `mttrP50Seconds`, `mttrP95Seconds`, `resolvedCount`,
+  `openCount`. Server-side aggregation matches §G.20 — no client-side
+  filterByValue + reduce. 1 m TTL (v0.5 §4.4.2).
+
 ## 0.4.0 (Unreleased)
 
 API optimisation wave — closes out todos.txt §7. Spec-compliant User-Agent,

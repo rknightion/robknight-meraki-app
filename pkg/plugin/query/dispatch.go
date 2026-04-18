@@ -297,6 +297,10 @@ var handlers = map[QueryKind]handlerFn{
 	// §3.4 — Alerts overview byNetwork + historical.
 	KindAlertsOverviewByNetwork:  handleAlertsOverviewByNetwork,
 	KindAlertsOverviewHistorical: handleAlertsOverviewHistorical,
+
+	// §4.4.2 — v0.5 Phase 0 plumbing.
+	KindConfigurationChangesAnnotation: handleConfigurationChangesAnnotation,
+	KindAlertsMttrSummary:              handleAlertsMttrSummary,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and
