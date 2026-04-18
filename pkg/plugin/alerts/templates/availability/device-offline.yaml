@@ -1,0 +1,62 @@
+kind: alert_rule_template
+id: device-offline
+group: availability
+display_name: Device offline
+severity: critical
+thresholds:
+  - key: for_duration
+    type: duration
+    default: 5m
+    label: Grace period before alerting
+    help: Device must be reported offline for at least this duration before the rule fires.
+  - key: product_types
+    type: list
+    default: [appliance, switch, wireless, camera, cellularGateway, sensor]
+    label: Device families
+    help: Only evaluate devices whose productType matches one of these values.
+    options: [appliance, switch, wireless, camera, cellularGateway, sensor]
+rule:
+  title: "Meraki device offline — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: orgDeviceStatuses
+    params:
+      orgId: "<% .OrgID %>"
+      productTypes: <% yamlList .Thresholds.product_types %>
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: orgDeviceStatuses
+        orgId: "<% .OrgID %>"
+        productTypes: <% yamlList .Thresholds.product_types %>
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [0] }
+        expression: B
+  annotations:
+    summary: "Device offline in Meraki org <% .OrgID %>"
+    description: "One or more devices are reporting offline status. Open the Meraki plugin Devices page for details."
+  labels:
+    severity: critical
+    meraki_group: availability
+    meraki_product: ""
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: device-offline
+    managed_by: meraki-plugin
