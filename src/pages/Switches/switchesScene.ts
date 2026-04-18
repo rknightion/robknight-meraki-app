@@ -13,7 +13,12 @@ import {
 } from '@grafana/scenes';
 import { orgVariable } from '../../scene-helpers/variables';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
-import { switchInventoryTable, switchKpiRow } from './panels';
+import {
+  switchInventoryTable,
+  switchKpiRow,
+  switchPortsBySpeedStatPanel,
+  switchPortsUsageHistoryTimeseries,
+} from './panels';
 
 /**
  * Switches overview — KPI row across the org (total switches, ports, PoE,
@@ -50,6 +55,22 @@ export function switchesScene() {
             columnGap: 1,
             children: kpis,
           }),
+        }),
+        // §3.1 — Ports by speed + usage history.
+        new SceneFlexLayout({
+          direction: 'row',
+          children: [
+            new SceneFlexItem({
+              width: '30%',
+              minHeight: 280,
+              body: switchPortsBySpeedStatPanel(),
+            }),
+            new SceneFlexItem({
+              width: '70%',
+              minHeight: 280,
+              body: switchPortsUsageHistoryTimeseries(),
+            }),
+          ],
         }),
         new SceneFlexItem({
           minHeight: 520,

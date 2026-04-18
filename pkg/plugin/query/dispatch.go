@@ -97,6 +97,18 @@ const (
 	// API optimisation — §7.3 (phase 12).
 	KindConfigurationChanges        QueryKind = "configurationChanges"
 	KindDeviceAvailabilityChanges   QueryKind = "deviceAvailabilityChanges"
+
+	// §3.1 — Switch ports overview by speed + usage history.
+	// Note: KindSwitchPortsOverview (= "switchPortsOverview") already exists as the KPI row.
+	KindSwitchPortsOverviewBySpeed QueryKind = "switchPortsOverviewBySpeed"
+	KindSwitchPortsUsageHistory    QueryKind = "switchPortsUsageHistory"
+
+	// §3.3 — Device memory usage history.
+	KindDeviceMemoryHistory QueryKind = "deviceMemoryHistory"
+
+	// §3.4 — Alerts overview byNetwork + historical.
+	KindAlertsOverviewByNetwork  QueryKind = "alertsOverviewByNetwork"
+	KindAlertsOverviewHistorical QueryKind = "alertsOverviewHistorical"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -242,6 +254,17 @@ var handlers = map[QueryKind]handlerFn{
 
 	KindConfigurationChanges:      handleConfigurationChanges,
 	KindDeviceAvailabilityChanges: handleDeviceAvailabilitiesChangeHistory,
+
+	// §3.1 — Switch ports overview by speed + usage history.
+	KindSwitchPortsOverviewBySpeed: handleSwitchPortsOverviewBySpeed,
+	KindSwitchPortsUsageHistory:    handleSwitchPortsUsageHistory,
+
+	// §3.3 — Device memory usage history.
+	KindDeviceMemoryHistory: handleDeviceMemoryHistory,
+
+	// §3.4 — Alerts overview byNetwork + historical.
+	KindAlertsOverviewByNetwork:  handleAlertsOverviewByNetwork,
+	KindAlertsOverviewHistorical: handleAlertsOverviewHistorical,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

@@ -2,6 +2,8 @@ package meraki
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 	"time"
@@ -220,6 +222,296 @@ func (c *Client) GetDeviceSwitchPortPacketCounters(ctx context.Context, serial s
 		"devices/"+url.PathEscape(serial)+"/switch/ports/statuses/packets",
 		"", params, ttl, &out); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// §3.1 — Switch ports overview by speed + usage history
+// ---------------------------------------------------------------------------
+
+// SwitchPortsOverviewBySpeed is a flattened speed bucket from
+// GET /organizations/{organizationId}/switch/ports/overview.
+//
+// Response shape (verified 2026-04-18):
+//
+//	{"counts":{"total":N,"byStatus":{"active":{"total":N,"byMediaAndLinkSpeed":{"rj45":{"10":N,"100":N,"1000":N,...,"total":N},"sfp":{...}}},"inactive":{"total":N,"byMedia":{"rj45":{"total":N},"sfp":{"total":N}}}}}}
+//
+// We flatten into one row per (media × speed) plus one row per (media, "inactive").
+// The handler in pkg/plugin/query may aggregate further.
+type SwitchPortsOverviewBySpeed struct {
+	// Media is "rj45" or "sfp".
+	Media  string
+	// Speed is the link speed in Mbps as a string, e.g. "10","100","1000","10000".
+	// For inactive buckets where no per-speed breakdown exists, Speed is "inactive".
+	Speed  string
+	Active int64 // count of active ports at this speed
+}
+
+// SwitchPortsOverviewOptions filters the /switch/ports/overview call.
+// All fields optional; the endpoint accepts t0/t1 or timespan (12h–186d).
+type SwitchPortsOverviewOptions struct {
+	NetworkIDs []string
+	Serials    []string
+	Window     *TimeRangeWindow
+}
+
+func (o SwitchPortsOverviewOptions) values() url.Values {
+	v := url.Values{}
+	for _, id := range o.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range o.Serials {
+		v.Add("serials[]", s)
+	}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+	}
+	return v
+}
+
+// switchPortsOverviewResponse is the raw response envelope for
+// GET /organizations/{organizationId}/switch/ports/overview.
+type switchPortsOverviewResponse struct {
+	Counts switchPortsOverviewCounts `json:"counts"`
+}
+
+type switchPortsOverviewCounts struct {
+	Total    int64                     `json:"total"`
+	ByStatus switchPortsOverviewStatus `json:"byStatus"`
+}
+
+type switchPortsOverviewStatus struct {
+	Active   switchPortsOverviewActive   `json:"active"`
+	Inactive switchPortsOverviewInactive `json:"inactive"`
+}
+
+type switchPortsOverviewActive struct {
+	Total               int64                          `json:"total"`
+	ByMediaAndLinkSpeed switchPortsOverviewByMediaSpeed `json:"byMediaAndLinkSpeed"`
+}
+
+type switchPortsOverviewByMediaSpeed struct {
+	RJ45 map[string]int64 `json:"rj45"` // keys are speed strings + "total"
+	SFP  map[string]int64 `json:"sfp"`
+}
+
+type switchPortsOverviewInactive struct {
+	Total   int64                       `json:"total"`
+	ByMedia switchPortsOverviewByMedia  `json:"byMedia"`
+}
+
+type switchPortsOverviewByMedia struct {
+	RJ45 struct{ Total int64 `json:"total"` } `json:"rj45"`
+	SFP  struct{ Total int64 `json:"total"` } `json:"sfp"`
+}
+
+// GetOrganizationSwitchPortsOverview returns speed-bucket counts for all switch
+// ports in the org. Not paginated — single GET.
+func (c *Client) GetOrganizationSwitchPortsOverview(ctx context.Context, orgID string, opts SwitchPortsOverviewOptions, ttl time.Duration) ([]SwitchPortsOverviewBySpeed, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/switch/ports/overview", Message: "missing organization id"}}
+	}
+	var raw switchPortsOverviewResponse
+	if err := c.Get(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/switch/ports/overview",
+		orgID, opts.values(), ttl, &raw); err != nil {
+		return nil, err
+	}
+
+	var out []SwitchPortsOverviewBySpeed
+	// Flatten active RJ45 speeds.
+	for speed, cnt := range raw.Counts.ByStatus.Active.ByMediaAndLinkSpeed.RJ45 {
+		if speed == "total" {
+			continue
+		}
+		out = append(out, SwitchPortsOverviewBySpeed{Media: "rj45", Speed: speed, Active: cnt})
+	}
+	// Flatten active SFP speeds.
+	for speed, cnt := range raw.Counts.ByStatus.Active.ByMediaAndLinkSpeed.SFP {
+		if speed == "total" {
+			continue
+		}
+		out = append(out, SwitchPortsOverviewBySpeed{Media: "sfp", Speed: speed, Active: cnt})
+	}
+	// Inactive buckets (no per-speed breakdown available).
+	if raw.Counts.ByStatus.Inactive.ByMedia.RJ45.Total > 0 {
+		out = append(out, SwitchPortsOverviewBySpeed{Media: "rj45", Speed: "inactive", Active: 0})
+	}
+	if raw.Counts.ByStatus.Inactive.ByMedia.SFP.Total > 0 {
+		out = append(out, SwitchPortsOverviewBySpeed{Media: "sfp", Speed: "inactive", Active: 0})
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+
+// SwitchPortUsageHistoryPoint is one flattened (device × time interval) row
+// from GET /organizations/{organizationId}/switch/ports/usage/history/byDevice/byInterval.
+//
+// Response shape (verified 2026-04-18):
+//
+//	{"items":[{"serial":"…","network":{"id":"…","name":"…"},"ports":[{"portId":"…","intervals":[{"startTs":"…","endTs":"…","data":{"usage":{"total":N,"upstream":N,"downstream":N}}}]}]}],"meta":{…}}
+//
+// We sum port-level usage across all ports on each device per interval so
+// callers get a per-device aggregate (total throughput for the switch).
+// The Sent/Recv/Total values are in kilobytes per the Meraki spec.
+type SwitchPortUsageHistoryPoint struct {
+	StartTs   time.Time
+	EndTs     time.Time
+	Serial    string
+	NetworkID string
+	Sent      int64 // kilobytes (upstream from the device's perspective)
+	Recv      int64 // kilobytes (downstream)
+	Total     int64 // kilobytes
+}
+
+// SwitchPortsUsageHistoryOptions filters the byDevice/byInterval call.
+type SwitchPortsUsageHistoryOptions struct {
+	NetworkIDs []string
+	Serials    []string
+	Window     *TimeRangeWindow
+	Interval   time.Duration
+}
+
+func (o SwitchPortsUsageHistoryOptions) values() url.Values {
+	v := url.Values{"perPage": []string{"1000"}}
+	for _, id := range o.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range o.Serials {
+		v.Add("serials[]", s)
+	}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+	}
+	if o.Interval > 0 {
+		v.Set("interval", strconv.Itoa(int(o.Interval.Seconds())))
+	}
+	return v
+}
+
+// switchPortsUsageHistoryResponse is the on-wire envelope — wraps items in an
+// object with a meta block (same shape as statuses/bySwitch and memory/history).
+type switchPortsUsageHistoryResponse struct {
+	Items []switchPortsUsageHistoryDevice `json:"items"`
+	Meta  struct {
+		Counts struct {
+			Items struct {
+				Remaining int `json:"remaining"`
+			} `json:"items"`
+		} `json:"counts"`
+	} `json:"meta"`
+}
+
+type switchPortsUsageHistoryDevice struct {
+	Serial  string                   `json:"serial"`
+	Network SwitchNetworkRef         `json:"network"`
+	Ports   []switchPortUsagePort    `json:"ports"`
+}
+
+type switchPortUsagePort struct {
+	PortID    string                      `json:"portId"`
+	Intervals []switchPortUsageInterval   `json:"intervals"`
+}
+
+type switchPortUsageInterval struct {
+	StartTs string                   `json:"startTs"`
+	EndTs   string                   `json:"endTs"`
+	Data    switchPortUsageIntervalData `json:"data"`
+}
+
+type switchPortUsageIntervalData struct {
+	Usage struct {
+		Total      int64 `json:"total"`
+		Upstream   int64 `json:"upstream"`
+		Downstream int64 `json:"downstream"`
+	} `json:"usage"`
+}
+
+// GetOrganizationSwitchPortsUsageHistory paginates through the switch ports
+// usage history endpoint for an org. It follows Link: rel=next headers.
+// Results are aggregated to per-device per-interval (summed across all ports).
+func (c *Client) GetOrganizationSwitchPortsUsageHistory(ctx context.Context, orgID string, opts SwitchPortsUsageHistoryOptions, ttl time.Duration) ([]SwitchPortUsageHistoryPoint, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/switch/ports/usage/history/byDevice/byInterval", Message: "missing organization id"}}
+	}
+
+	endpoint := "organizations/" + url.PathEscape(orgID) + "/switch/ports/usage/history/byDevice/byInterval"
+	params := opts.values()
+
+	// This endpoint wraps items in an envelope (not a raw array) so we can't use
+	// GetAll directly. Follow Link: rel=next pages manually.
+	var allDevices []switchPortsUsageHistoryDevice
+	path := endpoint
+	for pageNum := 0; pageNum < MaxPages; pageNum++ {
+		var pageParams url.Values
+		if pageNum == 0 {
+			pageParams = params
+		}
+		body, hdr, err := c.Do(ctx, "GET", path, orgID, pageParams, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var pageResp switchPortsUsageHistoryResponse
+		if err := json.Unmarshal(body, &pageResp); err != nil {
+			return nil, fmt.Errorf("meraki: decode switch ports usage history: %w", err)
+		}
+		allDevices = append(allDevices, pageResp.Items...)
+
+		next := nextLink(hdr)
+		if next == "" {
+			break
+		}
+		path = next
+	}
+
+	// Flatten and aggregate per-device per-interval (sum across all ports).
+	type devIntervalKey struct {
+		Serial  string
+		StartTs string
+	}
+	type devIntervalVal struct {
+		EndTs     string
+		NetworkID string
+		Sent      int64
+		Recv      int64
+		Total     int64
+	}
+	aggMap := make(map[devIntervalKey]*devIntervalVal)
+
+	for _, dev := range allDevices {
+		for _, port := range dev.Ports {
+			for _, iv := range port.Intervals {
+				k := devIntervalKey{Serial: dev.Serial, StartTs: iv.StartTs}
+				e, ok := aggMap[k]
+				if !ok {
+					e = &devIntervalVal{EndTs: iv.EndTs, NetworkID: dev.Network.ID}
+					aggMap[k] = e
+				}
+				e.Sent += iv.Data.Usage.Upstream
+				e.Recv += iv.Data.Usage.Downstream
+				e.Total += iv.Data.Usage.Total
+			}
+		}
+	}
+
+	out := make([]SwitchPortUsageHistoryPoint, 0, len(aggMap))
+	for k, v := range aggMap {
+		startTs, _ := time.Parse(time.RFC3339, k.StartTs)
+		endTs, _ := time.Parse(time.RFC3339, v.EndTs)
+		out = append(out, SwitchPortUsageHistoryPoint{
+			StartTs:   startTs,
+			EndTs:     endTs,
+			Serial:    k.Serial,
+			NetworkID: v.NetworkID,
+			Sent:      v.Sent,
+			Recv:      v.Recv,
+			Total:     v.Total,
+		})
 	}
 	return out, nil
 }
