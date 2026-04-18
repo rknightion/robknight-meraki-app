@@ -6,6 +6,7 @@ require (
 	github.com/grafana/grafana-plugin-sdk-go v0.291.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	golang.org/x/sync v0.20.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
