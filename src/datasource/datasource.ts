@@ -44,6 +44,19 @@ export class MerakiDataSource extends DataSourceApi<MerakiQuery, MerakiDSOptions
     if (next.serials?.length) {
       next.serials = next.serials.flatMap((s) => splitMulti(tpl.replace(s, scopedVars, 'csv')));
     }
+    // productTypes / metrics may also carry `$productType`, `$eventType`, etc.
+    // from scene variables (e.g. the Events scene). Without substitution the
+    // backend sees the literal `$var` string and silently returns zero rows.
+    if (next.productTypes?.length) {
+      next.productTypes = next.productTypes.flatMap((p) =>
+        splitMulti(tpl.replace(p, scopedVars, 'csv'))
+      ) as MerakiQuery['productTypes'];
+    }
+    if (next.metrics?.length) {
+      next.metrics = next.metrics.flatMap((m) =>
+        splitMulti(tpl.replace(m, scopedVars, 'csv'))
+      ) as MerakiQuery['metrics'];
+    }
     return next;
   }
 

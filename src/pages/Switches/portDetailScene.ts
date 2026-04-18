@@ -7,6 +7,7 @@ import {
   SceneTimePicker,
   SceneTimeRange,
 } from '@grafana/scenes';
+import { orgOnlyVariables } from '../../scene-helpers/variables';
 import { switchPortConfigPanel, switchPortPacketCountersPanel } from './panels';
 
 /**
@@ -18,6 +19,7 @@ import { switchPortConfigPanel, switchPortPacketCountersPanel } from './panels';
 export function portDetailScene(serial: string, portId: string): EmbeddedScene {
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
+    $variables: orgOnlyVariables(),
     controls: [
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),

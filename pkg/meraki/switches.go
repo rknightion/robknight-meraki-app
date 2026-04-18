@@ -82,6 +82,10 @@ type SwitchPortStatusOptions struct {
 func (o SwitchPortStatusOptions) values() url.Values {
 	// perPage 20 is the endpoint's maximum per the v1 OpenAPI spec.
 	v := url.Values{"perPage": []string{"20"}}
+	// The `statuses/bySwitch` endpoint requires bracketed array filters
+	// (`serials[]=X`, `networkIds[]=Y`). The plain `serials=X` form returns
+	// HTTP 400 "'serials' must be an array" — verified against api.meraki.com
+	// 2026-04-18. Keep the brackets or the per-switch detail pages go empty.
 	for _, id := range o.NetworkIDs {
 		v.Add("networkIds[]", id)
 	}
@@ -91,19 +95,36 @@ func (o SwitchPortStatusOptions) values() url.Values {
 	return v
 }
 
-// GetOrganizationSwitchPortStatuses paginates through every switch in the org
-// and returns each with its embedded port list. The handler in
-// pkg/plugin/query/switches.go flattens the nested ports into one row per
-// (switch, port).
+// switchPortsBySwitchResponse matches the on-the-wire shape of
+// GET /organizations/{organizationId}/switch/ports/statuses/bySwitch, which
+// wraps the switches array in an `items` object along with a pagination meta
+// block. This is DIFFERENT from most Meraki v1 list endpoints (which return a
+// raw JSON array), so we can't use the shared `GetAll` helper — its pagination
+// merger assumes each page is an array literal.
+type switchPortsBySwitchResponse struct {
+	Items []SwitchWithPorts `json:"items"`
+}
+
+// GetOrganizationSwitchPortStatuses fetches every switch in the org with its
+// embedded port list. The handler in pkg/plugin/query/switches.go flattens the
+// nested ports into one row per (switch, port).
+//
+// Single-page fetch by design: the endpoint caps perPage at 20 but most estates
+// have ≤20 switches, and the fleet page uses this same cached entry. If an
+// estate grows beyond the cap we'll need startingAfter-based pagination (the
+// Link header here only emits rel=first / rel=last, not rel=next, so the
+// shared Link-follower in GetAll wouldn't work either way).
 func (c *Client) GetOrganizationSwitchPortStatuses(ctx context.Context, orgID string, opts SwitchPortStatusOptions, ttl time.Duration) ([]SwitchWithPorts, error) {
 	if orgID == "" {
 		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/switch/ports/statuses/bySwitch", Message: "missing organization id"}}
 	}
-	var out []SwitchWithPorts
-	_, err := c.GetAll(ctx,
+	var wrapper switchPortsBySwitchResponse
+	if err := c.Get(ctx,
 		"organizations/"+url.PathEscape(orgID)+"/switch/ports/statuses/bySwitch",
-		orgID, opts.values(), ttl, &out)
-	return out, err
+		orgID, opts.values(), ttl, &wrapper); err != nil {
+		return nil, err
+	}
+	return wrapper.Items, nil
 }
 
 // SwitchPortConfig mirrors one entry of `GET /devices/{serial}/switch/ports`.

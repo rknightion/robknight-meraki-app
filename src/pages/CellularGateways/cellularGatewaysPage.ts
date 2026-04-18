@@ -2,6 +2,7 @@ import { SceneAppPage } from '@grafana/scenes';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import { cellularGatewayDetailPage } from './cellularGatewayDetailPage';
 import { cellularGatewaysScene } from './cellularGatewaysScene';
+import { familyGateWrap } from '../../scene-helpers/familyGate';
 
 /**
  * Top-level Cellular Gateways page. Hosts the overview scene and a
@@ -15,7 +16,7 @@ export const cellularGatewaysPage = new SceneAppPage({
   titleIcon: 'signal',
   url: `${PLUGIN_BASE_URL}/${ROUTES.CellularGateways}`,
   routePath: `${ROUTES.CellularGateways}/*`,
-  getScene: () => cellularGatewaysScene(),
+  getScene: familyGateWrap('cellularGateway', () => cellularGatewaysScene()),
   drilldowns: [
     {
       routePath: ':serial/*',

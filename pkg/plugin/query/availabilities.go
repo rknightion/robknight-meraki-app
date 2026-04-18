@@ -33,6 +33,19 @@ func handleDeviceAvailabilities(ctx context.Context, client *meraki.Client, q Me
 		return nil, err
 	}
 
+	// Filter by serial client-side so per-device panels get exactly one row
+	// while still sharing the fleet-wide cached response (see handleDevices
+	// for the same pattern + rationale).
+	var serialFilter map[string]struct{}
+	if len(q.Serials) > 0 {
+		serialFilter = make(map[string]struct{}, len(q.Serials))
+		for _, s := range q.Serials {
+			if s != "" {
+				serialFilter[s] = struct{}{}
+			}
+		}
+	}
+
 	serials := make([]string, 0, len(avails))
 	names := make([]string, 0, len(avails))
 	productTypes := make([]string, 0, len(avails))
@@ -43,6 +56,11 @@ func handleDeviceAvailabilities(ctx context.Context, client *meraki.Client, q Me
 	drilldownURLs := make([]string, 0, len(avails))
 
 	for _, a := range avails {
+		if serialFilter != nil {
+			if _, ok := serialFilter[a.Serial]; !ok {
+				continue
+			}
+		}
 		serials = append(serials, a.Serial)
 		names = append(names, a.Name)
 		productTypes = append(productTypes, a.ProductType)

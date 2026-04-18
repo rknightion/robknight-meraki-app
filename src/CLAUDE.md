@@ -11,7 +11,7 @@ TypeScript + React + `@grafana/scenes`. Two plugins live here:
 module.tsx               App entry — returns <App/> wrapped in PluginPropsContext
 plugin.json              App manifest (id, includes, backend: true, executable: gpx_meraki)
 constants.ts             PLUGIN_ID, ROUTES enum, DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS
-types.ts                 AppJsonData, AppSecureJsonData, SensorLabelMode, MerakiProductType, SensorMetric
+types.ts                 AppJsonData, AppSecureJsonData, DeviceLabelMode, MerakiProductType, SensorMetric
 components/
   App/App.tsx            SceneApp factory + page list
   AppConfig/AppConfig.tsx Config form (API key, region, base URL, shared fraction, label mode)

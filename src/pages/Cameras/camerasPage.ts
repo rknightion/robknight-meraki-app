@@ -2,6 +2,7 @@ import { SceneAppPage } from '@grafana/scenes';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import { cameraDetailPage } from './cameraDetailPage';
 import { camerasScene } from './camerasScene';
+import { familyGateWrap } from '../../scene-helpers/familyGate';
 
 /**
  * Top-level Cameras page. Hosts the overview scene and a drilldown that
@@ -14,7 +15,7 @@ export const camerasPage = new SceneAppPage({
   titleIcon: 'camera',
   url: `${PLUGIN_BASE_URL}/${ROUTES.Cameras}`,
   routePath: `${ROUTES.Cameras}/*`,
-  getScene: () => camerasScene(),
+  getScene: familyGateWrap('camera', () => camerasScene()),
   drilldowns: [
     {
       routePath: ':serial/*',

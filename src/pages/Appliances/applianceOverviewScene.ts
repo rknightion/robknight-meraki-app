@@ -13,6 +13,7 @@ import {
   applianceOverviewKpiRow,
   applianceUplinkStatusTable,
 } from './panels';
+import { orgOnlyVariables } from '../../scene-helpers/variables';
 
 /**
  * Per-appliance Overview tab — KPI row (status / model / firmware /
@@ -27,6 +28,7 @@ export function applianceOverviewScene(serial: string): EmbeddedScene {
 
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
+    $variables: orgOnlyVariables(),
     controls: [
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),

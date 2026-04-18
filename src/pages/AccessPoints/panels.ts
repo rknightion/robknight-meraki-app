@@ -1,4 +1,4 @@
-import { FieldColorModeId, ThresholdsMode } from '@grafana/schema';
+import { FieldColorModeId } from '@grafana/schema';
 import {
   PanelBuilders,
   SceneDataTransformer,
@@ -7,6 +7,7 @@ import {
   VizPanel,
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
+import { deviceAvailabilityStat } from '../../scene-helpers/panels';
 import { QueryKind } from '../../datasource/types';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import type { MerakiProductType, SensorMetric } from '../../types';
@@ -85,101 +86,40 @@ function hideColumns(runner: SceneQueryRunner, columns: string[]): SceneDataTran
 // AP KPI row -----------------------------------------------------------------
 
 /**
- * One KPI stat built from the `DeviceAvailabilities` frame (one row per
- * device) by filtering on the `status` column client-side.
- *
- * We intentionally lean on `filterByValue` + `reduce` here (rather than a
- * dedicated server-side aggregate kind like `SensorAlertSummary`) because the
- * availability frame is small (<= few thousand rows on the largest estates)
- * and the filterByValue reducer is reliable for the `count rows` case that
- * the sensor bug-report (todos.txt §G.20) specifically called out. If this
- * turns out to be flaky on a particular Grafana version we can promote it to
- * a `WirelessAvailabilitySummary` handler without touching the frontend
- * contract.
- */
-function availabilityStat(
-  title: string,
-  status: 'online' | 'alerting' | 'offline' | 'dormant',
-  thresholds: Array<{ value: number; color: string }>
-): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.DeviceAvailabilities,
-    productTypes: ['wireless'],
-  });
-
-  const builder = PanelBuilders.stat()
-    .setTitle(title)
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          {
-            id: 'filterByValue',
-            options: {
-              filters: [
-                {
-                  fieldName: 'status',
-                  config: { id: 'equal', options: { value: status } },
-                },
-              ],
-              type: 'include',
-              match: 'all',
-            },
-          },
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['count'],
-              fields: 'serial',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'value' as any);
-
-  if (thresholds.length > 0) {
-    builder
-      .setColor({ mode: FieldColorModeId.Thresholds })
-      .setThresholds({
-        mode: ThresholdsMode.Absolute,
-        steps: thresholds.map((t, i) => ({
-          value: i === 0 ? (null as unknown as number) : t.value,
-          color: t.color,
-        })),
-      });
-  }
-
-  return builder.build();
-}
-
-/**
  * KPI row for the Access Points overview: three stat panels with counts of
- * wireless devices in each Meraki-reported status bucket. Consumers wrap
- * each panel in a `SceneCSSGridItem` to lay out a dense row.
+ * wireless devices in each Meraki-reported status bucket. Backed by the
+ * server-side `DeviceAvailabilityCounts` aggregator (todos.txt §G.20).
  */
 export function apStatusKpiRow(): VizPanel[] {
+  const productTypes: MerakiProductType[] = ['wireless'];
   return [
-    availabilityStat('APs online', 'online', [
-      { value: 0, color: 'red' },
-      { value: 1, color: 'green' },
-    ]),
-    availabilityStat('APs alerting', 'alerting', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'orange' },
-    ]),
-    availabilityStat('APs offline', 'offline', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'red' },
-    ]),
+    deviceAvailabilityStat({
+      title: 'APs online',
+      fieldName: 'online',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'red' },
+        { value: 1, color: 'green' },
+      ],
+    }),
+    deviceAvailabilityStat({
+      title: 'APs alerting',
+      fieldName: 'alerting',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'orange' },
+      ],
+    }),
+    deviceAvailabilityStat({
+      title: 'APs offline',
+      fieldName: 'offline',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'red' },
+      ],
+    }),
   ];
 }
 
@@ -392,7 +332,10 @@ export function apOverviewKpiRow(serial: string): VizPanel[] {
       .setOption('reduceOptions', {
         values: false,
         calcs: ['lastNotNull'],
-        fields: '',
+        // String-valued `model` / `networkId` / `firmware` tiles need the
+        // wildcard regex — stat's default `fields: ''` means "numeric only"
+        // and silently drops string columns.
+        fields: '/.*/',
       } as any)
       .setOption('colorMode', 'none' as any)
       .build();
@@ -421,7 +364,8 @@ export function apOverviewKpiRow(serial: string): VizPanel[] {
     .setOption('reduceOptions', {
       values: false,
       calcs: ['lastNotNull'],
-      fields: '',
+      // `status` is a string; force-include via regex.
+      fields: '/.*/',
     } as any)
     .setOption('colorMode', 'background' as any)
     .setMappings([

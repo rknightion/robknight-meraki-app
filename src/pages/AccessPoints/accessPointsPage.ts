@@ -2,6 +2,7 @@ import { SceneAppPage } from '@grafana/scenes';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import { accessPointsScene } from './accessPointsScene';
 import { accessPointDetailPage } from './accessPointDetailPage';
+import { familyGateWrap } from '../../scene-helpers/familyGate';
 
 /**
  * Top-level Access Points page. Hosts the overview scene and a drilldown
@@ -13,7 +14,7 @@ export const accessPointsPage = new SceneAppPage({
     'Wireless (MR) access points — inventory, channel utilisation, SSID usage, and per-AP clients.',
   url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}`,
   routePath: `${ROUTES.AccessPoints}/*`,
-  getScene: () => accessPointsScene(),
+  getScene: familyGateWrap('wireless', () => accessPointsScene()),
   drilldowns: [
     {
       routePath: ':serial/*',

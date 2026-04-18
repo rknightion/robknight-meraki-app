@@ -3,6 +3,7 @@ import { prefixRoute } from '../../utils/utils.routing';
 import { ROUTES } from '../../constants';
 import { switchesScene } from './switchesScene';
 import { switchDetailPage } from './switchDetailPage';
+import { familyGateWrap } from '../../scene-helpers/familyGate';
 
 /**
  * Top-level Switches page — mounted at `/a/<plugin>/switches`. A single
@@ -16,7 +17,7 @@ export const switchesPage = new SceneAppPage({
   url: prefixRoute(ROUTES.Switches),
   // routePath below needs the raw slug (not prefixed).
   routePath: `${ROUTES.Switches}/*`,
-  getScene: () => switchesScene(),
+  getScene: familyGateWrap('switch', () => switchesScene()),
   drilldowns: [
     {
       routePath: ':serial/*',

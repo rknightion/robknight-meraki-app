@@ -16,10 +16,15 @@ import (
 const devicesTTL = 5 * time.Minute
 
 // handleDevices emits one row per device in the requested org, optionally
-// filtered server-side by productType. Every row carries a `drilldownUrl`
-// column pointing at the right per-family detail page for that device's
-// productType, so downstream tables can route serial clicks to the correct
-// scene without frontend template branching.
+// filtered server-side by productType and/or serial. Every row carries a
+// `drilldownUrl` column pointing at the right per-family detail page for
+// that device's productType, so downstream tables can route serial clicks
+// to the correct scene without frontend template branching.
+//
+// Serial filter is applied client-side after the org-wide fetch so the
+// underlying cache entry (keyed on orgID + productTypes) is shared between
+// fleet-inventory panels and single-device stat panels — avoids a duplicate
+// Meraki round-trip per serial.
 func handleDevices(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, opts Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("devices: orgId is required")
@@ -27,6 +32,16 @@ func handleDevices(ctx context.Context, client *meraki.Client, q MerakiQuery, _ 
 	devices, err := client.GetOrganizationDevices(ctx, q.OrgID, q.ProductTypes, devicesTTL)
 	if err != nil {
 		return nil, err
+	}
+
+	var serialFilter map[string]struct{}
+	if len(q.Serials) > 0 {
+		serialFilter = make(map[string]struct{}, len(q.Serials))
+		for _, s := range q.Serials {
+			if s != "" {
+				serialFilter[s] = struct{}{}
+			}
+		}
 	}
 
 	serials := make([]string, 0, len(devices))
@@ -43,6 +58,11 @@ func handleDevices(ctx context.Context, client *meraki.Client, q MerakiQuery, _ 
 	lngs := make([]float64, 0, len(devices))
 	drilldownURLs := make([]string, 0, len(devices))
 	for _, d := range devices {
+		if serialFilter != nil {
+			if _, ok := serialFilter[d.Serial]; !ok {
+				continue
+			}
+		}
 		serials = append(serials, d.Serial)
 		names = append(names, d.Name)
 		macs = append(macs, d.MAC)

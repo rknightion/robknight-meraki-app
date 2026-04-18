@@ -57,3 +57,21 @@ func handleNetworks(ctx context.Context, client *meraki.Client, q MerakiQuery, _
 		),
 	}, nil
 }
+
+// handleNetworksCount emits a single wide frame with `{count}` so stat panels
+// can bind via an organize+reduce chain without a client-side filterByValue
+// (todos.txt §G.20). Shares the networks 15-minute cache.
+func handleNetworksCount(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("networksCount: orgId is required")
+	}
+	networks, err := client.GetOrganizationNetworks(ctx, q.OrgID, q.ProductTypes, networksTTL)
+	if err != nil {
+		return nil, err
+	}
+	return []*data.Frame{
+		data.NewFrame("networks_count",
+			data.NewField("count", nil, []int64{int64(len(networks))}),
+		),
+	}, nil
+}

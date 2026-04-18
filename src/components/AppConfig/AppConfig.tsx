@@ -15,23 +15,24 @@ import {
   Field,
   FieldSet,
   Input,
+  InlineSwitch,
   LinkButton,
   RadioButtonGroup,
   SecretInput,
   useStyles2,
 } from '@grafana/ui';
 import { testIds } from '../testIds';
-import { AppJsonData, AppSecureJsonData, SensorLabelMode } from '../../types';
+import { AppJsonData, AppSecureJsonData, DeviceLabelMode } from '../../types';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS, PLUGIN_ID, ROUTES } from '../../constants';
 import { prefixRoute } from '../../utils/utils.routing';
 
 const CUSTOM_REGION_LABEL = 'Custom…';
 
-const DEFAULT_LABEL_MODE: SensorLabelMode = 'serial';
+const DEFAULT_LABEL_MODE: DeviceLabelMode = 'serial';
 
-const LABEL_MODE_OPTIONS: Array<{ label: string; value: SensorLabelMode; description?: string }> = [
+const LABEL_MODE_OPTIONS: Array<{ label: string; value: DeviceLabelMode; description?: string }> = [
   { label: 'Serial', value: 'serial', description: 'Use the raw Meraki device serial (e.g. Q3CC-HV6P-H5XK).' },
-  { label: 'Name', value: 'name', description: 'Use the human-friendly device name; falls back to serial when unset.' },
+  { label: 'Name', value: 'name', description: 'Use the device name; falls back to serial when unset.' },
 ];
 
 export type AppConfigProps = PluginConfigPageProps<AppPluginMeta<AppJsonData>>;
@@ -42,7 +43,7 @@ export type AppConfigProps = PluginConfigPageProps<AppPluginMeta<AppJsonData>>;
  *    Test connection, nothing else. Rendered at `/plugins/<id>` so admins
  *    arriving from the plugin catalog can enter a key and validate
  *    reachability without being confronted with tuning knobs.
- *  - `full`: every setting — adds shared-fraction and sensor-label-mode
+ *  - `full`: every setting — adds shared-fraction and device-label-mode
  *    fields. Rendered inside the app at `/a/<id>/configuration` for
  *    ongoing management.
  *
@@ -72,7 +73,9 @@ type FormState = {
   sharedFraction: string;
   apiKey: string;
   isApiKeySet: boolean;
-  labelMode: SensorLabelMode;
+  labelMode: DeviceLabelMode;
+  enableIPLimiter: boolean;
+  showEmptyFamilies: boolean;
 };
 
 type HealthResult = { status: 'ok' | 'error'; message: string } | null;
@@ -118,6 +121,8 @@ export const MerakiConfigForm = ({ meta, variant = 'full' }: MerakiConfigFormPro
     apiKey: '',
     isApiKeySet: apiKeyPersisted,
     labelMode: jsonData?.labelMode ?? DEFAULT_LABEL_MODE,
+    enableIPLimiter: Boolean(jsonData?.enableIPLimiter),
+    showEmptyFamilies: Boolean(jsonData?.showEmptyFamilies),
   });
   const [health, setHealth] = useState<HealthResult>(null);
   const [saveState, setSaveState] = useState<SaveState>(null);
@@ -170,6 +175,14 @@ export const MerakiConfigForm = ({ meta, variant = 'full' }: MerakiConfigFormPro
           variant === 'catalog'
             ? jsonData?.labelMode
             : form.labelMode,
+        enableIPLimiter:
+          variant === 'catalog'
+            ? jsonData?.enableIPLimiter
+            : form.enableIPLimiter,
+        showEmptyFamilies:
+          variant === 'catalog'
+            ? jsonData?.showEmptyFamilies
+            : form.showEmptyFamilies,
       };
       const secureJsonData: AppSecureJsonData | undefined = form.apiKey
         ? { merakiApiKey: form.apiKey }
@@ -296,11 +309,11 @@ export const MerakiConfigForm = ({ meta, variant = 'full' }: MerakiConfigFormPro
 
         {variant === 'full' && (
           <Field
-            label="Sensor label mode"
-            description="How each sensor series is labeled on timeseries panels. Name mode resolves serials via the /devices feed (5 min cache) and falls back to the serial when a device has no name set."
+            label="Device label mode"
+            description="How each per-device series is labeled on timeseries panels — applies across sensors, access points, appliances, cameras, and cellular gateways. Name mode resolves serials via the /devices feed (5 min cache) and falls back to the serial when a device has no name set."
             className={s.marginTop}
           >
-            <RadioButtonGroup<SensorLabelMode>
+            <RadioButtonGroup<DeviceLabelMode>
               id="meraki-label-mode"
               data-testid={testIds.appConfig.labelMode}
               options={LABEL_MODE_OPTIONS}
@@ -308,6 +321,42 @@ export const MerakiConfigForm = ({ meta, variant = 'full' }: MerakiConfigFormPro
               onChange={(value) =>
                 setForm((prev) => ({ ...prev, labelMode: value ?? DEFAULT_LABEL_MODE }))
               }
+            />
+          </Field>
+        )}
+
+        {variant === 'full' && (
+          <Field
+            label="Enforce per-IP rate limit (100 rps)"
+            description="Turn on for multi-tenant deployments where many org API keys egress via a single Grafana instance. Adds a secondary per-source-IP token bucket in front of the per-org bucket. Leave off for single-org setups — the per-org limiter is sufficient there."
+            className={s.marginTop}
+          >
+            <InlineSwitch
+              id="meraki-enable-ip-limiter"
+              data-testid={testIds.appConfig.enableIPLimiter}
+              value={form.enableIPLimiter}
+              onChange={(event) => {
+                const checked = (event.currentTarget as HTMLInputElement).checked;
+                setForm((prev) => ({ ...prev, enableIPLimiter: checked }));
+              }}
+            />
+          </Field>
+        )}
+
+        {variant === 'full' && (
+          <Field
+            label="Show empty device-family pages"
+            description="By default, Appliances / Access Points / Switches / Cameras / Cellular Gateways / Sensors nav entries are hidden for the selected org when it has zero devices of that family. Turn on to always show every page (useful mid-deployment)."
+            className={s.marginTop}
+          >
+            <InlineSwitch
+              id="meraki-show-empty-families"
+              data-testid={testIds.appConfig.showEmptyFamilies}
+              value={form.showEmptyFamilies}
+              onChange={(event) => {
+                const checked = (event.currentTarget as HTMLInputElement).checked;
+                setForm((prev) => ({ ...prev, showEmptyFamilies: checked }));
+              }}
             />
           </Field>
         )}
@@ -347,7 +396,7 @@ export const MerakiConfigForm = ({ meta, variant = 'full' }: MerakiConfigFormPro
       {variant === 'catalog' && form.isApiKeySet && (
         <div className={s.moreSettings}>
           <p className={s.moreSettingsLead}>
-            Configuration moved into the app — shared rate-limit fraction, sensor label mode, and
+            Configuration moved into the app — shared rate-limit fraction, device label mode, and
             more live alongside your Home / Organizations / Sensors pages.
           </p>
           <LinkButton

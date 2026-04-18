@@ -93,17 +93,28 @@ allow_loading_unsigned_plugins = rknightion-meraki-app,rknightion-meraki-datasou
 
 Open the Meraki app's settings page and provide:
 
-| Field            | Required | Notes                                                                    |
-|------------------|----------|--------------------------------------------------------------------------|
-| API key          | ✅        | Meraki Dashboard API key. Stored encrypted by Grafana.                   |
-| Base URL         | —        | Optional regional override, e.g. `https://api.meraki.cn/api/v1`.         |
-| Shared fraction  | —        | 0 < x ≤ 1. Fraction of the per-org 10 rps limit this instance may use.   |
+| Field                | Required | Notes                                                                    |
+|----------------------|----------|--------------------------------------------------------------------------|
+| API key              | ✅        | Meraki Dashboard API key. Stored encrypted by Grafana.                   |
+| Base URL             | —        | Optional regional override, e.g. `https://api.meraki.cn/api/v1`.         |
+| Shared fraction      | —        | 0 < x ≤ 1. Fraction of the per-org 10 rps limit this instance may use.  |
+| Sensor label mode    | —        | `serial` (default) or `name`.                                            |
+| Enable per-IP limit  | —        | Opt-in 100 rps / 200 burst limiter for multi-tenant deployments.         |
 
 The **Test connection** button calls `GET /organizations` — a green result tells you the key is
 valid and the plugin is reachable.
 
 Get an API key from your Meraki dashboard → Organization → Settings → Dashboard API access. See
 Cisco's guide: <https://developer.cisco.com/meraki/api-v1/authorization/>.
+
+### Monitoring your plugin's API usage
+
+The plugin identifies itself to Meraki with a spec-compliant User-Agent of the form
+`GrafanaMerakiPlugin/<version> rknightion`. Your organization admins can see how much
+API traffic this plugin generates from the Meraki dashboard under **Organization →
+API & Webhooks → API requests** — filter the `userAgent` column for
+`GrafanaMerakiPlugin` to attribute requests back to this integration.
+See Cisco's [User-Agent guide](https://developer.cisco.com/meraki/api-v1/user-agents-overview/).
 
 ## Repository layout
 

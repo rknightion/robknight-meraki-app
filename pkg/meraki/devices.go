@@ -3,6 +3,7 @@ package meraki
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -118,6 +119,113 @@ func (c *Client) GetOrganizationDevicesAvailabilities(ctx context.Context, orgID
 	_, err := c.GetAll(ctx,
 		"organizations/"+url.PathEscape(orgID)+"/devices/availabilities",
 		orgID, params, ttl, &out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Availability-change-history endpoint wrapper (todos.txt §7.3-D). Path + response shape
+// verified via ctx7 on 2026-04-18.
+//
+// DeviceAvailabilityChange is one state-transition entry from
+// GET /organizations/{organizationId}/devices/availabilities/changeHistory. Each row
+// captures a before/after status snapshot for a specific device at a specific time.
+type DeviceAvailabilityChange struct {
+	TS      *time.Time                      `json:"ts,omitempty"`
+	Device  DeviceAvailabilityChangeDevice  `json:"device"`
+	Details DeviceAvailabilityChangeDetails `json:"details"`
+	Network DeviceAvailabilityChangeNetwork `json:"network"`
+}
+
+// DeviceAvailabilityChangeDevice is the compact device reference on each change entry.
+type DeviceAvailabilityChangeDevice struct {
+	Serial      string `json:"serial"`
+	Name        string `json:"name,omitempty"`
+	ProductType string `json:"productType,omitempty"`
+	Model       string `json:"model,omitempty"`
+}
+
+// DeviceAvailabilityChangeDetails is the before/after envelope. Meraki encodes the
+// transition as a list of (name, value) pairs; the "status" entry is the most common but
+// the envelope is extensible on their side so we keep it as a slice.
+type DeviceAvailabilityChangeDetails struct {
+	Old []DeviceAvailabilityChangeValue `json:"old,omitempty"`
+	New []DeviceAvailabilityChangeValue `json:"new,omitempty"`
+}
+
+// DeviceAvailabilityChangeValue is one entry inside details.old / details.new.
+type DeviceAvailabilityChangeValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// DeviceAvailabilityChangeNetwork is the compact network reference on each change entry.
+type DeviceAvailabilityChangeNetwork struct {
+	ID   string   `json:"id"`
+	Name string   `json:"name,omitempty"`
+	URL  string   `json:"url,omitempty"`
+	Tags []string `json:"tags,omitempty"`
+}
+
+// DeviceAvailabilityChangeOptions filters the availabilities/changeHistory call. All
+// fields are optional; when left unset Meraki defaults to a 1-day window.
+type DeviceAvailabilityChangeOptions struct {
+	TSStart      *time.Time
+	TSEnd        *time.Time
+	Serials      []string
+	ProductTypes []string
+	NetworkIDs   []string
+	Statuses     []string
+	PerPage      int
+}
+
+func (o DeviceAvailabilityChangeOptions) values() url.Values {
+	v := url.Values{}
+	per := o.PerPage
+	if per <= 0 {
+		per = 1000
+	}
+	if per < 3 {
+		per = 3
+	}
+	if per > 1000 {
+		per = 1000
+	}
+	v.Set("perPage", strconv.Itoa(per))
+	if o.TSStart != nil && !o.TSStart.IsZero() {
+		v.Set("t0", o.TSStart.UTC().Format(time.RFC3339))
+	}
+	if o.TSEnd != nil && !o.TSEnd.IsZero() {
+		v.Set("t1", o.TSEnd.UTC().Format(time.RFC3339))
+	}
+	for _, s := range o.Serials {
+		v.Add("serials[]", s)
+	}
+	for _, pt := range o.ProductTypes {
+		v.Add("productTypes[]", pt)
+	}
+	for _, n := range o.NetworkIDs {
+		v.Add("networkIds[]", n)
+	}
+	for _, s := range o.Statuses {
+		v.Add("statuses[]", s)
+	}
+	return v
+}
+
+// GetOrganizationDevicesAvailabilitiesChangeHistory walks the Link-header-paginated change
+// feed for device availability transitions. Additive to GetOrganizationDevicesAvailabilities;
+// do NOT call this as a substitute for current-state queries — each endpoint answers a
+// different question.
+func (c *Client) GetOrganizationDevicesAvailabilitiesChangeHistory(ctx context.Context, orgID string, opts DeviceAvailabilityChangeOptions, ttl time.Duration) ([]DeviceAvailabilityChange, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/devices/availabilities/changeHistory", Message: "missing organization id"}}
+	}
+	var out []DeviceAvailabilityChange
+	_, err := c.GetAll(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/devices/availabilities/changeHistory",
+		orgID, opts.values(), ttl, &out)
 	if err != nil {
 		return nil, err
 	}

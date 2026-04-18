@@ -1,4 +1,4 @@
-import { FieldColorModeId, ThresholdsMode } from '@grafana/schema';
+import { ThresholdsMode } from '@grafana/schema';
 import {
   PanelBuilders,
   SceneDataTransformer,
@@ -6,6 +6,7 @@ import {
   VizPanel,
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
+import { deviceAvailabilityStat, switchPortsOverviewStat } from '../../scene-helpers/panels';
 import { QueryKind } from '../../datasource/types';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import type { MerakiProductType, SensorMetric } from '../../types';
@@ -112,189 +113,11 @@ export function switchInventoryTable(): VizPanel {
 
 // Switch KPI row -------------------------------------------------------------
 
-/**
- * Count-of-rows stat driven by the `DeviceAvailabilities` frame filtered to
- * `productTypes=['switch']`. Mirrors the approach taken by the Access Points
- * KPI row — a client-side filterByValue+reduce chain is reliable for the
- * "count rows matching a single status value" case (todos.txt §G.20 only
- * called out the reducer quirks for mixed numeric reducers).
- */
-function switchCountStat(
-  title: string,
-  status: 'online' | 'alerting' | 'offline' | 'dormant',
-  thresholds: Array<{ value: number; color: string }>
-): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.DeviceAvailabilities,
-    productTypes: ['switch'],
-  });
-
-  const builder = PanelBuilders.stat()
-    .setTitle(title)
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          {
-            id: 'filterByValue',
-            options: {
-              filters: [
-                {
-                  fieldName: 'status',
-                  config: { id: 'equal', options: { value: status } },
-                },
-              ],
-              type: 'include',
-              match: 'all',
-            },
-          },
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['count'],
-              fields: 'serial',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'value' as any);
-
-  if (thresholds.length > 0) {
-    builder
-      .setColor({ mode: FieldColorModeId.Thresholds })
-      .setThresholds({
-        mode: ThresholdsMode.Absolute,
-        steps: thresholds.map((t, i) => ({
-          value: i === 0 ? (null as unknown as number) : t.value,
-          color: t.color,
-        })),
-      });
-  }
-
-  return builder.build();
-}
-
-/**
- * "Total switches" stat — the length of the devices-filtered-to-switch frame.
- * Uses the Devices kind rather than DeviceAvailabilities so we include
- * dormant/offline devices in the fleet count.
- */
-function switchTotalStat(): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.Devices,
-    productTypes: ['switch'],
-  });
-  return PanelBuilders.stat()
-    .setTitle('Switches total')
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['count'],
-              fields: 'serial',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'none' as any)
-    .build();
-}
-
-/**
- * "Ports total" stat — backed by the SwitchPorts kind which emits one row
- * per port across every switch in the org. A straight count of rows in the
- * `portId` column tells us how many ports exist across the estate.
- */
-function switchPortsTotalStat(): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.SwitchPorts,
-  });
-  return PanelBuilders.stat()
-    .setTitle('Ports total')
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['count'],
-              fields: 'portId',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'none' as any)
-    .build();
-}
-
-/**
- * "PoE draw total" stat — summed `poePowerW` across every port in the org.
- * Shown in watts. When the backend didn't include the `poePowerW` column
- * (older firmwares) the reducer falls back to 0 which is fine.
- */
-function switchPoeTotalStat(): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.SwitchPorts,
-  });
-  return PanelBuilders.stat()
-    .setTitle('PoE draw total')
-    .setUnit('watt')
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['sum'],
-              fields: 'poePowerW',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'none' as any)
-    .build();
-}
+// Availability counts (fleet total, alerting, …) come from the server-side
+// `DeviceAvailabilityCounts` aggregator; ports total + PoE draw come from the
+// equivalent `SwitchPortsOverview` aggregator (todos.txt §G.20). Both
+// replaced client-side `filterByValue+reduce` chains that crashed on current
+// Grafana versions with "undefined not found in fieldMatchers".
 
 /**
  * KPI row for the Switches overview: fleet total, ports total, PoE draw,
@@ -302,14 +125,31 @@ function switchPoeTotalStat(): VizPanel {
  * out a dense row.
  */
 export function switchKpiRow(): VizPanel[] {
+  const productTypes: MerakiProductType[] = ['switch'];
   return [
-    switchTotalStat(),
-    switchPortsTotalStat(),
-    switchPoeTotalStat(),
-    switchCountStat('Switches alerting', 'alerting', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'orange' },
-    ]),
+    deviceAvailabilityStat({
+      title: 'Switches total',
+      fieldName: 'total',
+      productTypes,
+    }),
+    switchPortsOverviewStat({
+      title: 'Ports total',
+      fieldName: 'portCount',
+    }),
+    switchPortsOverviewStat({
+      title: 'PoE draw total',
+      fieldName: 'poeTotalWatts',
+      unit: 'watt',
+    }),
+    deviceAvailabilityStat({
+      title: 'Switches alerting',
+      fieldName: 'alerting',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'orange' },
+      ],
+    }),
   ];
 }
 
@@ -428,36 +268,19 @@ export function switchPortPacketCountersPanel(serial: string, portId: string): V
  * client-side to one row by the portId column.
  */
 export function switchPortConfigPanel(serial: string, portId: string): VizPanel {
+  // The backend accepts `metrics[0]` as an optional portId filter (see
+  // `handleSwitchPortConfig`), so we push the filter server-side instead of
+  // running a client-side `filterByValue` transform that's documented as
+  // fragile in todos.txt §G.20.
   const runner = oneQuery({
     kind: QueryKind.SwitchPortConfig,
     serials: [serial],
+    metrics: [portId],
   });
   return PanelBuilders.table()
     .setTitle('Port configuration')
     .setDescription('Configured port settings for this interface.')
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          // Scope the full port-config table to just the selected port; this
-          // keeps the handler simple (emits one row per port) without needing
-          // a dedicated "single port" kind.
-          {
-            id: 'filterByValue',
-            options: {
-              filters: [
-                {
-                  fieldName: 'portId',
-                  config: { id: 'equal', options: { value: portId } },
-                },
-              ],
-              type: 'include',
-              match: 'all',
-            },
-          },
-        ],
-      })
-    )
+    .setData(runner)
     .setNoValue('No configuration reported for this port.')
     .build();
 }
@@ -495,7 +318,11 @@ export function switchOverviewKpiRow(serial: string): VizPanel[] {
       .setOption('reduceOptions', {
         values: false,
         calcs: ['lastNotNull'],
-        fields: '',
+        // The Devices frame's `model` / `firmware` fields are STRINGS. Stat's
+        // default `fields: ''` means "numeric only" and silently drops string
+        // columns — a regex matching every field name forces the panel to
+        // include the string column we just isolated via filterFieldsByName.
+        fields: '/.*/',
       } as any)
       .setOption('colorMode', 'none' as any)
       .build();
@@ -524,7 +351,8 @@ export function switchOverviewKpiRow(serial: string): VizPanel[] {
     .setOption('reduceOptions', {
       values: false,
       calcs: ['lastNotNull'],
-      fields: '',
+      // `status` is a string; stat's default `fields: ''` excludes strings.
+      fields: '/.*/',
     } as any)
     .setOption('colorMode', 'background' as any)
     .setMappings([
@@ -540,39 +368,15 @@ export function switchOverviewKpiRow(serial: string): VizPanel[] {
     ])
     .build();
 
-  // Summed client count across every port on this switch — derived from the
-  // SwitchPorts frame (one row per port). Gives a rough "how busy is this
-  // switch" number without needing a dedicated aggregate kind.
-  const portsRunner = oneQuery({
-    kind: QueryKind.SwitchPorts,
+  // Summed client count across every port on this switch — backed by the
+  // server-side `SwitchPortsOverview` aggregator (todos.txt §G.20). Previous
+  // client-side `reduce` chain crashed with "undefined not found in
+  // fieldMatchers" on current Grafana versions.
+  const clients = switchPortsOverviewStat({
+    title: 'Clients',
+    fieldName: 'clientCount',
     serials: [serial],
   });
-  const clients = PanelBuilders.stat()
-    .setTitle('Clients')
-    .setData(
-      new SceneDataTransformer({
-        $data: portsRunner,
-        transformations: [
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['sum'],
-              fields: 'clientCount',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'none' as any)
-    .build();
 
   return [
     status,

@@ -6,6 +6,7 @@ import {
   VizPanel,
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
+import { deviceAvailabilityStat } from '../../scene-helpers/panels';
 import { QueryKind } from '../../datasource/types';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import type { MerakiProductType } from '../../types';
@@ -77,94 +78,40 @@ function hideColumns(runner: SceneQueryRunner, columns: string[]): SceneDataTran
 // MG KPI row ----------------------------------------------------------------
 
 /**
- * Count-of-rows stat driven by the `DeviceAvailabilities` frame filtered to
- * `productTypes=['cellularGateway']`. Mirrors the pattern in the AP/MS/MV
- * KPI rows — the availability frame is small so a `filterByValue + reduce`
- * chain is reliable here.
- */
-function mgAvailabilityStat(
-  title: string,
-  status: 'online' | 'alerting' | 'offline' | 'dormant',
-  thresholds: Array<{ value: number; color: string }>
-): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.DeviceAvailabilities,
-    productTypes: ['cellularGateway'],
-  });
-
-  const builder = PanelBuilders.stat()
-    .setTitle(title)
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          {
-            id: 'filterByValue',
-            options: {
-              filters: [
-                {
-                  fieldName: 'status',
-                  config: { id: 'equal', options: { value: status } },
-                },
-              ],
-              type: 'include',
-              match: 'all',
-            },
-          },
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['count'],
-              fields: 'serial',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'value' as any);
-
-  if (thresholds.length > 0) {
-    builder
-      .setColor({ mode: FieldColorModeId.Thresholds })
-      .setThresholds({
-        mode: ThresholdsMode.Absolute,
-        steps: thresholds.map((t, i) => ({
-          value: i === 0 ? (null as unknown as number) : t.value,
-          color: t.color,
-        })),
-      });
-  }
-
-  return builder.build();
-}
-
-/**
  * KPI row for the Cellular Gateways overview: three stat panels with counts
- * of MG devices in each Meraki-reported status bucket. Consumers wrap each
- * panel in a `SceneCSSGridItem` to lay out a dense row.
+ * of MG devices in each Meraki-reported status bucket. Server-side
+ * aggregation via `DeviceAvailabilityCounts` (todos.txt §G.20).
  */
 export function mgStatusKpiRow(): VizPanel[] {
+  const productTypes: MerakiProductType[] = ['cellularGateway'];
   return [
-    mgAvailabilityStat('Gateways online', 'online', [
-      { value: 0, color: 'red' },
-      { value: 1, color: 'green' },
-    ]),
-    mgAvailabilityStat('Gateways alerting', 'alerting', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'orange' },
-    ]),
-    mgAvailabilityStat('Gateways offline', 'offline', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'red' },
-    ]),
+    deviceAvailabilityStat({
+      title: 'Gateways online',
+      fieldName: 'online',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'red' },
+        { value: 1, color: 'green' },
+      ],
+    }),
+    deviceAvailabilityStat({
+      title: 'Gateways alerting',
+      fieldName: 'alerting',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'orange' },
+      ],
+    }),
+    deviceAvailabilityStat({
+      title: 'Gateways offline',
+      fieldName: 'offline',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'red' },
+      ],
+    }),
   ];
 }
 
@@ -464,7 +411,8 @@ export function mgOverviewKpiRow(serial: string): VizPanel[] {
       .setOption('reduceOptions', {
         values: false,
         calcs: ['lastNotNull'],
-        fields: '',
+        // String fields need the wildcard regex — `fields: ''` is numeric-only.
+        fields: '/.*/',
       } as any)
       .setOption('colorMode', 'none' as any)
       .build();
@@ -493,7 +441,7 @@ export function mgOverviewKpiRow(serial: string): VizPanel[] {
     .setOption('reduceOptions', {
       values: false,
       calcs: ['lastNotNull'],
-      fields: '',
+      fields: '/.*/',
     } as any)
     .setOption('colorMode', 'background' as any)
     .setMappings([

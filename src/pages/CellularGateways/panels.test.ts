@@ -35,13 +35,13 @@ function firstQuery(panel: VizPanel): AnyQuery {
 }
 
 describe('Cellular Gateways panels', () => {
-  it('mgStatusKpiRow yields three stat panels bound to DeviceAvailabilities filtered to cellularGateway', () => {
+  it('mgStatusKpiRow yields three stat panels bound to the server-side availability count aggregator', () => {
     const panels = mgStatusKpiRow();
     expect(panels).toHaveLength(3);
     panels.forEach((panel) => {
       expect(panel.state.pluginId).toBe('stat');
       const q = firstQuery(panel);
-      expect(q.kind).toBe(QueryKind.DeviceAvailabilities);
+      expect(q.kind).toBe(QueryKind.DeviceAvailabilityCounts);
       expect(q.productTypes).toEqual(['cellularGateway']);
     });
   });

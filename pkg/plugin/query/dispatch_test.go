@@ -410,7 +410,9 @@ func TestHandle_AlertsOverview_ProducesWideRow(t *testing.T) {
 // the handlers map; when the kind is unregistered, Handle returns an error
 // frame and this test fails with an "unknown query kind" notice — expected.
 func TestHandle_SwitchPorts_GroupsByStack(t *testing.T) {
-	const payload = `[
+	// The Meraki bySwitch endpoint wraps its result in {items: [...]} —
+	// verified against api.meraki.com 2026-04-18. See switchPortsBySwitchResponse.
+	const payload = `{"items":[
 	  {
 	    "serial": "SW-STANDALONE",
 	    "name": "Closet-1",
@@ -441,7 +443,7 @@ func TestHandle_SwitchPorts_GroupsByStack(t *testing.T) {
 	      {"portId": "2", "enabled": false, "status": "Disabled", "speed": "", "clientCount": 0}
 	    ]
 	  }
-	]`
+	]}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/switch/ports/statuses/bySwitch") {

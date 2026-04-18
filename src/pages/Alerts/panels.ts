@@ -7,7 +7,6 @@ import {
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
 import { QueryKind } from '../../datasource/types';
-import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 
 /**
  * Severity-filter contract — read once, remember forever.
@@ -95,9 +94,9 @@ export function alertsTable(orgId?: string): VizPanel {
   const runner = alertsQuery({ kind: QueryKind.Alerts, orgId });
 
   // Drop verbose columns from the table but keep them available for
-  // tooltips / drilldowns. Description stays hidden by default because
-  // it tends to be long prose that wrecks the row height; users can see
-  // it by hovering the title column.
+  // tooltips / drilldowns. Description stays hidden because it's long
+  // prose that wrecks row height; drilldownUrl / device_productType stay
+  // hidden because they exist purely to power the per-row drilldown.
   const organized = new SceneDataTransformer({
     $data: runner,
     transformations: [
@@ -107,6 +106,8 @@ export function alertsTable(orgId?: string): VizPanel {
           excludeByName: {
             description: true,
             network_id: true,
+            device_productType: true,
+            drilldownUrl: true,
           },
           renameByName: {},
         },
@@ -120,14 +121,15 @@ export function alertsTable(orgId?: string): VizPanel {
     .setData(organized)
     .setNoValue('No alerts in the selected range.')
     .setOverrides((b) => {
+      // Cross-family drilldown: the backend emits one URL per row keyed on the
+      // alert's device.productType, so a table spanning MR/MS/MX/MV/MG/MT
+      // routes each row to the right per-family detail page (§1.12 in todos.txt).
+      // When a network-wide alert has no device, drilldownUrl is empty — the viz
+      // still renders the link markup but clicking it is a no-op.
       b.matchFieldsWithName('device_serial').overrideLinks([
         {
-          // TODO: resolve the correct per-product detail URL once a
-          // unified device resolver exists. Using the sensor path as a
-          // fallback covers MT devices; MR/MS drilldowns land in a
-          // later phase.
           title: 'Open device',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.Sensors}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: '${__data.fields.drilldownUrl}',
         },
       ]);
       b.matchFieldsWithName('severity').overrideCustomFieldConfig('width', 110);
@@ -305,7 +307,8 @@ export function recentAlertsTile(orgId?: string): VizPanel {
     $data: runner,
     transformations: [
       // Drop the noisy columns first so the tile stays readable on
-      // narrow viewports.
+      // narrow viewports. device_productType / drilldownUrl stay hidden
+      // — they back the per-row drilldown but aren't meant to be read.
       {
         id: 'organize',
         options: {
@@ -315,6 +318,8 @@ export function recentAlertsTile(orgId?: string): VizPanel {
             alertType: true,
             category: true,
             device_name: true,
+            device_productType: true,
+            drilldownUrl: true,
           },
           renameByName: {},
         },
@@ -334,10 +339,11 @@ export function recentAlertsTile(orgId?: string): VizPanel {
     .setData(trimmed)
     .setNoValue('No recent alerts.')
     .setOverrides((b) => {
+      // Per-row cross-family drilldown (see alertsTable for why).
       b.matchFieldsWithName('device_serial').overrideLinks([
         {
           title: 'Open device',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.Sensors}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: '${__data.fields.drilldownUrl}',
         },
       ]);
       b.matchFieldsWithName('severity').overrideCustomFieldConfig('width', 100);

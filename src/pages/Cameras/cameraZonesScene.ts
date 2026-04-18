@@ -7,6 +7,7 @@ import {
   SceneTimePicker,
   SceneTimeRange,
 } from '@grafana/scenes';
+import { orgOnlyVariables } from '../../scene-helpers/variables';
 import { cameraZonesTable } from './panels';
 
 /**
@@ -18,6 +19,7 @@ import { cameraZonesTable } from './panels';
 export function cameraZonesScene(serial: string): EmbeddedScene {
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
+    $variables: orgOnlyVariables(),
     controls: [
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),

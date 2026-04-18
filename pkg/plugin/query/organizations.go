@@ -43,3 +43,18 @@ func handleOrganizations(ctx context.Context, client *meraki.Client, q MerakiQue
 		),
 	}, nil
 }
+
+// handleOrganizationsCount emits a single wide frame with `{count}` so stat
+// panels can bind via an organize+reduce chain without needing a client-side
+// filterByValue (todos.txt §G.20). Cheap: reuses the same 1h-cached org list.
+func handleOrganizationsCount(ctx context.Context, client *meraki.Client, _ MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	orgs, err := client.GetOrganizations(ctx, organizationsTTL)
+	if err != nil {
+		return nil, err
+	}
+	return []*data.Frame{
+		data.NewFrame("organizations_count",
+			data.NewField("count", nil, []int64{int64(len(orgs))}),
+		),
+	}, nil
+}

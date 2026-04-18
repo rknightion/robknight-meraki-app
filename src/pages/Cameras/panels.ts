@@ -1,4 +1,4 @@
-import { FieldColorModeId, ThresholdsMode } from '@grafana/schema';
+import { FieldColorModeId } from '@grafana/schema';
 import {
   PanelBuilders,
   SceneDataTransformer,
@@ -6,6 +6,7 @@ import {
   VizPanel,
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
+import { deviceAvailabilityStat } from '../../scene-helpers/panels';
 import { QueryKind } from '../../datasource/types';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import type { MerakiProductType } from '../../types';
@@ -83,94 +84,40 @@ function hideColumns(runner: SceneQueryRunner, columns: string[]): SceneDataTran
 // Camera KPI row -------------------------------------------------------------
 
 /**
- * Count-of-rows stat driven by the `DeviceAvailabilities` frame filtered to
- * `productTypes=['camera']`. The availability frame is small so a
- * `filterByValue + reduce` chain is reliable here (see `apStatusKpiRow` for
- * the same pattern).
- */
-function cameraAvailabilityStat(
-  title: string,
-  status: 'online' | 'alerting' | 'offline' | 'dormant',
-  thresholds: Array<{ value: number; color: string }>
-): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.DeviceAvailabilities,
-    productTypes: ['camera'],
-  });
-
-  const builder = PanelBuilders.stat()
-    .setTitle(title)
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          {
-            id: 'filterByValue',
-            options: {
-              filters: [
-                {
-                  fieldName: 'status',
-                  config: { id: 'equal', options: { value: status } },
-                },
-              ],
-              type: 'include',
-              match: 'all',
-            },
-          },
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['count'],
-              fields: 'serial',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'value' as any);
-
-  if (thresholds.length > 0) {
-    builder
-      .setColor({ mode: FieldColorModeId.Thresholds })
-      .setThresholds({
-        mode: ThresholdsMode.Absolute,
-        steps: thresholds.map((t, i) => ({
-          value: i === 0 ? (null as unknown as number) : t.value,
-          color: t.color,
-        })),
-      });
-  }
-
-  return builder.build();
-}
-
-/**
  * KPI row for the Cameras overview: three stat panels with counts of MV
- * devices in each Meraki-reported status bucket. Consumers wrap each panel
- * in a `SceneCSSGridItem` to lay out a dense row.
+ * devices in each Meraki-reported status bucket. Server-side aggregation
+ * via `DeviceAvailabilityCounts` (todos.txt §G.20).
  */
 export function cameraStatusKpiRow(): VizPanel[] {
+  const productTypes: MerakiProductType[] = ['camera'];
   return [
-    cameraAvailabilityStat('Cameras online', 'online', [
-      { value: 0, color: 'red' },
-      { value: 1, color: 'green' },
-    ]),
-    cameraAvailabilityStat('Cameras alerting', 'alerting', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'orange' },
-    ]),
-    cameraAvailabilityStat('Cameras offline', 'offline', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'red' },
-    ]),
+    deviceAvailabilityStat({
+      title: 'Cameras online',
+      fieldName: 'online',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'red' },
+        { value: 1, color: 'green' },
+      ],
+    }),
+    deviceAvailabilityStat({
+      title: 'Cameras alerting',
+      fieldName: 'alerting',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'orange' },
+      ],
+    }),
+    deviceAvailabilityStat({
+      title: 'Cameras offline',
+      fieldName: 'offline',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'red' },
+      ],
+    }),
   ];
 }
 
@@ -418,7 +365,9 @@ export function cameraOverviewKpiRow(serial: string): VizPanel[] {
       .setOption('reduceOptions', {
         values: false,
         calcs: ['lastNotNull'],
-        fields: '',
+        // String fields need the wildcard regex — `fields: ''` means numeric
+        // only, which silently hides model/firmware/networkId strings.
+        fields: '/.*/',
       } as any)
       .setOption('colorMode', 'none' as any)
       .build();
@@ -447,7 +396,7 @@ export function cameraOverviewKpiRow(serial: string): VizPanel[] {
     .setOption('reduceOptions', {
       values: false,
       calcs: ['lastNotNull'],
-      fields: '',
+      fields: '/.*/',
     } as any)
     .setOption('colorMode', 'background' as any)
     .setMappings([

@@ -468,6 +468,10 @@ type lossLatencyKey struct {
 // Serial filter: the endpoint does NOT accept a serial[] filter, so we fetch
 // once and apply the filter client-side. This preserves the one-HTTP-call
 // budget regardless of how many serials the panel filters to.
+//
+// LabelMode: when opts.LabelMode == "name", DisplayNameFromDS resolves to
+// "<device name> / <uplink> / <ip> / <metric>" via the cached /devices feed;
+// otherwise we use the raw serial and skip the /devices fetch entirely.
 func handleDeviceUplinksLossLatency(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("deviceUplinksLossLatency: orgId is required")
@@ -503,10 +507,14 @@ func handleDeviceUplinksLossLatency(ctx context.Context, client *meraki.Client, 
 		}
 	}
 
-	// Best-effort serial→name resolution for legend display; not fatal.
+	// Serial→name resolution for legend display, gated on LabelMode so users
+	// who prefer raw serials don't pay the /devices round-trip. Failure is
+	// non-fatal — we fall back to serials.
 	var nameBySerial map[string]string
-	if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "appliance"); lookupErr == nil {
-		nameBySerial = names
+	if opts.LabelMode == "name" {
+		if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "appliance"); lookupErr == nil {
+			nameBySerial = names
+		}
 	}
 
 	type seriesBuf struct {
@@ -579,7 +587,6 @@ func handleDeviceUplinksLossLatency(ctx context.Context, client *meraki.Client, 
 		return keys[i].metric < keys[j].metric
 	})
 
-	_ = opts // LabelMode already handled via nameBySerial above; reserved for future extensions.
 	frames := make([]*data.Frame, 0, len(keys))
 	for _, k := range keys {
 		buf := groups[k]

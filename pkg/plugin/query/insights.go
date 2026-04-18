@@ -96,19 +96,29 @@ func handleLicensesOverview(ctx context.Context, client *meraki.Client, q Meraki
 		}
 	}
 
-	return []*data.Frame{
-		data.NewFrame("licenses_overview",
-			data.NewField("active", nil, []int64{active}),
-			data.NewField("expiring30", nil, []int64{expiring30}),
-			data.NewField("expired", nil, []int64{expired}),
-			data.NewField("recentlyQueued", nil, []int64{recentlyQueued}),
-			data.NewField("unusedActive", nil, []int64{unusedActive}),
-			data.NewField("total", nil, []int64{total}),
-			data.NewField("coterm", nil, []bool{coterm}),
-			data.NewField("cotermExpiration", nil, []time.Time{cotermExpiration}),
-			data.NewField("cotermStatus", nil, []string{cotermStatus}),
-		),
-	}, nil
+	frame := data.NewFrame("licenses_overview",
+		data.NewField("active", nil, []int64{active}),
+		data.NewField("expiring30", nil, []int64{expiring30}),
+		data.NewField("expired", nil, []int64{expired}),
+		data.NewField("recentlyQueued", nil, []int64{recentlyQueued}),
+		data.NewField("unusedActive", nil, []int64{unusedActive}),
+		data.NewField("total", nil, []int64{total}),
+		data.NewField("coterm", nil, []bool{coterm}),
+		data.NewField("cotermExpiration", nil, []time.Time{cotermExpiration}),
+		data.NewField("cotermStatus", nil, []string{cotermStatus}),
+	)
+	// Diagnostic notice: help users tell "no licenses visible for this API key"
+	// apart from "the /licenses/overview endpoint returned an empty body".
+	// Subscription-based orgs (managed in LicenseHub) don't populate this
+	// legacy endpoint — the org uses a different licensing API that the
+	// plugin does not yet call.
+	if !coterm && total == 0 {
+		frame.AppendNotices(data.Notice{
+			Severity: data.NoticeSeverityInfo,
+			Text:     "No data returned by /organizations/{id}/licenses/overview. If this organisation is managed via subscription / LicenseHub, use the Meraki dashboard directly until the plugin adds the subscription API.",
+		})
+	}
+	return []*data.Frame{frame}, nil
 }
 
 // handleLicensesList emits a table frame of per-device licenses. Co-term orgs

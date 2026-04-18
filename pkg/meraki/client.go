@@ -14,12 +14,18 @@ import (
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
+	"golang.org/x/sync/singleflight"
 )
 
 // Default values used when ClientConfig leaves a field zero.
+//
+// DefaultUserAgent matches Meraki's documented format — "ApplicationName/Version VendorName"
+// with no spaces/hyphens/special characters in the names. Sourced from BuildUserAgent() so
+// version bumps happen in exactly one place (pkg/meraki/version.go).
+var DefaultUserAgent = BuildUserAgent()
+
 const (
 	DefaultBaseURL     = "https://api.meraki.com/api/v1"
-	DefaultUserAgent   = "Grafana-Meraki-App"
 	DefaultHTTPTimeout = 30 * time.Second
 	DefaultMaxRetries  = 3
 )
@@ -34,22 +40,38 @@ type ClientConfig struct {
 	MaxRetries  int
 	Transport   http.RoundTripper
 	RateLimiter *RateLimiter
-	Cache       *TTLCache
-	Logger      log.Logger
+	// IPRateLimiter is an optional second token bucket enforcing Meraki's documented
+	// per-source-IP cap (100 rps). Set for multi-tenant deployments where many org keys
+	// share the same egress IP — at org-cap saturation the per-IP ceiling can still be
+	// breached. nil disables; acquires always run IP-limit-first so the org limiter only
+	// charges a token after the IP limit has cleared.
+	IPRateLimiter *RateLimiter
+	Cache         *TTLCache
+	Logger        log.Logger
 }
 
 // Client is a thin Meraki Dashboard API client. It handles auth, retries (429 + 5xx with
 // exponential backoff), per-org rate limiting, partial-success detection, and optional
 // caching of GET responses.
+//
+// Concurrent callers that request the same cache key collapse to a single HTTP round-trip
+// via singleflight — so a dashboard with 20 panels querying the same endpoint fans in to
+// one upstream request, not 20. The coalescing key matches the cache key so an in-flight
+// request and its cache lookup share a lifecycle.
 type Client struct {
-	http        *http.Client
-	baseURL     string
-	apiKey      string
-	userAgent   string
-	maxRetries  int
-	rateLimiter *RateLimiter
-	cache       *TTLCache
-	logger      log.Logger
+	http          *http.Client
+	baseURL       string
+	apiKey        string
+	userAgent     string
+	maxRetries    int
+	rateLimiter   *RateLimiter
+	ipRateLimiter *RateLimiter
+	cache         *TTLCache
+	logger        log.Logger
+
+	// sf coalesces concurrent cache-miss round-trips and concurrent async SWR refreshes.
+	// Keyed on the same sha256 CacheKey used to look up the cache entry.
+	sf singleflight.Group
 }
 
 // NewClient constructs a Client. Returns an error only if APIKey is missing.
@@ -76,14 +98,15 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		logger = log.DefaultLogger
 	}
 	return &Client{
-		http:        &http.Client{Timeout: cfg.HTTPTimeout, Transport: cfg.Transport},
-		baseURL:     baseURL,
-		apiKey:      cfg.APIKey,
-		userAgent:   ua,
-		maxRetries:  cfg.MaxRetries,
-		rateLimiter: cfg.RateLimiter,
-		cache:       cfg.Cache,
-		logger:      logger,
+		http:          &http.Client{Timeout: cfg.HTTPTimeout, Transport: cfg.Transport},
+		baseURL:       baseURL,
+		apiKey:        cfg.APIKey,
+		userAgent:     ua,
+		maxRetries:    cfg.MaxRetries,
+		rateLimiter:   cfg.RateLimiter,
+		ipRateLimiter: cfg.IPRateLimiter,
+		cache:         cfg.Cache,
+		logger:        logger,
 	}, nil
 }
 
@@ -97,6 +120,15 @@ func (c *Client) Do(ctx context.Context, method, path, orgID string, params url.
 
 	var lastRetryAfter time.Duration
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		// IP-level limit first — per Meraki's doc (§7.1 / §7.4-G) the 100 rps per-source-IP
+		// cap is independent of the per-org cap. Acquiring IP-first means the org bucket
+		// only charges after the IP bucket has room, so we don't over-credit the org budget
+		// while actually blocked at the IP layer.
+		if c.ipRateLimiter != nil {
+			if _, err := c.ipRateLimiter.Acquire(ctx, "ip"); err != nil {
+				return nil, nil, err
+			}
+		}
 		if c.rateLimiter != nil {
 			if _, err := c.rateLimiter.Acquire(ctx, orgID); err != nil {
 				return nil, nil, err
@@ -168,38 +200,144 @@ func (c *Client) Do(ctx context.Context, method, path, orgID string, params url.
 }
 
 // Get issues a cached GET. If ttl > 0 and a fresh entry exists, Get short-circuits the HTTP
-// request. out is populated via json.Unmarshal.
+// request. Stale entries (within stale-grace) are served immediately while an async
+// refresh is kicked off — panel refreshes stay fast while data gets revalidated behind
+// the scenes. Negative-cached 404s short-circuit with a NotFoundError (no round-trip).
+// out is populated via json.Unmarshal.
 func (c *Client) Get(ctx context.Context, path, orgID string, params url.Values, ttl time.Duration, out any) error {
+	paramsMap := urlValuesToMap(params)
+	key := CacheKey(orgID, path, paramsMap)
 	if c.cache != nil && ttl > 0 {
-		key := CacheKey(orgID, path, urlValuesToMap(params))
-		if raw, ok := c.cache.Get(key); ok {
-			return json.Unmarshal(raw, out)
+		r := c.cache.Lookup(orgID, key)
+		if r.Hit {
+			if r.NotFound {
+				return c.negativeCachedNotFound(path)
+			}
+			if r.Stale {
+				c.kickGetRefresh(orgID, key, path, cloneParams(params), ttl)
+			}
+			return json.Unmarshal(r.Value, out)
 		}
 	}
-	body, _, err := c.Do(ctx, http.MethodGet, path, orgID, params, nil)
+	body, err := c.doGetCoalesced(ctx, orgID, key, path, params, ttl)
 	if err != nil {
 		return err
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("meraki: decode %s: %w", path, err)
 	}
-	if c.cache != nil && ttl > 0 {
-		c.cache.Set(CacheKey(orgID, path, urlValuesToMap(params)), body, ttl)
-	}
 	return nil
 }
 
 // GetAll follows Link rel=next pagination and returns the concatenated JSON array decoded
 // into out (which must be a pointer to a slice). Returns truncated=true if MaxPages was hit.
-// ttl controls caching of the full concatenated result.
+// ttl controls caching of the full concatenated result; truncated walks are not cached so
+// a follow-up retry actually re-paginates.
+//
+// As with Get: concurrent callers collapse to a single multi-page walk via singleflight,
+// stale cache hits serve immediately with async refresh, and 404s are negative-cached.
 func (c *Client) GetAll(ctx context.Context, path, orgID string, params url.Values, ttl time.Duration, out any) (bool, error) {
+	paramsMap := urlValuesToMap(params)
+	key := CacheKey(orgID, path, paramsMap)
 	if c.cache != nil && ttl > 0 {
-		key := CacheKey(orgID, path, urlValuesToMap(params))
-		if raw, ok := c.cache.Get(key); ok {
-			return false, json.Unmarshal(raw, out)
+		r := c.cache.Lookup(orgID, key)
+		if r.Hit {
+			if r.NotFound {
+				return false, c.negativeCachedNotFound(path)
+			}
+			if r.Stale {
+				c.kickGetAllRefresh(orgID, key, path, cloneParams(params), ttl)
+			}
+			return false, json.Unmarshal(r.Value, out)
 		}
 	}
 
+	combined, truncated, err := c.doGetAllCoalesced(ctx, orgID, key, path, params, ttl)
+	if err != nil {
+		return truncated, err
+	}
+	if err := json.Unmarshal(combined, out); err != nil {
+		return truncated, fmt.Errorf("meraki: decode %s: %w", path, err)
+	}
+	return truncated, nil
+}
+
+// doGetCoalesced runs the HTTP GET under singleflight keyed on the cache key. Concurrent
+// cache-miss callers for the same key see exactly one round-trip; success results are
+// written to the cache with a TTL/2 (capped at 30m) stale-grace so subsequent panel
+// refreshes benefit from SWR semantics.
+func (c *Client) doGetCoalesced(ctx context.Context, orgID, key, path string, params url.Values, ttl time.Duration) ([]byte, error) {
+	v, err, _ := c.sf.Do(key, func() (any, error) {
+		// Re-check the cache under the singleflight: while we waited for the lock a sibling
+		// may have populated it. This avoids a second HTTP round-trip.
+		if c.cache != nil && ttl > 0 {
+			if r := c.cache.Lookup(orgID, key); r.Hit && !r.Stale && !r.NotFound {
+				return r.Value, nil
+			}
+		}
+		body, _, err := c.Do(ctx, http.MethodGet, path, orgID, params, nil)
+		if err != nil {
+			if c.cache != nil && ttl > 0 && IsNotFound(err) {
+				c.cache.StoreNotFound(orgID, key, 0)
+			}
+			return nil, err
+		}
+		if c.cache != nil && ttl > 0 {
+			c.cache.Store(orgID, key, body, ttl, deriveStaleGrace(ttl))
+		}
+		return body, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// The singleflight return value is whatever fn returned — always []byte here.
+	body, ok := v.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("meraki: singleflight returned unexpected type %T", v)
+	}
+	return body, nil
+}
+
+// doGetAllCoalesced is the multi-page counterpart to doGetCoalesced. The pagination loop
+// runs inside the singleflight fn so every joining caller shares the full walk.
+func (c *Client) doGetAllCoalesced(ctx context.Context, orgID, key, path string, params url.Values, ttl time.Duration) ([]byte, bool, error) {
+	type pagedResult struct {
+		body      []byte
+		truncated bool
+	}
+	v, err, _ := c.sf.Do(key, func() (any, error) {
+		if c.cache != nil && ttl > 0 {
+			if r := c.cache.Lookup(orgID, key); r.Hit && !r.Stale && !r.NotFound {
+				return &pagedResult{body: r.Value, truncated: false}, nil
+			}
+		}
+		combined, truncated, err := c.paginate(ctx, path, orgID, params)
+		if err != nil {
+			if c.cache != nil && ttl > 0 && IsNotFound(err) {
+				c.cache.StoreNotFound(orgID, key, 0)
+			}
+			return nil, err
+		}
+		// Truncated walks are not cached — a follow-up request should actually continue
+		// where the previous one ran out of pages.
+		if c.cache != nil && ttl > 0 && !truncated {
+			c.cache.Store(orgID, key, combined, ttl, deriveStaleGrace(ttl))
+		}
+		return &pagedResult{body: combined, truncated: truncated}, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	res, ok := v.(*pagedResult)
+	if !ok {
+		return nil, false, fmt.Errorf("meraki: singleflight returned unexpected type %T", v)
+	}
+	return res.body, res.truncated, nil
+}
+
+// paginate runs the Link-header pagination loop used by GetAll. Extracted so both the
+// direct cache-miss path and the async SWR refresh can share it.
+func (c *Client) paginate(ctx context.Context, path, orgID string, params url.Values) ([]byte, bool, error) {
 	var pages []json.RawMessage
 	truncated := false
 	nextPath := path
@@ -207,7 +345,7 @@ func (c *Client) GetAll(ctx context.Context, path, orgID string, params url.Valu
 	for page := 0; page < MaxPages; page++ {
 		body, hdr, err := c.Do(ctx, http.MethodGet, nextPath, orgID, nextParams, nil)
 		if err != nil {
-			return false, err
+			return nil, false, err
 		}
 		pages = append(pages, body)
 		next := nextLink(hdr)
@@ -221,18 +359,101 @@ func (c *Client) GetAll(ctx context.Context, path, orgID string, params url.Valu
 			truncated = true
 		}
 	}
-
 	combined, err := mergeJSONArrays(pages)
 	if err != nil {
-		return truncated, fmt.Errorf("meraki: merge pages for %s: %w", path, err)
+		return nil, truncated, fmt.Errorf("meraki: merge pages for %s: %w", path, err)
 	}
-	if err := json.Unmarshal(combined, out); err != nil {
-		return truncated, fmt.Errorf("meraki: decode %s: %w", path, err)
+	return combined, truncated, nil
+}
+
+// kickGetRefresh fires an async revalidation for a stale cache entry. Runs on a detached
+// context with a 30s ceiling so a short-lived panel-refresh ctx cancelling doesn't abort
+// the refresh mid-flight. Joined via the same singleflight key — a sibling
+// doGetCoalesced already in progress will absorb this call without a second round-trip.
+func (c *Client) kickGetRefresh(orgID, key, path string, params url.Values, ttl time.Duration) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _, _ = c.sf.Do(key, func() (any, error) {
+			body, _, err := c.Do(ctx, http.MethodGet, path, orgID, params, nil)
+			if err != nil {
+				if c.cache != nil && ttl > 0 && IsNotFound(err) {
+					c.cache.StoreNotFound(orgID, key, 0)
+				}
+				return nil, err
+			}
+			if c.cache != nil && ttl > 0 {
+				c.cache.Store(orgID, key, body, ttl, deriveStaleGrace(ttl))
+			}
+			return body, nil
+		})
+	}()
+}
+
+// kickGetAllRefresh is the GetAll counterpart of kickGetRefresh.
+func (c *Client) kickGetAllRefresh(orgID, key, path string, params url.Values, ttl time.Duration) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		_, _, _ = c.sf.Do(key, func() (any, error) {
+			combined, truncated, err := c.paginate(ctx, path, orgID, params)
+			if err != nil {
+				if c.cache != nil && ttl > 0 && IsNotFound(err) {
+					c.cache.StoreNotFound(orgID, key, 0)
+				}
+				return nil, err
+			}
+			if c.cache != nil && ttl > 0 && !truncated {
+				c.cache.Store(orgID, key, combined, ttl, deriveStaleGrace(ttl))
+			}
+			return combined, nil
+		})
+	}()
+}
+
+// negativeCachedNotFound returns a NotFoundError mirroring the one that populated the
+// negative cache. We intentionally do NOT surface the original body/errors list — those
+// were for a prior request and may mislead the caller.
+func (c *Client) negativeCachedNotFound(path string) error {
+	return &NotFoundError{APIError: APIError{
+		Status:   http.StatusNotFound,
+		Endpoint: path,
+		Message:  "not found (cached)",
+	}}
+}
+
+// deriveStaleGrace returns a stale-grace duration proportional to the freshness TTL.
+// The heuristic is TTL/2 with an absolute cap of 30m so very long TTLs don't extend the
+// serve-stale window beyond what operators expect. This lines up with §7.4-C proposals:
+//
+//	Organizations (1h):  30m stale  (matches spec)
+//	Networks (15m):      7.5m stale (≈ 10m target)
+//	Devices (5m):        2.5m stale (≈ 2m target)
+//	SensorHistory (1m):  30s stale  (matches spec)
+//	Alerts (30s):        15s stale  (matches spec)
+func deriveStaleGrace(ttl time.Duration) time.Duration {
+	grace := ttl / 2
+	if grace > 30*time.Minute {
+		grace = 30 * time.Minute
 	}
-	if c.cache != nil && ttl > 0 && !truncated {
-		c.cache.Set(CacheKey(orgID, path, urlValuesToMap(params)), combined, ttl)
+	return grace
+}
+
+// cloneParams returns an independent copy of params so the async refresh goroutine can
+// safely mutate its own copy without racing the caller. url.Values is a map — aliasing
+// would let a Do()-side mutation (none today, but a cheap safety net) leak across
+// goroutines.
+func cloneParams(src url.Values) url.Values {
+	if src == nil {
+		return nil
 	}
-	return truncated, nil
+	dst := make(url.Values, len(src))
+	for k, vs := range src {
+		cp := make([]string, len(vs))
+		copy(cp, vs)
+		dst[k] = cp
+	}
+	return dst
 }
 
 func (c *Client) resolveURL(path string, params url.Values) string {

@@ -7,6 +7,7 @@ import {
   SceneTimePicker,
   SceneTimeRange,
 } from '@grafana/scenes';
+import { orgOnlyVariables } from '../../scene-helpers/variables';
 import { uplinkLossLatencyTimeseries } from './panels';
 
 /**
@@ -19,6 +20,7 @@ import { uplinkLossLatencyTimeseries } from './panels';
 export function applianceUplinksScene(serial: string): EmbeddedScene {
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-5m', to: 'now' }),
+    $variables: orgOnlyVariables(),
     controls: [
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),

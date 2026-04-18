@@ -35,7 +35,7 @@ function oneQuery(params: {
     maxDataPoints,
   } = params;
   const query: Record<string, unknown> & { refId: string } = { refId, kind };
-  if (kind !== QueryKind.Organizations) {
+  if (kind !== QueryKind.Organizations && kind !== QueryKind.OrganizationsCount) {
     query.orgId = orgId ?? '$org';
   }
   if (networkIds && networkIds.length > 0) {
@@ -84,6 +84,166 @@ export function makeStatPanel(title: string, kind: QueryKind, orgID?: string): V
     .setTitle(title)
     .setData(oneQuery({ kind, orgId: orgID }))
     .build();
+}
+
+/**
+ * Shared stat-panel builder bound to a single wide-frame count field. Used by
+ * every KPI tile that previously relied on a client-side `filterByValue +
+ * reduce` chain (todos.txt §G.20). The runner is a one-shot Meraki query; the
+ * `organize` transform excludes every field except `fieldName`, and the stat
+ * reads `lastNotNull` — the exact pattern `alertsOverview` uses.
+ */
+function wideCountStat(params: {
+  title: string;
+  runner: SceneQueryRunner;
+  fieldName: string;
+  allFieldNames: string[];
+  unit?: string;
+  thresholds?: Array<{ value: number; color: string }>;
+}): VizPanel {
+  const { title, runner, fieldName, allFieldNames, unit, thresholds = [] } = params;
+
+  const excludeByName: Record<string, boolean> = {};
+  for (const f of allFieldNames) {
+    excludeByName[f] = f !== fieldName;
+  }
+
+  const builder = PanelBuilders.stat()
+    .setTitle(title)
+    .setData(
+      new SceneDataTransformer({
+        $data: runner,
+        transformations: [{ id: 'organize', options: { excludeByName, renameByName: {} } }],
+      })
+    )
+    .setNoValue('0')
+    .setOption('reduceOptions', {
+      values: false,
+      calcs: ['lastNotNull'],
+      fields: '',
+    } as any)
+    .setOption('colorMode', 'value' as any);
+
+  if (unit) {
+    builder.setUnit(unit);
+  }
+
+  if (thresholds.length > 0) {
+    builder.setColor({ mode: FieldColorModeId.Thresholds }).setThresholds({
+      mode: ThresholdsMode.Absolute,
+      steps: thresholds.map((t, i) => ({
+        value: i === 0 ? (null as unknown as number) : t.value,
+        color: t.color,
+      })),
+    });
+  }
+
+  return builder.build();
+}
+
+const AVAILABILITY_COUNT_FIELDS = ['online', 'alerting', 'offline', 'dormant', 'total'];
+
+/**
+ * KPI stat tile sourced from the server-side `DeviceAvailabilityCounts`
+ * aggregator. `productTypes` scopes the count (e.g. `['switch']`); omit it
+ * for an all-families tile. `fieldName` picks which bucket to show.
+ */
+export function deviceAvailabilityStat(params: {
+  title: string;
+  fieldName: 'online' | 'alerting' | 'offline' | 'dormant' | 'total';
+  productTypes?: string[];
+  orgId?: string;
+  thresholds?: Array<{ value: number; color: string }>;
+}): VizPanel {
+  const { title, fieldName, productTypes, orgId, thresholds } = params;
+  const runner = oneQuery({
+    kind: QueryKind.DeviceAvailabilityCounts,
+    orgId,
+    productTypes,
+  });
+  return wideCountStat({
+    title,
+    runner,
+    fieldName,
+    allFieldNames: AVAILABILITY_COUNT_FIELDS,
+    thresholds,
+  });
+}
+
+const SWITCH_PORTS_OVERVIEW_FIELDS = [
+  'portCount',
+  'portsConnected',
+  'portsDisconnected',
+  'portsDisabled',
+  'clientCount',
+  'poeTotalWatts',
+];
+
+/**
+ * KPI stat tile sourced from the server-side `SwitchPortsOverview` aggregator.
+ * Mirrors `deviceAvailabilityStat` — the backend emits a single wide frame and
+ * the panel reads one named field via an `organize` exclude-by-name transform,
+ * avoiding the brittle `filterByValue+reduce` chain documented in §G.20.
+ */
+export function switchPortsOverviewStat(params: {
+  title: string;
+  fieldName:
+    | 'portCount'
+    | 'portsConnected'
+    | 'portsDisconnected'
+    | 'portsDisabled'
+    | 'clientCount'
+    | 'poeTotalWatts';
+  unit?: string;
+  orgId?: string;
+  serials?: string[];
+  thresholds?: Array<{ value: number; color: string }>;
+}): VizPanel {
+  const { title, fieldName, unit, orgId, serials, thresholds } = params;
+  const runner = oneQuery({
+    kind: QueryKind.SwitchPortsOverview,
+    orgId,
+    serials,
+  });
+  return wideCountStat({
+    title,
+    runner,
+    fieldName,
+    allFieldNames: SWITCH_PORTS_OVERVIEW_FIELDS,
+    unit,
+    thresholds,
+  });
+}
+
+/** KPI stat tile sourced from `KindOrganizationsCount`. */
+export function organizationsCountStat(
+  title = 'Organizations',
+  thresholds?: Array<{ value: number; color: string }>
+): VizPanel {
+  const runner = oneQuery({ kind: QueryKind.OrganizationsCount });
+  return wideCountStat({
+    title,
+    runner,
+    fieldName: 'count',
+    allFieldNames: ['count'],
+    thresholds,
+  });
+}
+
+/** KPI stat tile sourced from `KindNetworksCount`. */
+export function networksCountStat(
+  title = 'Networks',
+  orgId?: string,
+  thresholds?: Array<{ value: number; color: string }>
+): VizPanel {
+  const runner = oneQuery({ kind: QueryKind.NetworksCount, orgId });
+  return wideCountStat({
+    title,
+    runner,
+    fieldName: 'count',
+    allFieldNames: ['count'],
+    thresholds,
+  });
 }
 
 /**
@@ -404,113 +564,28 @@ export const SENSOR_OVERVIEW_METRICS: SensorMetricMeta[] = ALL_SENSOR_METRICS;
  * they populate independently and failure of one doesn't blank the others.
  */
 export function orgDetailKpiRow(orgId: string): VizPanel[] {
-  const devicesRunner = oneQuery({ kind: QueryKind.Devices, orgId });
-  const networksRunner = oneQuery({ kind: QueryKind.Networks, orgId });
-  const statusRunner = oneQuery({ kind: QueryKind.DeviceStatusOverview, orgId });
-
-  const networkCount = PanelBuilders.stat()
-    .setTitle('Networks')
-    .setData(
-      new SceneDataTransformer({
-        $data: networksRunner,
-        transformations: [
-          {
-            id: 'reduce',
-            options: { reducers: ['count'], fields: 'id', mode: 'reduceFields', includeTimeField: false },
-          },
-        ],
-      })
-    )
-    .build();
-
-  const deviceCount = PanelBuilders.stat()
-    .setTitle('Devices')
-    .setData(
-      new SceneDataTransformer({
-        $data: devicesRunner,
-        transformations: [
-          {
-            id: 'reduce',
-            options: { reducers: ['count'], fields: 'serial', mode: 'reduceFields', includeTimeField: false },
-          },
-        ],
-      })
-    )
-    .build();
-
-  const onlineCount = PanelBuilders.stat()
-    .setTitle('Online')
-    .setData(
-      new SceneDataTransformer({
-        $data: statusRunner,
-        transformations: [
-          {
-            id: 'filterByValue',
-            options: {
-              filters: [
-                {
-                  fieldName: 'status',
-                  config: { id: 'equal', options: { value: 'online' } },
-                },
-              ],
-              type: 'include',
-              match: 'all',
-            },
-          },
-          {
-            id: 'reduce',
-            options: { reducers: ['sum'], fields: 'count', mode: 'reduceFields', includeTimeField: false },
-          },
-        ],
-      })
-    )
-    .setColor({ mode: FieldColorModeId.Thresholds })
-    .setThresholds({
-      mode: ThresholdsMode.Absolute,
-      steps: [
+  return [
+    networksCountStat('Networks', orgId),
+    deviceAvailabilityStat({ title: 'Devices', fieldName: 'total', orgId }),
+    deviceAvailabilityStat({
+      title: 'Online',
+      fieldName: 'online',
+      orgId,
+      thresholds: [
         { value: 0, color: 'red' },
         { value: 1, color: 'green' },
       ],
-    })
-    .build();
-
-  const alertingCount = PanelBuilders.stat()
-    .setTitle('Alerting')
-    .setData(
-      new SceneDataTransformer({
-        $data: statusRunner,
-        transformations: [
-          {
-            id: 'filterByValue',
-            options: {
-              filters: [
-                {
-                  fieldName: 'status',
-                  config: { id: 'equal', options: { value: 'alerting' } },
-                },
-              ],
-              type: 'include',
-              match: 'all',
-            },
-          },
-          {
-            id: 'reduce',
-            options: { reducers: ['sum'], fields: 'count', mode: 'reduceFields', includeTimeField: false },
-          },
-        ],
-      })
-    )
-    .setColor({ mode: FieldColorModeId.Thresholds })
-    .setThresholds({
-      mode: ThresholdsMode.Absolute,
-      steps: [
+    }),
+    deviceAvailabilityStat({
+      title: 'Alerting',
+      fieldName: 'alerting',
+      orgId,
+      thresholds: [
         { value: 0, color: 'green' },
         { value: 1, color: 'orange' },
       ],
-    })
-    .build();
-
-  return [networkCount, deviceCount, onlineCount, alertingCount];
+    }),
+  ];
 }
 
 /**

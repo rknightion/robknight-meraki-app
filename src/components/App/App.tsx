@@ -1,5 +1,5 @@
 import React from 'react';
-import { SceneApp, useSceneApp } from '@grafana/scenes';
+import { SceneApp, SceneAppPageLike, useSceneApp } from '@grafana/scenes';
 import { AppRootProps } from '@grafana/data';
 import { PluginPropsContext } from '../../utils/utils.plugin';
 import { homePage } from '../../pages/Home/homePage';
@@ -13,24 +13,38 @@ import { sensorsPage } from '../../pages/Sensors/sensorsPage';
 import { insightsPage } from '../../pages/Insights/insightsPage';
 import { eventsPage } from '../../pages/Events/eventsPage';
 import { alertsPage } from '../../pages/Alerts/alertsPage';
+import { auditLogPage } from '../../pages/AuditLog/auditLogPage';
 import { configurationPage } from '../../pages/Configuration/configurationPage';
+
+/**
+ * Full list of scene pages. Device-family pages (Appliances / Access Points
+ * / Switches / Cameras / Cellular Gateways / Sensors) are currently always
+ * rendered; a `showEmptyFamilies=false` auto-hide mode is wired on the
+ * backend (`KindOrgProductTypes`) and the Configuration form but kept out
+ * of the nav until we find a way to swap the `SceneApp.pages` list without
+ * tearing down in-flight scene runners.
+ */
+function allPages(): SceneAppPageLike[] {
+  return [
+    homePage,
+    organizationsPage,
+    appliancesPage,
+    accessPointsPage,
+    switchesPage,
+    camerasPage,
+    cellularGatewaysPage,
+    sensorsPage,
+    insightsPage,
+    eventsPage,
+    alertsPage,
+    auditLogPage,
+    configurationPage,
+  ];
+}
 
 function getSceneApp() {
   return new SceneApp({
-    pages: [
-      homePage,
-      organizationsPage,
-      appliancesPage,
-      accessPointsPage,
-      switchesPage,
-      camerasPage,
-      cellularGatewaysPage,
-      sensorsPage,
-      insightsPage,
-      eventsPage,
-      alertsPage,
-      configurationPage,
-    ],
+    pages: allPages(),
     urlSyncOptions: {
       updateUrlOnInit: true,
       createBrowserHistorySteps: true,

@@ -189,8 +189,14 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 	"organizations/{organizationId}/summary/top/switches/byEnergyUsage": {
 		MaxTimespan: 186 * 24 * time.Hour,
 	},
-	// Phase 10 — camera analytics (per-device).
-	"devices/{serial}/camera/analytics/overview": {
-		MaxTimespan: 7 * 24 * time.Hour,
+	// Phase 12 (§7.3-C) — configurationChanges: Meraki's documented lookback is 365 days.
+	"organizations/{organizationId}/configurationChanges": {
+		MaxTimespan: 365 * 24 * time.Hour,
+	},
+	// Phase 12 (§7.3-D) — device availability change history: Meraki's documented max is
+	// 31 days; default 1 day when unset. Handlers compute t0/t1 from the panel range and
+	// Resolve() clamps to MaxTimespan.
+	"organizations/{organizationId}/devices/availabilities/changeHistory": {
+		MaxTimespan: 31 * 24 * time.Hour,
 	},
 }

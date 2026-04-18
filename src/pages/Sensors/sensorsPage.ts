@@ -3,6 +3,7 @@ import { sensorsScene } from './sensorsScene';
 import { sensorDetailScene } from './sensorDetailScene';
 import { prefixRoute } from '../../utils/utils.routing';
 import { ROUTES } from '../../constants';
+import { familyGateWrap } from '../../scene-helpers/familyGate';
 
 export const sensorsPage = new SceneAppPage({
   title: 'Sensors',
@@ -10,7 +11,7 @@ export const sensorsPage = new SceneAppPage({
     'Environmental sensor (MT) readings — temperature, humidity, air quality, door, water, and more.',
   url: prefixRoute(ROUTES.Sensors),
   routePath: `${ROUTES.Sensors}/*`,
-  getScene: () => sensorsScene(),
+  getScene: familyGateWrap('sensor', () => sensorsScene()),
   drilldowns: [
     {
       routePath: ':serial/*',

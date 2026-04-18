@@ -107,28 +107,23 @@ export function eventsTable(): VizPanel {
 }
 
 /**
- * Events timeline — a stacked bar chart bucketed by time, pivoted by
- * event category. The `groupingToMatrix` transform turns the long-format
- * (occurredAt, category) shape into one column per category so the
- * stacked bar chart picks up each category as its own series. Mirrors
- * `src/pages/Alerts/panels.ts::alertsTimelineBarChart` precisely —
- * category tends to be the more useful grouping than `type` because
- * `type` is extremely fine-grained.
+ * Events timeline — a stacked bar chart bucketed by time. Backed by the
+ * server-side `NetworkEventsTimeline` aggregator which emits a wide frame
+ * `{ts, <category1>, <category2>, ...}` with zero-filled buckets. Previous
+ * versions used a client-side `groupingToMatrix` transform that emitted
+ * string cells and tripped the barchart viz with "No numeric fields found".
  */
 export function eventsTimelineBarChart(): VizPanel {
-  const runner = networkEventsQuery();
-
-  const pivoted = new SceneDataTransformer({
-    $data: runner,
-    transformations: [
+  const runner = new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [
       {
-        id: 'groupingToMatrix',
-        options: {
-          columnField: 'category',
-          rowField: 'occurredAt',
-          valueField: 'category',
-          emptyValue: 'null',
-        },
+        refId: 'A',
+        kind: QueryKind.NetworkEventsTimeline,
+        orgId: '$org',
+        networkIds: ['$network'],
+        productTypes: ['$productType'],
+        metrics: ['$eventType'],
       },
     ],
   });
@@ -136,7 +131,7 @@ export function eventsTimelineBarChart(): VizPanel {
   return PanelBuilders.barchart()
     .setTitle('Event timeline')
     .setDescription('Event volume over the selected window, stacked by category.')
-    .setData(pivoted)
+    .setData(runner)
     .setNoValue('No events in the selected range.')
     .setOption('stacking', 'normal' as any)
     .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)

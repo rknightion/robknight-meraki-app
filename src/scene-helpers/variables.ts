@@ -1,8 +1,18 @@
-import { QueryVariable } from '@grafana/scenes';
+import { QueryVariable, SceneVariableSet } from '@grafana/scenes';
 import { VariableRefresh } from '@grafana/schema';
 import { MERAKI_DS_REF } from './datasource';
 import { QueryKind } from '../datasource/types';
 import type { MerakiProductType } from '../types';
+
+/**
+ * Shorthand for every drilldown / detail scene that needs just `$org`
+ * hydrated from the URL's `var-org` query param. Without declaring the
+ * variable on the scene, per-panel queries ship `orgId: '$org'` literally
+ * and the backend 400s with "orgId is required".
+ */
+export function orgOnlyVariables(): SceneVariableSet {
+  return new SceneVariableSet({ variables: [orgVariable()] });
+}
 
 /**
  * $org — hydrated from the Meraki DS metricFindQuery. Default refreshes on dashboard load so

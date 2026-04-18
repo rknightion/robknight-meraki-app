@@ -31,8 +31,10 @@ type App struct {
 	logger   log.Logger
 }
 
-// LabelMode controls how sensor series are labeled on timeseries panels.
-// Must match src/types.ts SensorLabelMode.
+// LabelMode controls how per-device series are labeled on timeseries panels
+// across every Meraki device family the plugin supports (sensors, access
+// points, switches, appliances, cameras, cellular gateways).
+// Must match src/types.ts DeviceLabelMode.
 type LabelMode string
 
 const (
@@ -42,19 +44,24 @@ const (
 
 // Settings is the merged non-secret + secret configuration for a plugin instance.
 type Settings struct {
-	BaseURL        string
-	SharedFraction float64
-	APIKey         string
-	IsApiKeySet    bool
-	LabelMode      LabelMode
+	BaseURL         string
+	SharedFraction  float64
+	APIKey          string
+	IsApiKeySet     bool
+	LabelMode       LabelMode
+	// EnableIPLimiter turns on the 100 rps per-source-IP token bucket. Useful for
+	// multi-tenant deployments where many orgs egress via a single Grafana IP —
+	// Meraki's per-IP cap is independent of the per-org cap (todos.txt §7.4-G).
+	EnableIPLimiter bool
 }
 
 // appJSONData mirrors src/types.ts AppJsonData.
 type appJSONData struct {
-	BaseURL        string    `json:"baseUrl,omitempty"`
-	SharedFraction float64   `json:"sharedFraction,omitempty"`
-	IsAPIKeySet    bool      `json:"isApiKeySet,omitempty"`
-	LabelMode      LabelMode `json:"labelMode,omitempty"`
+	BaseURL         string    `json:"baseUrl,omitempty"`
+	SharedFraction  float64   `json:"sharedFraction,omitempty"`
+	IsAPIKeySet     bool      `json:"isApiKeySet,omitempty"`
+	LabelMode       LabelMode `json:"labelMode,omitempty"`
+	EnableIPLimiter bool      `json:"enableIPLimiter,omitempty"`
 }
 
 // NewApp is the factory invoked by Grafana for each plugin instance.
@@ -95,6 +102,7 @@ func loadSettings(s backend.AppInstanceSettings) (Settings, error) {
 		settings.SharedFraction = jd.SharedFraction
 		settings.IsApiKeySet = jd.IsAPIKeySet
 		settings.LabelMode = jd.LabelMode
+		settings.EnableIPLimiter = jd.EnableIPLimiter
 	}
 	if settings.LabelMode != LabelModeName {
 		// Default to serial — matches the current shipped behaviour and keeps
@@ -118,17 +126,37 @@ func buildClient(s Settings, logger log.Logger) (*meraki.Client, error) {
 		SharedFraction:    fraction,
 		JitterRatio:       0.1,
 	})
-	cache, err := meraki.NewTTLCache(2048)
+	var ipLimiter *meraki.RateLimiter
+	if s.EnableIPLimiter {
+		// Meraki's per-source-IP cap is 100 rps; burst 200 matches the 2x ratio used for
+		// the per-org limiter so short spikes don't get spuriously throttled. SharedFraction
+		// matches the org limiter so replica-aware operators get consistent headroom.
+		ipLimiter = meraki.NewRateLimiter(meraki.RateLimiterConfig{
+			RequestsPerSecond: 100,
+			Burst:             200,
+			SharedFraction:    fraction,
+			JitterRatio:       0.1,
+		})
+	}
+	// Per-org cache: 512 entries per org (up from the old 2048 global pool). JitterRatio
+	// 0.1 desynchronises expirations across replicas; NotFoundTTL 60s negative-caches 404s
+	// so a broken endpoint doesn't round-trip on every panel refresh.
+	cache, err := meraki.NewTTLCacheWithConfig(meraki.TTLCacheConfig{
+		PerOrgSize:  512,
+		JitterRatio: 0.1,
+		NotFoundTTL: 60 * time.Second,
+	})
 	if err != nil {
 		return nil, err
 	}
 	return meraki.NewClient(meraki.ClientConfig{
-		APIKey:      s.APIKey,
-		BaseURL:     s.BaseURL,
-		UserAgent:   "Grafana-Meraki-App",
-		RateLimiter: rl,
-		Cache:       cache,
-		Logger:      logger,
+		APIKey:        s.APIKey,
+		BaseURL:       s.BaseURL,
+		UserAgent:     meraki.BuildUserAgent(),
+		RateLimiter:   rl,
+		IPRateLimiter: ipLimiter,
+		Cache:         cache,
+		Logger:        logger,
 	})
 }
 

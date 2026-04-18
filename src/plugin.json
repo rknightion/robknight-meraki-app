@@ -96,6 +96,13 @@
     },
     {
       "type": "page",
+      "name": "Audit Log",
+      "path": "/a/%PLUGIN_ID%/audit-log",
+      "addToNav": true,
+      "icon": "history"
+    },
+    {
+      "type": "page",
       "name": "Configuration",
       "path": "/a/%PLUGIN_ID%/configuration",
       "addToNav": true,

@@ -8,10 +8,14 @@ import { MerakiProductType, SensorMetric } from '../types';
  */
 export enum QueryKind {
   Organizations = 'organizations',
+  OrganizationsCount = 'organizationsCount',
   Networks = 'networks',
+  NetworksCount = 'networksCount',
   Devices = 'devices',
   DeviceStatusOverview = 'deviceStatusOverview',
   DeviceAvailabilities = 'deviceAvailabilities',
+  DeviceAvailabilityCounts = 'deviceAvailabilityCounts',
+  OrgProductTypes = 'orgProductTypes',
   SensorReadingsLatest = 'sensorReadingsLatest',
   SensorReadingsHistory = 'sensorReadingsHistory',
   SensorAlertSummary = 'sensorAlertSummary',
@@ -30,6 +34,7 @@ export enum QueryKind {
   SwitchPorts = 'switchPorts',
   SwitchPortConfig = 'switchPortConfig',
   SwitchPortPacketCounters = 'switchPortPacketCounters',
+  SwitchPortsOverview = 'switchPortsOverview',
 
   /* Appliance (MX) — phase 8. */
   ApplianceUplinkStatuses = 'applianceUplinkStatuses',
@@ -69,6 +74,11 @@ export enum QueryKind {
 
   /* Network events — phase 11. */
   NetworkEvents = 'networkEvents',
+  NetworkEventsTimeline = 'networkEventsTimeline',
+
+  /* API optimisation — §7.3 (phase 12). */
+  ConfigurationChanges = 'configurationChanges',
+  DeviceAvailabilityChanges = 'deviceAvailabilityChanges',
 }
 
 export interface MerakiQuery extends DataQuery {

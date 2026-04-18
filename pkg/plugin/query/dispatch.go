@@ -25,10 +25,14 @@ type QueryKind string
 
 const (
 	KindOrganizations         QueryKind = "organizations"
+	KindOrganizationsCount    QueryKind = "organizationsCount"
 	KindNetworks              QueryKind = "networks"
+	KindNetworksCount         QueryKind = "networksCount"
 	KindDevices               QueryKind = "devices"
 	KindDeviceStatusOverview  QueryKind = "deviceStatusOverview"
-	KindDeviceAvailabilities  QueryKind = "deviceAvailabilities"
+	KindDeviceAvailabilities      QueryKind = "deviceAvailabilities"
+	KindDeviceAvailabilityCounts  QueryKind = "deviceAvailabilityCounts"
+	KindOrgProductTypes           QueryKind = "orgProductTypes"
 	KindSensorReadingsLatest  QueryKind = "sensorReadingsLatest"
 	KindSensorReadingsHistory QueryKind = "sensorReadingsHistory"
 	KindSensorAlertSummary    QueryKind = "sensorAlertSummary"
@@ -47,6 +51,7 @@ const (
 	KindSwitchPorts              QueryKind = "switchPorts"
 	KindSwitchPortConfig         QueryKind = "switchPortConfig"
 	KindSwitchPortPacketCounters QueryKind = "switchPortPacketCounters"
+	KindSwitchPortsOverview      QueryKind = "switchPortsOverview"
 
 	// Appliance (MX) — phase 8.
 	KindApplianceUplinkStatuses  QueryKind = "applianceUplinkStatuses"
@@ -70,13 +75,14 @@ const (
 	KindTopSwitchesByEnergy   QueryKind = "topSwitchesByEnergy"
 	KindTopNetworksByStatus   QueryKind = "topNetworksByStatus"
 
-	// Camera (MV) — phase 10.
-	KindCameraOnboarding           QueryKind = "cameraOnboarding"
-	KindCameraAnalyticsOverview    QueryKind = "cameraAnalyticsOverview"
-	KindCameraAnalyticsLive        QueryKind = "cameraAnalyticsLive"
-	KindCameraAnalyticsZones       QueryKind = "cameraAnalyticsZones"
-	KindCameraAnalyticsZoneHistory QueryKind = "cameraAnalyticsZoneHistory"
-	KindCameraRetentionProfiles    QueryKind = "cameraRetentionProfiles"
+	// Camera (MV) — phase 10. The legacy `analytics/*` endpoints were
+	// deprecated by Meraki in March 2024 and replaced by the boundaries model
+	// (areas + lines + per-boundary detection counts).
+	KindCameraOnboarding        QueryKind = "cameraOnboarding"
+	KindCameraBoundaryAreas     QueryKind = "cameraBoundaryAreas"
+	KindCameraBoundaryLines     QueryKind = "cameraBoundaryLines"
+	KindCameraDetectionsHistory QueryKind = "cameraDetectionsHistory"
+	KindCameraRetentionProfiles QueryKind = "cameraRetentionProfiles"
 
 	// Cellular Gateway (MG) — phase 10.
 	KindMgUplinks        QueryKind = "mgUplinks"
@@ -85,7 +91,12 @@ const (
 	KindMgConnectivity   QueryKind = "mgConnectivity"
 
 	// Network events — phase 11.
-	KindNetworkEvents QueryKind = "networkEvents"
+	KindNetworkEvents         QueryKind = "networkEvents"
+	KindNetworkEventsTimeline QueryKind = "networkEventsTimeline"
+
+	// API optimisation — §7.3 (phase 12).
+	KindConfigurationChanges        QueryKind = "configurationChanges"
+	KindDeviceAvailabilityChanges   QueryKind = "deviceAvailabilityChanges"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -146,11 +157,12 @@ type MetricFindResponse struct {
 }
 
 // Options are the non-per-query settings the dispatcher needs — mostly
-// plugin-level preferences (like sensor label mode) that don't belong on the
+// plugin-level preferences (like device label mode) that don't belong on the
 // MerakiQuery wire shape but still influence how frames are rendered.
 type Options struct {
-	// LabelMode selects how sensor series are labeled. Values match
-	// pkg/plugin.LabelMode; unknown values fall back to "serial".
+	// LabelMode selects how per-device series are labeled across every
+	// device-family timeseries handler (sensor, wireless, appliance, camera).
+	// Values match pkg/plugin.LabelMode; unknown values fall back to "serial".
 	LabelMode string
 	// PluginPathPrefix is the full `/a/<plugin-id>` prefix used when
 	// handlers compute cross-family device-detail drilldown URLs. Populated
@@ -168,11 +180,15 @@ type handlerFn func(ctx context.Context, client *meraki.Client, q MerakiQuery, t
 // handlers maps a QueryKind to its implementation. Kept in one place so the
 // dispatcher logic stays tiny.
 var handlers = map[QueryKind]handlerFn{
-	KindOrganizations:         handleOrganizations,
-	KindNetworks:              handleNetworks,
-	KindDevices:               handleDevices,
-	KindDeviceStatusOverview:  handleDeviceStatusOverview,
-	KindDeviceAvailabilities:  handleDeviceAvailabilities,
+	KindOrganizations:            handleOrganizations,
+	KindOrganizationsCount:       handleOrganizationsCount,
+	KindNetworks:                 handleNetworks,
+	KindNetworksCount:            handleNetworksCount,
+	KindDevices:                  handleDevices,
+	KindDeviceStatusOverview:     handleDeviceStatusOverview,
+	KindDeviceAvailabilities:     handleDeviceAvailabilities,
+	KindDeviceAvailabilityCounts: handleDeviceAvailabilityCounts,
+	KindOrgProductTypes:          handleOrgProductTypes,
 	KindSensorReadingsLatest:  handleSensorReadingsLatest,
 	KindSensorReadingsHistory: handleSensorReadingsHistory,
 	KindSensorAlertSummary:    handleSensorAlertSummary,
@@ -188,6 +204,7 @@ var handlers = map[QueryKind]handlerFn{
 	KindSwitchPorts:              handleSwitchPorts,
 	KindSwitchPortConfig:         handleSwitchPortConfig,
 	KindSwitchPortPacketCounters: handleSwitchPortPacketCounters,
+	KindSwitchPortsOverview:      handleSwitchPortsOverview,
 
 	KindApplianceUplinkStatuses:  handleApplianceUplinkStatuses,
 	KindApplianceUplinksOverview: handleApplianceUplinksOverview,
@@ -209,19 +226,22 @@ var handlers = map[QueryKind]handlerFn{
 	KindTopSwitchesByEnergy:   handleTopSwitchesByEnergy,
 	KindTopNetworksByStatus:   handleTopNetworksByStatus,
 
-	KindCameraOnboarding:           handleCameraOnboarding,
-	KindCameraAnalyticsOverview:    handleCameraAnalyticsOverview,
-	KindCameraAnalyticsLive:        handleCameraAnalyticsLive,
-	KindCameraAnalyticsZones:       handleCameraAnalyticsZones,
-	KindCameraAnalyticsZoneHistory: handleCameraAnalyticsZoneHistory,
-	KindCameraRetentionProfiles:    handleCameraRetentionProfiles,
+	KindCameraOnboarding:        handleCameraOnboarding,
+	KindCameraBoundaryAreas:     handleCameraBoundaryAreas,
+	KindCameraBoundaryLines:     handleCameraBoundaryLines,
+	KindCameraDetectionsHistory: handleCameraDetectionsHistory,
+	KindCameraRetentionProfiles: handleCameraRetentionProfiles,
 
 	KindMgUplinks:        handleMgUplinks,
 	KindMgPortForwarding: handleMgPortForwarding,
 	KindMgLan:            handleMgLan,
 	KindMgConnectivity:   handleMgConnectivity,
 
-	KindNetworkEvents: handleNetworkEvents,
+	KindNetworkEvents:         handleNetworkEvents,
+	KindNetworkEventsTimeline: handleNetworkEventsTimeline,
+
+	KindConfigurationChanges:      handleConfigurationChanges,
+	KindDeviceAvailabilityChanges: handleDeviceAvailabilitiesChangeHistory,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

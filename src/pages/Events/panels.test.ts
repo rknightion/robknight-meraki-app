@@ -33,11 +33,11 @@ describe('Events panels', () => {
     expect(q.metrics).toEqual(['$eventType']);
   });
 
-  it('eventsTimelineBarChart is a bar chart backed by NetworkEvents', () => {
+  it('eventsTimelineBarChart is a bar chart backed by NetworkEventsTimeline', () => {
     const panel = eventsTimelineBarChart();
     expect(panel.state.pluginId).toBe('barchart');
     const q = firstQuery(panel);
-    expect(q.kind).toBe(QueryKind.NetworkEvents);
+    expect(q.kind).toBe(QueryKind.NetworkEventsTimeline);
     expect(q.productTypes).toEqual(['$productType']);
   });
 });

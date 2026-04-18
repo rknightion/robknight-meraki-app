@@ -6,6 +6,7 @@ import {
   VizPanel,
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
+import { deviceAvailabilityStat } from '../../scene-helpers/panels';
 import { QueryKind } from '../../datasource/types';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import type { MerakiProductType, SensorMetric } from '../../types';
@@ -84,95 +85,42 @@ function hideColumns(runner: SceneQueryRunner, columns: string[]): SceneDataTran
 // MX status KPI row ----------------------------------------------------------
 
 /**
- * Count-of-rows stat driven by the `DeviceAvailabilities` frame filtered to
- * `productTypes=['appliance']`. Mirrors the approach taken by the Access
- * Points KPI row — a client-side filterByValue+reduce chain is reliable for
- * the "count rows matching a single status value" case (todos.txt §G.20 only
- * called out the reducer quirks for mixed numeric reducers).
- */
-function availabilityStat(
-  title: string,
-  status: 'online' | 'alerting' | 'offline' | 'dormant',
-  thresholds: Array<{ value: number; color: string }>
-): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.DeviceAvailabilities,
-    productTypes: ['appliance'],
-  });
-
-  const builder = PanelBuilders.stat()
-    .setTitle(title)
-    .setData(
-      new SceneDataTransformer({
-        $data: runner,
-        transformations: [
-          {
-            id: 'filterByValue',
-            options: {
-              filters: [
-                {
-                  fieldName: 'status',
-                  config: { id: 'equal', options: { value: status } },
-                },
-              ],
-              type: 'include',
-              match: 'all',
-            },
-          },
-          {
-            id: 'reduce',
-            options: {
-              reducers: ['count'],
-              fields: 'serial',
-              mode: 'reduceFields',
-              includeTimeField: false,
-            },
-          },
-        ],
-      })
-    )
-    .setNoValue('0')
-    .setOption('reduceOptions', {
-      values: false,
-      calcs: ['lastNotNull'],
-      fields: '',
-    } as any)
-    .setOption('colorMode', 'value' as any);
-
-  if (thresholds.length > 0) {
-    builder
-      .setColor({ mode: FieldColorModeId.Thresholds })
-      .setThresholds({
-        mode: ThresholdsMode.Absolute,
-        steps: thresholds.map((t, i) => ({
-          value: i === 0 ? (null as unknown as number) : t.value,
-          color: t.color,
-        })),
-      });
-  }
-
-  return builder.build();
-}
-
-/**
  * KPI row for the Appliances overview: three stat panels with counts of
- * MX devices in each Meraki-reported status bucket. Consumers wrap each
- * panel in a `SceneCSSGridItem` to lay out a dense row.
+ * MX devices in each Meraki-reported status bucket. Backed by the
+ * server-side `DeviceAvailabilityCounts` aggregator (todos.txt §G.20) —
+ * previously a client-side `filterByValue+reduce` chain that broke under
+ * current Grafana versions with "undefined not found in fieldMatchers".
  */
 export function mxStatusKpiRow(): VizPanel[] {
+  const productTypes: MerakiProductType[] = ['appliance'];
   return [
-    availabilityStat('Appliances online', 'online', [
-      { value: 0, color: 'red' },
-      { value: 1, color: 'green' },
-    ]),
-    availabilityStat('Appliances alerting', 'alerting', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'orange' },
-    ]),
-    availabilityStat('Appliances offline', 'offline', [
-      { value: 0, color: 'green' },
-      { value: 1, color: 'red' },
-    ]),
+    deviceAvailabilityStat({
+      title: 'Appliances online',
+      fieldName: 'online',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'red' },
+        { value: 1, color: 'green' },
+      ],
+    }),
+    deviceAvailabilityStat({
+      title: 'Appliances alerting',
+      fieldName: 'alerting',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'orange' },
+      ],
+    }),
+    deviceAvailabilityStat({
+      title: 'Appliances offline',
+      fieldName: 'offline',
+      productTypes,
+      thresholds: [
+        { value: 0, color: 'green' },
+        { value: 1, color: 'red' },
+      ],
+    }),
   ];
 }
 
@@ -600,7 +548,8 @@ export function applianceOverviewKpiRow(serial: string): VizPanel[] {
       .setOption('reduceOptions', {
         values: false,
         calcs: ['lastNotNull'],
-        fields: '',
+        // String fields need the wildcard regex — `fields: ''` is numeric-only.
+        fields: '/.*/',
       } as any)
       .setOption('colorMode', 'none' as any)
       .build();
@@ -629,7 +578,7 @@ export function applianceOverviewKpiRow(serial: string): VizPanel[] {
     .setOption('reduceOptions', {
       values: false,
       calcs: ['lastNotNull'],
-      fields: '',
+      fields: '/.*/',
     } as any)
     .setOption('colorMode', 'background' as any)
     .setMappings([

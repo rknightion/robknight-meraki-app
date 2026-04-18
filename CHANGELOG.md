@@ -1,5 +1,82 @@
 # Changelog
 
+## 0.4.0 (Unreleased)
+
+API optimisation wave — closes out todos.txt §7. Spec-compliant User-Agent,
+two new query kinds for change-log / flap-history panels, an Audit Log scene,
+and four request-hygiene upgrades that cut Meraki round-trips under
+multi-panel dashboards and multi-replica Grafana.
+
+### Added
+
+- **Audit Log scene** (new top-level nav entry) — tabbed page under
+  `/audit-log` with a change-volume timeline and a full change-log table
+  sourced from `GET /organizations/{orgId}/configurationChanges`. Scene
+  variables `$org`, `$network`, `$admin` filter the feed server-side.
+- **Query kind `configurationChanges`** — handler emits a 9-column table
+  frame (ts, adminName, adminEmail, adminId, page, label, networkId,
+  oldValue, newValue). TTL 5 m; pagination via Link header.
+- **Query kind `deviceAvailabilityChanges`** — handler emits a 10-column
+  table frame with computed oldStatus/newStatus from the details envelope
+  and a `drilldownUrl` column per §1.12. Additive to
+  `deviceAvailabilities`; TTL 30 s. Surfaced on the Org detail Devices tab
+  as a companion table to the current-state inventory.
+- **Alerts drilldownUrl column** — `handleAlerts` now emits `drilldownUrl`
+  (computed from `Device.ProductType`). The top-level Alerts page and the
+  Home "Recent alerts" tile consume it via
+  `${__data.fields.drilldownUrl}`, so a table spanning MR/MS/MX/MV/MG/MT
+  routes each row to the right detail page.
+- **Opt-in per-IP rate limiter** (`enableIPLimiter` on the app config) —
+  100 rps / 200 burst, keyed on `"ip"`, acquired before the per-org
+  bucket. Off by default; useful only for multi-tenant deployments.
+- **Config field `enableIPLimiter`** on the Configuration page (full
+  variant).
+
+### Changed
+
+- **Sensor label mode → Device label mode.** The plugin-level `labelMode`
+  setting is now generalised across every device family. `handleDeviceUplinksLossLatency`
+  (MX) and the camera analytics handlers (`handleCameraAnalyticsOverview`,
+  `handleCameraAnalyticsZoneHistory`) now honour the setting alongside the
+  existing sensor / wireless handlers — `serial` mode skips the `/devices`
+  round-trip those handlers used to issue unconditionally. The wire key
+  (`jsonData.labelMode`) and enum values (`"serial"` / `"name"`) are
+  unchanged, so persisted settings load without migration. TypeScript type
+  renamed `SensorLabelMode` → `DeviceLabelMode`.
+- **User-Agent** bumped from `Grafana-Meraki-App` (non-compliant — hyphens)
+  to `GrafanaMerakiPlugin/<version> rknightion`, matching Meraki's
+  [User-Agent specification](https://developer.cisco.com/meraki/api-v1/user-agents-overview/).
+  Traffic from this plugin now attributes correctly in the Meraki API
+  Analytics dashboard. Version lives in a new `pkg/meraki/version.go` —
+  bump alongside `package.json` + CHANGELOG on every release.
+- **`TTLCache`** rewritten with per-org partitions (512 entries each, up
+  from a shared 2048 global pool), TTL jitter (±10 % by default so
+  replicas don't expire in lock-step), stale-while-revalidate (per-entry
+  stale grace — `Client` auto-derives as TTL/2 capped at 30 m, matching
+  the §7.4-C proposals), and negative-404 caching (60 s default;
+  401/403/5xx/412 deliberately NOT cached).
+- **`Client.Get` / `Client.GetAll`** wrapped in `singleflight.Group` keyed
+  on the cache key — N concurrent panels requesting the same endpoint
+  collapse to 1 HTTP round-trip. Stale cache hits serve the stale value
+  immediately while an async refresh runs on a detached
+  context.Background with a 30 s / 60 s ceiling.
+
+### Internal
+
+- `golang.org/x/sync` promoted from indirect to direct dep.
+- New files: `pkg/meraki/version.go`,
+  `pkg/meraki/configuration_changes.go`,
+  `pkg/plugin/query/configuration_changes.go`,
+  `pkg/plugin/query/availabilities_change_history.go`,
+  `pkg/meraki/client_test.go` (singleflight / SWR / negative-404 / UA
+  tests), `src/pages/AuditLog/*` (6 files).
+- Cache tests expanded: 5 new cases covering SWR, negative cache, org
+  partitioning, TTL jitter, backward-compat shim.
+- Two new `KnownEndpointRanges` entries (`configurationChanges` 365 d,
+  `devices/availabilities/changeHistory` 31 d).
+- Jest suites: 12 (up from 11). Go test packages: 3 (unchanged), 55 total
+  tests (up from ~42).
+
 ## 0.3.0 (Unreleased)
 
 Closes the remaining device families and adds organization-level lifecycle

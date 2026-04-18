@@ -37,13 +37,54 @@ func handleSwitchPorts(ctx context.Context, client *meraki.Client, q MerakiQuery
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("switchPorts: orgId is required")
 	}
-	opts := meraki.SwitchPortStatusOptions{
-		NetworkIDs: q.NetworkIDs,
-		Serials:    q.Serials,
-	}
+	// NOTE: we intentionally DON'T forward q.Serials / q.NetworkIDs to the
+	// Meraki API — pushing them server-side shards the cache key per serial,
+	// so every per-switch detail panel pays a fresh round-trip. Fetching the
+	// whole-fleet payload once and filtering client-side lets the detail page
+	// reuse the fleet query's cache entry. The `bySwitch` endpoint also has
+	// historically inconsistent behaviour when mixing `serials` filters with
+	// pagination (empty results despite valid serials), so filtering
+	// client-side sidesteps that too.
+	opts := meraki.SwitchPortStatusOptions{}
 	switches, err := client.GetOrganizationSwitchPortStatuses(ctx, q.OrgID, opts, switchPortsTTL)
 	if err != nil {
 		return nil, err
+	}
+
+	var serialFilter map[string]struct{}
+	if len(q.Serials) > 0 {
+		serialFilter = make(map[string]struct{}, len(q.Serials))
+		for _, s := range q.Serials {
+			if s != "" {
+				serialFilter[s] = struct{}{}
+			}
+		}
+	}
+	var networkFilter map[string]struct{}
+	if len(q.NetworkIDs) > 0 {
+		networkFilter = make(map[string]struct{}, len(q.NetworkIDs))
+		for _, n := range q.NetworkIDs {
+			if n != "" {
+				networkFilter[n] = struct{}{}
+			}
+		}
+	}
+	if serialFilter != nil || networkFilter != nil {
+		filtered := switches[:0:0]
+		for _, sw := range switches {
+			if serialFilter != nil {
+				if _, ok := serialFilter[sw.Serial]; !ok {
+					continue
+				}
+			}
+			if networkFilter != nil {
+				if _, ok := networkFilter[sw.Network.ID]; !ok {
+					continue
+				}
+			}
+			filtered = append(filtered, sw)
+		}
+		switches = filtered
 	}
 
 	var (
@@ -109,9 +150,18 @@ func handleSwitchPorts(ctx context.Context, client *meraki.Client, q MerakiQuery
 // specifies multiple serials we loop — the underlying endpoint is per-device.
 // Failures on one serial abort the whole query (matching the one-frame
 // contract); a future optimisation could emit per-serial notices instead.
+//
+// Optional port filter via `q.Metrics[0]`: when set, the handler drops every
+// row whose `portId` doesn't match. Keeps the per-port drilldown panel off
+// the fragile client-side `filterByValue` transform chain (todos.txt §G.20).
 func handleSwitchPortConfig(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if len(q.Serials) == 0 {
 		return nil, fmt.Errorf("switchPortConfig: at least one serial is required")
+	}
+
+	var portFilter string
+	if len(q.Metrics) > 0 {
+		portFilter = q.Metrics[0]
 	}
 
 	var (
@@ -133,6 +183,9 @@ func handleSwitchPortConfig(ctx context.Context, client *meraki.Client, q Meraki
 			return nil, fmt.Errorf("switchPortConfig: %s: %w", serial, err)
 		}
 		for _, p := range ports {
+			if portFilter != "" && p.PortID != portFilter {
+				continue
+			}
 			serials = append(serials, serial)
 			portIDs = append(portIDs, p.PortID)
 			names = append(names, p.Name)

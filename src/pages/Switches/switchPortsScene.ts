@@ -7,6 +7,7 @@ import {
   SceneTimePicker,
   SceneTimeRange,
 } from '@grafana/scenes';
+import { orgOnlyVariables } from '../../scene-helpers/variables';
 import { switchPortMap } from './panels';
 
 /**
@@ -17,6 +18,10 @@ import { switchPortMap } from './panels';
 export function switchPortsScene(serial: string): EmbeddedScene {
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
+    // Declare `$org` so the scene hydrates from the `var-org` query-param
+    // carried by the drilldown link. Without this the panels ship
+    // `orgId: '$org'` literally and the backend 400s.
+    $variables: orgOnlyVariables(),
     controls: [
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),

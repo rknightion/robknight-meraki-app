@@ -2,6 +2,7 @@ import { SceneAppPage } from '@grafana/scenes';
 import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
 import { appliancesScene } from './appliancesScene';
 import { applianceDetailPage } from './applianceDetailPage';
+import { familyGateWrap } from '../../scene-helpers/familyGate';
 
 /**
  * Top-level Appliances page — mounted at `/a/<plugin>/appliances`. Hosts
@@ -14,7 +15,7 @@ export const appliancesPage = new SceneAppPage({
     'Security appliances (MX) — uplinks, VPN peers, and firewall summary.',
   url: `${PLUGIN_BASE_URL}/${ROUTES.Appliances}`,
   routePath: `${ROUTES.Appliances}/*`,
-  getScene: () => appliancesScene(),
+  getScene: familyGateWrap('appliance', () => appliancesScene()),
   drilldowns: [
     {
       routePath: ':serial/*',

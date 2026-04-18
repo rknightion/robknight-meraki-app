@@ -91,6 +91,10 @@ type cameraAnalyticsKey struct {
 // "person" but may be overridden via q.Metrics[0] ∈ {"person","vehicle"} —
 // this is the same pattern the alerts handler uses to smuggle a scalar filter
 // through the generic MerakiQuery shape (§G.18).
+//
+// LabelMode: when opts.LabelMode == "name", DisplayNameFromDS resolves to
+// "<camera name> / zone <zoneId>" via the cached /devices feed; otherwise we
+// use the raw serial and skip the /devices fetch entirely.
 func handleCameraAnalyticsOverview(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
 	if len(q.Serials) == 0 {
 		return nil, fmt.Errorf("cameraAnalyticsOverview: at least one serial is required")
@@ -116,10 +120,11 @@ func handleCameraAnalyticsOverview(ctx context.Context, client *meraki.Client, q
 		objectType = q.Metrics[0]
 	}
 
-	// Name lookup is tolerant — a failed /devices call falls back to using
+	// Name lookup is gated on LabelMode so users who prefer raw serials don't
+	// pay the /devices round-trip. A failed /devices call falls back to using
 	// raw serials in the display name.
 	var nameBySerial map[string]string
-	if q.OrgID != "" {
+	if opts.LabelMode == "name" && q.OrgID != "" {
 		if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "camera"); lookupErr == nil {
 			nameBySerial = names
 		}
@@ -365,16 +370,17 @@ func handleCameraAnalyticsZoneHistory(ctx context.Context, client *meraki.Client
 	}
 	sortByTime(ts, values)
 
-	// Optional name lookup for the legend — failure is non-fatal.
+	// Optional name lookup for the legend, gated on LabelMode so users who
+	// prefer raw serials don't pay the /devices round-trip. Failure is
+	// non-fatal — we fall back to the raw serial.
 	displayName := serial
-	if q.OrgID != "" {
+	if opts.LabelMode == "name" && q.OrgID != "" {
 		if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "camera"); lookupErr == nil {
 			if name := names[serial]; name != "" {
 				displayName = name
 			}
 		}
 	}
-	_ = opts // PluginPathPrefix irrelevant — this frame is a single series.
 	displayName = fmt.Sprintf("%s / zone %s", displayName, zoneID)
 
 	labels := data.Labels{

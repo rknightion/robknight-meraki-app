@@ -14,6 +14,7 @@ import {
   sensorDetailLatestReadings,
   sensorDetailMetricPanel,
 } from '../../scene-helpers/panels';
+import { orgOnlyVariables } from '../../scene-helpers/variables';
 import { SensorMetadata } from './SensorMetadata';
 import { HideWhenEmpty } from './behaviors';
 
@@ -34,6 +35,7 @@ export function sensorDetailScene(serial: string) {
 
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-24h', to: 'now' }),
+    $variables: orgOnlyVariables(),
     controls: [
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),

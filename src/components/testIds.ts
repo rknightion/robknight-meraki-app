@@ -6,6 +6,8 @@ export const testIds = {
     baseUrl: 'data-testid ac-base-url',
     sharedFraction: 'data-testid ac-shared-fraction',
     labelMode: 'data-testid ac-label-mode',
+    enableIPLimiter: 'data-testid ac-enable-ip-limiter',
+    showEmptyFamilies: 'data-testid ac-show-empty-families',
     submit: 'data-testid ac-submit',
     testConnection: 'data-testid ac-test-connection',
     connectionResult: 'data-testid ac-connection-result',

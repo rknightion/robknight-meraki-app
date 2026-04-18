@@ -13,13 +13,12 @@ import {
 import { HomeIntro } from './HomeIntro';
 import { orgVariable } from '../../scene-helpers/variables';
 import {
-  makeStatPanel,
   orgDeviceStatusDonut,
   orgInventoryTable,
+  organizationsCountStat,
 } from '../../scene-helpers/panels';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import { recentAlertsTile } from '../Alerts/panels';
-import { QueryKind } from '../../datasource/types';
 
 export function homeScene() {
   return new EmbeddedScene({
@@ -44,7 +43,7 @@ export function homeScene() {
           children: [
             new SceneFlexItem({
               height: 200,
-              body: makeStatPanel('Organizations', QueryKind.Organizations),
+              body: organizationsCountStat(),
             }),
             new SceneFlexItem({
               height: 200,

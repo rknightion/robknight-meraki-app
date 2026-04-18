@@ -9,6 +9,7 @@ import {
   SceneTimePicker,
   SceneTimeRange,
 } from '@grafana/scenes';
+import { orgOnlyVariables } from '../../scene-helpers/variables';
 import { switchOverviewKpiRow } from './panels';
 
 /**
@@ -23,6 +24,11 @@ export function switchOverviewScene(serial: string): EmbeddedScene {
 
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
+    // Drilldowns inherit their `$org` value via the var-org query param,
+    // but the scene must *declare* the variable for the URL value to
+    // hydrate — without this the panels ship `orgId: '$org'` literally and
+    // Meraki requests short-circuit with "orgId is required".
+    $variables: orgOnlyVariables(),
     controls: [
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),

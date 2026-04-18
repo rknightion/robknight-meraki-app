@@ -28,12 +28,12 @@ const alertsTTL = 30 * time.Second
 // `severity` once wired. The choice of q.Metrics[0] (rather than the whole
 // slice) is deliberate — the Meraki API accepts a single severity value per
 // request, not a repeated filter.
-func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("alerts: orgId is required")
 	}
 
-	opts := meraki.AlertsOptions{
+	reqOpts := meraki.AlertsOptions{
 		Severity:  firstNonEmpty(q.Metrics),
 		Serials:   q.Serials,
 		SortOrder: "descending",
@@ -43,39 +43,54 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 	// the MerakiQuery wire shape consistent with other kinds (e.g. sensor
 	// history) that do support the full slice.
 	if len(q.NetworkIDs) > 0 {
-		opts.NetworkID = q.NetworkIDs[0]
+		reqOpts.NetworkID = q.NetworkIDs[0]
 	}
-	// Default active=true so the UI surfaces open alerts by default. When the
-	// user explicitly wants dismissed/resolved alerts the frontend can set
-	// the relevant boolean on the MerakiQuery (future: add explicit fields).
-	active := true
-	opts.Active = &active
+	// Status filter — sentinel read from q.Metrics[1] so the alerts table can
+	// include resolved + dismissed rows without adding a new field to the
+	// MerakiQuery wire shape. Values: "active" | "resolved" | "dismissed" |
+	// "all" (default). Empty / unknown sentinels fall through to "all" so
+	// operators see every alert in the window, matching the Meraki dashboard.
+	if statusSentinel := alertsStatusSentinel(q.Metrics); statusSentinel != "all" {
+		switch statusSentinel {
+		case "active":
+			t := true
+			reqOpts.Active = &t
+		case "resolved":
+			t := true
+			reqOpts.Resolved = &t
+		case "dismissed":
+			t := true
+			reqOpts.Dismissed = &t
+		}
+	}
 
 	if from := toRFCTime(tr.From); !from.IsZero() {
-		opts.TSStart = &from
+		reqOpts.TSStart = &from
 	}
 	if to := toRFCTime(tr.To); !to.IsZero() {
-		opts.TSEnd = &to
+		reqOpts.TSEnd = &to
 	}
 
-	alerts, err := client.GetOrganizationAssuranceAlerts(ctx, q.OrgID, opts, alertsTTL)
+	alerts, err := client.GetOrganizationAssuranceAlerts(ctx, q.OrgID, reqOpts, alertsTTL)
 	if err != nil {
 		return nil, err
 	}
 
 	var (
-		occurred     []time.Time
-		severity     []string
-		category     []string
-		alertType    []string
-		networkID    []string
-		networkName  []string
-		deviceSerial []string
-		deviceName   []string
-		titles       []string
-		descriptions []string
-		resolved     []bool
-		dismissed    []bool
+		occurred      []time.Time
+		severity      []string
+		category      []string
+		alertType     []string
+		networkID     []string
+		networkName   []string
+		deviceSerial  []string
+		deviceName    []string
+		deviceProduct []string
+		titles        []string
+		descriptions  []string
+		resolved      []bool
+		dismissed     []bool
+		drilldown     []string
 	)
 	for _, a := range alerts {
 		// Prefer startedAt for timeline purposes — falling back through
@@ -104,18 +119,26 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 		networkID = append(networkID, nID)
 		networkName = append(networkName, nName)
 
-		var dSerial, dName string
+		var dSerial, dName, dProduct string
 		if a.Device != nil {
 			dSerial = a.Device.Serial
 			dName = a.Device.Name
+			dProduct = a.Device.ProductType
 		}
 		deviceSerial = append(deviceSerial, dSerial)
 		deviceName = append(deviceName, dName)
+		deviceProduct = append(deviceProduct, dProduct)
 
 		titles = append(titles, a.Title)
 		descriptions = append(descriptions, a.Description)
 		resolved = append(resolved, a.ResolvedAt != nil && !a.ResolvedAt.IsZero())
 		dismissed = append(dismissed, a.DismissedAt != nil && !a.DismissedAt.IsZero())
+		// Cross-family drilldown (§1.12): compute per-row based on the device's
+		// productType so a single alerts table that spans MR/MS/MX/MV/MG/MT still
+		// routes each row to the right detail page. Network-wide alerts with no
+		// device attached get the empty-string URL which the viz renders as an
+		// inactive link.
+		drilldown = append(drilldown, deviceDrilldownURL(opts.PluginPathPrefix, dProduct, dSerial))
 	}
 
 	return []*data.Frame{
@@ -128,10 +151,12 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 			data.NewField("network_name", nil, networkName),
 			data.NewField("device_serial", nil, deviceSerial),
 			data.NewField("device_name", nil, deviceName),
+			data.NewField("device_productType", nil, deviceProduct),
 			data.NewField("title", nil, titles),
 			data.NewField("description", nil, descriptions),
 			data.NewField("resolved", nil, resolved),
 			data.NewField("dismissed", nil, dismissed),
+			data.NewField("drilldownUrl", nil, drilldown),
 		),
 	}, nil
 }
@@ -158,10 +183,21 @@ func handleAlertsOverview(ctx context.Context, client *meraki.Client, q MerakiQu
 		opts.NetworkID = q.NetworkIDs[0]
 	}
 	opts.Serials = q.Serials
-	// Follow the same active-only default as handleAlerts so the KPI tiles
-	// match the list the user is looking at.
-	active := true
-	opts.Active = &active
+	// Status sentinel matches handleAlerts — default "all" so KPIs reflect
+	// the full feed rather than silently hiding resolved / dismissed rows.
+	if statusSentinel := alertsStatusSentinel(q.Metrics); statusSentinel != "all" {
+		switch statusSentinel {
+		case "active":
+			t := true
+			opts.Active = &t
+		case "resolved":
+			t := true
+			opts.Resolved = &t
+		case "dismissed":
+			t := true
+			opts.Dismissed = &t
+		}
+	}
 	if from := toRFCTime(tr.From); !from.IsZero() {
 		opts.TSStart = &from
 	}
@@ -225,4 +261,20 @@ func firstNonEmpty(ss []string) string {
 		}
 	}
 	return ""
+}
+
+// alertsStatusSentinel picks the alerts status filter out of q.Metrics[1:].
+// q.Metrics[0] is the severity; q.Metrics[1] (when present) is one of
+// "active" | "resolved" | "dismissed" | "all". Default is "all" so the feed
+// matches the Meraki dashboard's default view — operators saw resolved /
+// dismissed rows missing when the backend hard-coded active=true.
+func alertsStatusSentinel(metrics []string) string {
+	if len(metrics) < 2 {
+		return "all"
+	}
+	switch strings.ToLower(metrics[1]) {
+	case "active", "resolved", "dismissed":
+		return strings.ToLower(metrics[1])
+	}
+	return "all"
 }

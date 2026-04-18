@@ -9,6 +9,7 @@ import {
   SceneTimePicker,
   SceneTimeRange,
 } from '@grafana/scenes';
+import { orgOnlyVariables } from '../../scene-helpers/variables';
 import { mgSignalGauge, mgUplinkTable } from './panels';
 
 /**
@@ -25,6 +26,7 @@ export function cellularUplinkScene(serial: string): EmbeddedScene {
 
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
+    $variables: orgOnlyVariables(),
     controls: [
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),
