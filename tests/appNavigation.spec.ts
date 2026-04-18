@@ -61,4 +61,13 @@ test.describe('Meraki app navigation', () => {
     await gotoPage(`/${ROUTES.Events}`);
     await expect(page.getByRole('heading', { name: 'Events' })).toBeVisible();
   });
+
+  test('Firmware page renders heading + tables', async ({ gotoPage, page }) => {
+    await gotoPage(`/${ROUTES.Firmware}`);
+    await expect(page.getByRole('heading', { name: 'Firmware & Lifecycle' })).toBeVisible();
+    // The KPI row + tables — at least one panel title from the bottom rows
+    // should be visible once the scene mounts. We don't assert on data
+    // because the backend may not be configured in the test stack.
+    await expect(page.getByText(/Pending upgrades|End-of-life devices/)).toBeVisible();
+  });
 });

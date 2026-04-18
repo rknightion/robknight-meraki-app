@@ -16,6 +16,7 @@ export enum ROUTES {
   Events = 'events',
   Alerts = 'alerts',
   AuditLog = 'audit-log',
+  Firmware = 'firmware',
   Configuration = 'configuration',
 }
 

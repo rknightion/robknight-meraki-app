@@ -8,6 +8,7 @@ top-level pages.
 
 ### Added
 
+- New Firmware & Lifecycle page: pending upgrades, schedule window, EOL/EOS tracking (v0.5 §4.4.4-B).
 - **Cross-cutting panels — v0.5 §4.4.3-1f.**
   - New `orgChangeFeed` query kind: server-side union of
     `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the
