@@ -159,6 +159,19 @@ export enum QueryKind {
   ClientsList = 'clientsList',
   ClientLookup = 'clientLookup',
   ClientSessions = 'clientSessions',
+
+  /* §4.4.4-B — Firmware & Lifecycle page.
+   *  - FirmwareUpgrades: org-wide past + scheduled upgrade events table.
+   *  - FirmwarePending:  per-device pending/in-progress upgrades
+   *                      (currentUpgradesOnly=true; MS+MR only per Meraki's
+   *                      documented limitation as of 2026-04).
+   *  - DeviceEol:        inventory devices with EOX status sourced from
+   *                      /inventory/devices?eoxStatuses[]=. Defaults to all
+   *                      three buckets (endOfSale, endOfSupport,
+   *                      nearEndOfSupport) when q.metrics is empty. */
+  FirmwareUpgrades = 'firmwareUpgrades',
+  FirmwarePending = 'firmwarePending',
+  DeviceEol = 'deviceEol',
 }
 
 export interface MerakiQuery extends DataQuery {

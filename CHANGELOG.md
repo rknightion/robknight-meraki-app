@@ -16,6 +16,12 @@ top-level pages.
   partial-match support. Per-client latency history sourced from
   `/networks/{id}/wireless/clients/{id}/latencyHistory` (wireless-only;
   wired clients render an empty series).
+- **New Firmware & Lifecycle page** — pending upgrades, schedule window,
+  EOL/EOS tracking (v0.5 §4.4.4-B). Adds three new query kinds
+  (`firmwareUpgrades`, `firmwarePending`, `deviceEol`). EOL data sourced
+  from Meraki's native `/organizations/{id}/inventory/devices` with
+  `eoxStatuses[]` filter — no hand-maintained table. `firmwarePending` is
+  MS+MR only per Meraki's documented endpoint limitation.
 - **Cross-cutting panels — v0.5 §4.4.3-1f.**
   - New `orgChangeFeed` query kind: server-side union of
     `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the

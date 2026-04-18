@@ -110,6 +110,13 @@
     },
     {
       "type": "page",
+      "name": "Firmware & Lifecycle",
+      "path": "/a/%PLUGIN_ID%/firmware",
+      "addToNav": true,
+      "icon": "rocket"
+    },
+    {
+      "type": "page",
       "name": "Configuration",
       "path": "/a/%PLUGIN_ID%/configuration",
       "addToNav": true,

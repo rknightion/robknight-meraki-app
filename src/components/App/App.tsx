@@ -15,6 +15,7 @@ import { eventsPage } from '../../pages/Events/eventsPage';
 import { alertsPage } from '../../pages/Alerts/alertsPage';
 import { auditLogPage } from '../../pages/AuditLog/auditLogPage';
 import { clientsPage } from '../../pages/Clients/clientsPage';
+import { firmwarePage } from '../../pages/Firmware/firmwarePage';
 import { configurationPage } from '../../pages/Configuration/configurationPage';
 
 /**
@@ -40,6 +41,7 @@ function allPages(): SceneAppPageLike[] {
     alertsPage,
     auditLogPage,
     clientsPage,
+    firmwarePage,
     configurationPage,
   ];
 }

@@ -177,6 +177,19 @@ const (
 	KindClientsList    QueryKind = "clientsList"
 	KindClientLookup   QueryKind = "clientLookup"
 	KindClientSessions QueryKind = "clientSessions"
+
+	// §4.4.4-B — Firmware & Lifecycle page. Three new kinds:
+	//   - firmwareUpgrades: org-wide past + scheduled upgrade events.
+	//   - firmwarePending:  per-device pending/in-progress upgrades
+	//                       (currentUpgradesOnly=true; MS+MR only per
+	//                       Meraki's documented limitation as of 2026-04).
+	//   - deviceEol:        inventory devices with EOX status (sourced from
+	//                       /inventory/devices?eoxStatuses[]= — Meraki
+	//                       exposes EOL data via the API; no hand-maintained
+	//                       table required).
+	KindFirmwareUpgrades QueryKind = "firmwareUpgrades"
+	KindFirmwarePending  QueryKind = "firmwarePending"
+	KindDeviceEol        QueryKind = "deviceEol"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -372,6 +385,11 @@ var handlers = map[QueryKind]handlerFn{
 	KindClientsList:    handleClientsList,
 	KindClientLookup:   handleClientLookup,
 	KindClientSessions: handleClientSessions,
+
+	// §4.4.4-B — Firmware & Lifecycle page.
+	KindFirmwareUpgrades: handleFirmwareUpgrades,
+	KindFirmwarePending:  handleFirmwarePending,
+	KindDeviceEol:        handleDeviceEol,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and
