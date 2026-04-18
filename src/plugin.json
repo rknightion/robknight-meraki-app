@@ -147,5 +147,14 @@
         "name": "Cisco Meraki"
       }
     ]
+  },
+  "iam": {
+    "permissions": [
+      { "action": "folders:read",   "scope": "folders:*" },
+      { "action": "folders:create" },
+      { "action": "folders:write",  "scope": "folders:uid:*" },
+      { "action": "alert.provisioning:read" },
+      { "action": "alert.provisioning:write" }
+    ]
   }
 }
