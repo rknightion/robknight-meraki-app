@@ -3,8 +3,10 @@ package meraki
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -216,4 +218,172 @@ func (c *Client) GetOrganizationAssuranceAlertsOverviewByType(ctx context.Contex
 		return nil, err
 	}
 	return &out, nil
+}
+
+// ---------------------------------------------------------------------------
+// §3.4 — Alerts overview byNetwork + historical
+// ---------------------------------------------------------------------------
+
+// AlertsOverviewByNetwork is one row from
+// GET /organizations/{organizationId}/assurance/alerts/overview/byNetwork.
+//
+// Response shape (verified 2026-04-18):
+//
+//	{"items":[{"networkId":"N_…","networkName":"…","alertCount":N,"severityCounts":[{"type":"warning","count":N},...]}],"meta":{…}}
+type AlertsOverviewByNetwork struct {
+	NetworkID     string
+	NetworkName   string
+	Critical      int64
+	Warning       int64
+	Informational int64
+	Total         int64
+}
+
+// alertsOverviewByNetworkResponse is the on-wire envelope.
+type alertsOverviewByNetworkResponse struct {
+	Items []alertsOverviewByNetworkItem `json:"items"`
+}
+
+type alertsOverviewByNetworkItem struct {
+	NetworkID      string                `json:"networkId"`
+	NetworkName    string                `json:"networkName"`
+	AlertCount     int64                 `json:"alertCount"`
+	SeverityCounts []AlertsSeverityCount `json:"severityCounts"`
+}
+
+// GetOrganizationAssuranceAlertsOverviewByNetwork returns a per-network alert
+// summary. Paginated via Link header.
+func (c *Client) GetOrganizationAssuranceAlertsOverviewByNetwork(ctx context.Context, orgID string, opts AlertsOptions, ttl time.Duration) ([]AlertsOverviewByNetwork, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/assurance/alerts/overview/byNetwork", Message: "missing organization id"}}
+	}
+	params := opts.overviewValues()
+	params.Set("perPage", "300")
+
+	var allItems []alertsOverviewByNetworkItem
+	path := "organizations/" + url.PathEscape(orgID) + "/assurance/alerts/overview/byNetwork"
+	for pageNum := 0; pageNum < MaxPages; pageNum++ {
+		var pageParams url.Values
+		if pageNum == 0 {
+			pageParams = params
+		}
+		body, hdr, err := c.Do(ctx, "GET", path, orgID, pageParams, nil)
+		if err != nil {
+			return nil, err
+		}
+		var pageResp alertsOverviewByNetworkResponse
+		if err := json.Unmarshal(body, &pageResp); err != nil {
+			return nil, fmt.Errorf("meraki: decode alerts overview byNetwork: %w", err)
+		}
+		allItems = append(allItems, pageResp.Items...)
+		next := nextLink(hdr)
+		if next == "" {
+			break
+		}
+		path = next
+	}
+
+	out := make([]AlertsOverviewByNetwork, 0, len(allItems))
+	for _, item := range allItems {
+		row := AlertsOverviewByNetwork{
+			NetworkID:   item.NetworkID,
+			NetworkName: item.NetworkName,
+			Total:       item.AlertCount,
+		}
+		for _, sc := range item.SeverityCounts {
+			switch strings.ToLower(sc.Type) {
+			case "critical":
+				row.Critical += sc.Count
+			case "warning":
+				row.Warning += sc.Count
+			case "informational", "info":
+				row.Informational += sc.Count
+			}
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// AlertsOverviewHistoricalPoint is one segment from
+// GET /organizations/{organizationId}/assurance/alerts/overview/historical.
+//
+// Response shape (verified 2026-04-18):
+//
+//	{"items":[{"segmentStart":"2022-04-01T15:00:00Z","totals":{"critical":N,"warning":N,"informational":N},"byAlertType":[...]}],"meta":{…}}
+type AlertsOverviewHistoricalPoint struct {
+	StartTs    time.Time
+	TotalCount int64
+	BySeverity map[string]int64
+}
+
+// AlertsOverviewHistoricalOptions filters the historical call.
+type AlertsOverviewHistoricalOptions struct {
+	NetworkID string
+	Serial    string
+	Window    *TimeRangeWindow
+	Segment   time.Duration // maps to segmentDuration query param (seconds)
+}
+
+func (o AlertsOverviewHistoricalOptions) values() url.Values {
+	v := url.Values{}
+	if o.NetworkID != "" {
+		v.Set("networkId", o.NetworkID)
+	}
+	if o.Serial != "" {
+		v.Set("serial", o.Serial)
+	}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+	}
+	if o.Segment > 0 {
+		v.Set("segmentDuration", strconv.Itoa(int(o.Segment.Seconds())))
+	}
+	return v
+}
+
+// alertsOverviewHistoricalResponse is the on-wire envelope.
+type alertsOverviewHistoricalResponse struct {
+	Items []alertsOverviewHistoricalItem `json:"items"`
+}
+
+type alertsOverviewHistoricalItem struct {
+	SegmentStart string                         `json:"segmentStart"`
+	Totals       alertsOverviewHistoricalTotals `json:"totals"`
+}
+
+type alertsOverviewHistoricalTotals struct {
+	Critical      int64 `json:"critical"`
+	Warning       int64 `json:"warning"`
+	Informational int64 `json:"informational"`
+}
+
+// GetOrganizationAssuranceAlertsOverviewHistorical returns time-bucketed
+// severity counts. Not paginated per the spec — single GET.
+func (c *Client) GetOrganizationAssuranceAlertsOverviewHistorical(ctx context.Context, orgID string, opts AlertsOverviewHistoricalOptions, ttl time.Duration) ([]AlertsOverviewHistoricalPoint, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/assurance/alerts/overview/historical", Message: "missing organization id"}}
+	}
+	var raw alertsOverviewHistoricalResponse
+	if err := c.Get(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/assurance/alerts/overview/historical",
+		orgID, opts.values(), ttl, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]AlertsOverviewHistoricalPoint, 0, len(raw.Items))
+	for _, item := range raw.Items {
+		ts, _ := time.Parse(time.RFC3339, item.SegmentStart)
+		totalCount := item.Totals.Critical + item.Totals.Warning + item.Totals.Informational
+		out = append(out, AlertsOverviewHistoricalPoint{
+			StartTs:    ts,
+			TotalCount: totalCount,
+			BySeverity: map[string]int64{
+				"critical":      item.Totals.Critical,
+				"warning":       item.Totals.Warning,
+				"informational": item.Totals.Informational,
+			},
+		})
+	}
+	return out, nil
 }

@@ -15,6 +15,8 @@ import { orgVariable } from '../../scene-helpers/variables';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import {
   alertsKpiRow,
+  alertsByNetworkTable,
+  alertsHistoricalTimeseries,
   alertsTable,
   alertsTimelineBarChart,
 } from './panels';
@@ -67,6 +69,15 @@ export function alertsScene(): EmbeddedScene {
         new SceneFlexItem({
           height: 260,
           body: alertsTimelineBarChart(),
+        }),
+        // §3.4 — Historical severity trend and by-network breakdown.
+        new SceneFlexItem({
+          height: 260,
+          body: alertsHistoricalTimeseries(),
+        }),
+        new SceneFlexItem({
+          height: 320,
+          body: alertsByNetworkTable(),
         }),
         new SceneFlexItem({
           minHeight: 420,
