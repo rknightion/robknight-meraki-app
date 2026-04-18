@@ -95,4 +95,9 @@ test.describe('Meraki app navigation', () => {
       page.getByLabel('Device type').or(page.getByText('Device type'))
     ).toBeVisible();
   });
+
+  test('Topology page renders the geomap row', async ({ gotoPage, page }) => {
+    await gotoPage(`/${ROUTES.Topology}`);
+    await expect(page.getByRole('heading', { name: 'Topology' })).toBeVisible();
+  });
 });

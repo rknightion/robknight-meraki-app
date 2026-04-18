@@ -203,6 +203,14 @@ const (
 	KindTopApplicationsByUsage          QueryKind = "topApplicationsByUsage"
 	KindTopApplicationCategoriesByUsage QueryKind = "topApplicationCategoriesByUsage"
 	KindNetworkTrafficAnalysisMode      QueryKind = "networkTrafficAnalysisMode"
+
+	// §4.4.4-D — Topology / Network Map page. networkGeo aggregates per-
+	// network centroid lat/lng (derived from device coordinates because the
+	// Meraki networks endpoint does not carry geo). deviceLldpCdp emits the
+	// two-frame Grafana Node Graph contract (nodes + edges) for the per-
+	// network device link graph; org-wide fan-out is intentionally disabled.
+	KindNetworkGeo    QueryKind = "networkGeo"
+	KindDeviceLldpCdp QueryKind = "deviceLldpCdp"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -409,6 +417,10 @@ var handlers = map[QueryKind]handlerFn{
 	KindTopApplicationsByUsage:          handleTopApplicationsByUsage,
 	KindTopApplicationCategoriesByUsage: handleTopApplicationCategoriesByUsage,
 	KindNetworkTrafficAnalysisMode:      handleNetworkTrafficAnalysisMode,
+
+	// §4.4.4-D — Topology page.
+	KindNetworkGeo:    handleNetworkGeo,
+	KindDeviceLldpCdp: handleDeviceLldpCdp,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

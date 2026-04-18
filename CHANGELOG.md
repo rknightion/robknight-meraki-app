@@ -30,6 +30,14 @@ top-level pages.
   renders an "enable traffic analysis in Meraki" banner when any is in
   `disabled` mode. `/networks/{id}/traffic` capped at 30 days in
   `KnownEndpointRanges` per Meraki spec.
+- **New Topology page** — network geomap + per-network device link graph
+  via LLDP/CDP (v0.5 §4.4.4-D). Adds two new query kinds (`networkGeo`,
+  `deviceLldpCdp`). Per-network centroid coordinates derived from device
+  lat/lng because `GET /organizations/{id}/networks` does not expose geo
+  directly. Link-graph fan-out is per-network only (org-wide disabled) to
+  respect the §4.4.1-g LLDP/CDP exception rule and avoid blowing the rate
+  budget on large orgs. Emits the two-frame Grafana Node Graph contract
+  (nodes + edges).
 - **Cross-cutting panels — v0.5 §4.4.3-1f.**
   - New `orgChangeFeed` query kind: server-side union of
     `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the

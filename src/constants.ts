@@ -18,6 +18,8 @@ export enum ROUTES {
   // §4.4.4-C — Traffic Analytics page (L7 application + category breakdown
   // with per-network traffic-analysis guard banner).
   Traffic = 'traffic',
+  // §4.4.4-D — Topology page (network geomap + per-network LLDP/CDP link graph).
+  Topology = 'topology',
   AuditLog = 'audit-log',
   Clients = 'clients',
   Firmware = 'firmware',

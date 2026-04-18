@@ -184,6 +184,14 @@ export enum QueryKind {
   TopApplicationsByUsage = 'topApplicationsByUsage',
   TopApplicationCategoriesByUsage = 'topApplicationCategoriesByUsage',
   NetworkTrafficAnalysisMode = 'networkTrafficAnalysisMode',
+
+  /* §4.4.4-D — Topology page. networkGeo aggregates per-network centroid
+   * coordinates (derived from device lat/lng because Meraki's networks
+   * endpoint does not carry coordinates). deviceLldpCdp emits the two-
+   * frame Grafana Node Graph contract (nodes + edges) for the per-network
+   * link graph; org-wide fan-out is intentionally disabled. */
+  NetworkGeo = 'networkGeo',
+  DeviceLldpCdp = 'deviceLldpCdp',
 }
 
 export interface MerakiQuery extends DataQuery {
