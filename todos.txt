@@ -9,7 +9,8 @@ bite you if you don't read them.
 
 Last updated: 2026-04-18 (v0.4.0 feature-complete — phases 1–12 shipped;
 apianalysis.txt audit follow-up ALSO SHIPPED on top of v0.4.0 — see §A below;
-v0.5 panels+pages and v0.6 alert-rule bundle PLANNED — see §4.4 and §4.5).
+**v0.5 panels+pages ALSO SHIPPED** on top of v0.4.0 — see §4.4 and §B below;
+v0.6 alert-rule bundle PLANNED — see §4.5).
 
 Repo: /Users/rob/repos/grafana-meraki-plugin
 Git: initialised; v0.1 committed (4dee99a). v0.2.0 + v0.3.0 changes are staged
@@ -570,7 +571,7 @@ Q.5  [DEFERRED]  Multi-tenancy (multiple API keys per plugin instance). Not
      planned for v0.x.
 
 --------------------------------------------------------------------------------
-4.4  V0.5 ROADMAP — PANELS + PAGES     [PLANNED — brainstormed 2026-04-18]
+4.4  V0.5 ROADMAP — PANELS + PAGES     [SHIPPED 2026-04-18 — see §B summary]
 --------------------------------------------------------------------------------
 
 Goal: enrich the 13 existing pages with new panels, and add 5 new top-level
@@ -3471,6 +3472,115 @@ Merge commit: 0d20818 (merged worktree-agent-a06f5872 which carried §3.1,
 appliance agents). apianalysis.txt itself retains its full inline prose and
 now carries a per-section DONE banner so future readers don't mistake it
 for outstanding work.
+
+================================================================================
+§B. V0.5 PANELS + PAGES — ALL PHASES SHIPPED                  [2026-04-18]
+================================================================================
+
+§4.4 V0.5 roadmap is feature-complete on `main`. Every phase landed via
+parallel-worktree agent dispatch followed by serial merges on main;
+Go + TypeScript test suites green end-to-end (`go test ./pkg/...`,
+`npm run typecheck && npm run lint && npm run test:ci` → 19 Jest suites,
+103 tests). Visual smoke against a live Meraki lab org was NOT
+performed — recommend a lab pass before tagging v0.5.0.
+
+Per-phase status:
+
+  §4.4.2  Phase 0 — cross-cutting plumbing                        SHIPPED
+          bcaedb7, af051f7. configurationChangesAnnotation reshapes the
+          configurationChanges feed into a 4-col annotation frame
+          (time/title/text/tags); alertsMttrSummary aggregates
+          resolvedAt-startedAt into mean/p50/p95 + resolved/open counts
+          as a single-row wide frame (§G.20 pattern).
+
+  §4.4.3  Phase 1 — 22 panels across 5 product families         SHIPPED
+    1a   MR (Access Points, 5 panels)                              SHIPPED
+         9e285b4 / 15cf2ce. 4 new kinds: wirelessClientCountHistory,
+         wirelessFailedConnections, wirelessLatencyStats, deviceRadioStatus.
+         deviceRadioStatus uses /wireless/ssids/statuses/byDevice because
+         Meraki's v1 OpenAPI does not expose /radioSettings/bySsid.
+    1b   MS (Switches, 5 panels)                                   SHIPPED
+         e8d17c5 / 9c2cf75. 4 new kinds: switchPoe, switchStp,
+         switchMacTable, switchVlansSummary. Port-error timeline reshapes
+         existing switchPortPacketCounters (no new kind).
+    1c   MX (Appliances, 4 panels)                                 SHIPPED
+         eb683b8 / b934637. 3 new kinds: applianceTrafficShaping,
+         applianceFailoverEvents (pure Go filter over /events),
+         applianceVpnHeatmap (new kind — kept applianceVpnStatuses for
+         existing peer-status table). UX CHANGE: VPN peer-matrix panel
+         REPLACED with the reachability heatmap.
+    1d   MG (Cellular Gateways)                                    DROPPED
+         Meraki v1 API has no endpoint exposing monthly MG data usage.
+         See §4.4.3-1d inline note. V0.5 panel count 23 → 22.
+    1e   MT (Sensors, 3 panels)                                    SHIPPED
+         69c691d / b2b878e. 1 new kind: sensorFloorPlan (with anchor-
+         coords + grid fallback branches). AQI composite weights +
+         citations inline in src/scene-helpers/sensorMetrics.ts.
+    1f   Cross-cutting (5 panels)                                  SHIPPED
+         ead50af / ce64776 / b31bc5c. 1 new kind: orgChangeFeed
+         (errgroup-parallel union of configurationChanges + networkEvents,
+         fixed 24h lookback). MTTR chart / licence calendar / API 429
+         overlay reuse Phase 0 + existing kinds. AnnotationsDataLayer
+         wired on Appliances uplinks + Sensors detail scenes.
+
+  §4.4.4  Phase 2 — 5 new top-level pages                         SHIPPED
+    A    Clients                                                   SHIPPED
+         fcab4d9 / fcbce4e / 7e3cfd1. 3 new kinds: clientsList,
+         clientLookup, clientSessions. Search is MAC-only (Meraki's
+         /clients/search accepts `mac` only, not IP/hostname). Per-client
+         latency history is wireless-only (wired clients render empty).
+    B    Firmware & Lifecycle                                      SHIPPED
+         b17d3b2 / 8b09cb6. 3 new kinds: firmwareUpgrades,
+         firmwarePending (MS+MR only per Meraki), deviceEol. EOL data
+         from Meraki's native /inventory/devices?eoxStatuses[] — no
+         hand-maintained table.
+    C    Traffic Analytics                                         SHIPPED
+         10ac88a. 4 new kinds: networkTraffic, topApplicationsByUsage,
+         topApplicationCategoriesByUsage, networkTrafficAnalysisMode.
+         TrafficGuard component mirrors ConfigGuard pattern.
+    D    Topology / Network Map                                    SHIPPED
+         dc9e026 / 4fc34f4. 2 new kinds: networkGeo (centroid derived
+         from device lat/lng — /organizations/{id}/networks carries no
+         geo), deviceLldpCdp (two-frame Node Graph contract). Link-graph
+         fan-out is per-network only (§4.4.1-g exception respected).
+    E    Org Health Overview                                       SHIPPED
+         b3b59ef / 73153c8. 1 new kind: orgHealthSummary — errgroup
+         fan-out over 6 downstream handlers emitting a single-row wide
+         frame with 9 KPI fields. Per-KPI partial-failure notices;
+         TestHandle_OrgHealthSummary_CachedSecondCallHitsNoBackend pins
+         the cache / singleflight invariant.
+
+  §4.4.5  Phase 3 — Home + Org Health merge                       SHIPPED
+         48b9672 / 38cfa84. HomeIntro collapsed from welcome-block + CTA
+         grid to a 40 px single-line hint. New 6-row layout: ConfigGuard
+         → HomeIntro → 6-stat KPI row (orgHealthSummary) → issues feed
+         (recent alerts + 24h change feed) → availability breakdown
+         (donut + new deviceStatusByFamily stacked bar) → org inventory
+         table. Picked KPIs: devicesOffline, alertsCritical,
+         licensesExp30d, firmwareDrift, apiErrorPct, uplinksDown — the
+         "things going wrong" half of the 9 orgHealthSummary fields.
+
+Aggregate deltas:
+  - 18 new query kinds shipped (22 panels fed by 13 new kinds in §4.4.3;
+    5 new pages fed by 13 new kinds in §4.4.4 A-E; Home reshape adds
+    1 new kind deviceStatusByFamily).
+  - 4 new backend files: pkg/meraki/{firmware,topology,clients,traffic}.go.
+  - 5 new top-level nav entries in plugin.json: Clients, Firmware &
+    Lifecycle, Traffic, Topology, Audit Log (Audit Log actually pre-dated
+    v0.5 but lives next to the new pages in the nav ordering).
+  - 18 commits on main between e0c0eb1 and 38cfa84.
+  - Jest: 19 suites / 103 tests (was 14 / 81 at start of v0.5).
+  - Go backend: 3 packages clean; ~40 new test functions.
+
+Outstanding follow-ups (intentional):
+  - Visual smoke against a live Meraki lab org (VPN heatmap, MT
+    floor-plan Geomap-vs-grid branch, Topology geomap + Node Graph,
+    AnnotationsDataLayer rendering on Appliances uplinks + Sensors
+    detail). Can't be done from this environment.
+  - plugin.json changes require Grafana server restart — standard
+    gotcha flagged in every Phase-2 agent's commit message.
+  - §4.5 (v0.6 bundled alert rules) is the next milestone. §4.5.7 5e
+    (mg-data-cap alert template) was dropped alongside §4.4.3-1d.
 
 ================================================================================
 END OF FILE
