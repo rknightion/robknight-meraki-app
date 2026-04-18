@@ -200,6 +200,11 @@ export enum QueryKind {
    * singleflight makes re-entry from the §4.4.5 Home merge effectively
    * free. No dedicated page ships in this phase. */
   OrgHealthSummary = 'orgHealthSummary',
+
+  /* §4.4.5 — "availability by family" roll-up. One row per productType with
+   * online/alerting/offline/dormant/total counts. Feeds the Home stacked-bar
+   * panel that replaces the org-wide donut as a family-level breakdown. */
+  DeviceStatusByFamily = 'deviceStatusByFamily',
 }
 
 export interface MerakiQuery extends DataQuery {

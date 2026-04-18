@@ -1,55 +1,49 @@
 import React from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
-import { LinkButton, useStyles2 } from '@grafana/ui';
-import { ROUTES } from '../../constants';
-import { prefixRoute } from '../../utils/utils.routing';
+import { useStyles2 } from '@grafana/ui';
 import { testIds } from '../../components/testIds';
 
+/**
+ * §4.4.5 — Home reworked.
+ *
+ * The previous welcome block + CTA grid was redundant with the left
+ * sidebar nav (Organisations / Access Points / Switches / Sensors etc.
+ * all live there). The Home page now lands operators straight on the
+ * KPI row, so this component collapses to a single-line hint banner
+ * (~40 px) that just tells users what they're looking at.
+ *
+ * If the API key isn't configured `<ConfigGuard/>` (still Row 1 of the
+ * scene) surfaces the prominent banner + "Configure API key" CTA, so
+ * this intro no longer needs to carry that affordance.
+ */
 export function HomeIntro() {
   const styles = useStyles2(getStyles);
 
   return (
     <div className={styles.wrap} data-testid={testIds.home.container}>
-      <h2>Cisco Meraki</h2>
-      <p className={styles.lead}>
-        Observability for your Meraki organizations, networks, and devices — powered by the Meraki Dashboard API.
-      </p>
-      <p>
-        This plugin queries <code>api.meraki.com</code> directly. Configure your Meraki API key on the
-        configuration page to get started. Once configured, navigate to Organizations or Sensors to see your
-        estate.
-      </p>
-      <div className={styles.actions}>
-        <LinkButton href={prefixRoute(ROUTES.Configuration)} icon="cog" variant="primary">
-          Configure API key
-        </LinkButton>
-        <LinkButton
-          href="https://developer.cisco.com/meraki/api-v1/authorization/"
-          icon="external-link-alt"
-          variant="secondary"
-          target="_blank"
-        >
-          How to get a Meraki API key
-        </LinkButton>
-      </div>
+      <span className={styles.title}>Cisco Meraki</span>
+      <span className={styles.hint}>
+        Org overview. Pick an organization above; drill into a family from the left nav.
+      </span>
     </div>
   );
 }
 
 const getStyles = (theme: GrafanaTheme2) => ({
   wrap: css`
-    padding: ${theme.spacing(3)};
-    max-width: 720px;
-  `,
-  lead: css`
-    font-size: ${theme.typography.h5.fontSize};
-    color: ${theme.colors.text.secondary};
-  `,
-  actions: css`
-    margin-top: ${theme.spacing(3)};
+    padding: ${theme.spacing(1, 2)};
     display: flex;
+    align-items: center;
     gap: ${theme.spacing(2)};
-    flex-wrap: wrap;
+    height: 40px;
+    border-bottom: 1px solid ${theme.colors.border.weak};
+  `,
+  title: css`
+    font-weight: ${theme.typography.fontWeightMedium};
+    color: ${theme.colors.text.primary};
+  `,
+  hint: css`
+    color: ${theme.colors.text.secondary};
   `,
 });

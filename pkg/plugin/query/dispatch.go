@@ -218,6 +218,12 @@ const (
 	// applianceUplinkStatuses). Backs the Home merge in §4.4.5; no dedicated
 	// page ships in this phase.
 	KindOrgHealthSummary QueryKind = "orgHealthSummary"
+
+	// §4.4.5 — availability-by-family stacked-bar reshape. Reuses the same
+	// underlying Meraki call as KindDeviceAvailabilityCounts but emits one
+	// row per productType so the Home "availability by family" bar can stack
+	// the status buckets. See device_status_by_family.go for the shape.
+	KindDeviceStatusByFamily QueryKind = "deviceStatusByFamily"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -431,6 +437,9 @@ var handlers = map[QueryKind]handlerFn{
 
 	// §4.4.4-E — Org Health Overview (single wide KPI frame).
 	KindOrgHealthSummary: handleOrgHealthSummary,
+
+	// §4.4.5 — availability-by-family reshape for the Home stacked bar.
+	KindDeviceStatusByFamily: handleDeviceStatusByFamily,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and
