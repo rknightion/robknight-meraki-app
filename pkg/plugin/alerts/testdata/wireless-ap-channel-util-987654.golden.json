@@ -1,0 +1,74 @@
+{
+  "uid": "meraki-wireless-ap-channel-util-987654",
+  "title": "Meraki AP channel utilisation high — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "wirelessChannelUtil",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 900,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "mean",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                70
+              ],
+              "type": "gt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "10m",
+  "annotations": {
+    "description": "One or more APs are reporting average channel utilisation above the configured threshold. Consider RF tuning or adding capacity.",
+    "summary": "AP channel utilisation high in Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wireless",
+    "meraki_org": "987654",
+    "meraki_product": "wireless",
+    "meraki_rule": "ap-channel-util",
+    "severity": "warning"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "wireless"
+}

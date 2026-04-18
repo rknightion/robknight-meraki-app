@@ -1,0 +1,61 @@
+kind: alert_rule_template
+id: failed-connections
+group: wireless
+display_name: Wireless failed connections elevated
+severity: warning
+thresholds:
+  - key: count_gt
+    type: int
+    default: 20
+    label: Failed connection count threshold
+    help: Fire when the number of failed connections in the evaluation window exceeds this value.
+  - key: window_mins
+    type: int
+    default: 5
+    label: Evaluation window (minutes)
+    help: Window over which failed connections are counted before evaluation.
+rule:
+  title: "Meraki wireless failed connections elevated — <% .OrgID %>"
+  for: "5m"
+  query:
+    kind: wirelessFailedConnections
+    params:
+      orgId: "<% .OrgID %>"
+      timespanSeconds: "<% .Thresholds.window_mins %>"
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: wirelessFailedConnections
+        orgId: "<% .OrgID %>"
+        timespanSeconds: "<% .Thresholds.window_mins %>"
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: count
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [<% .Thresholds.count_gt %>] }
+        expression: B
+  annotations:
+    summary: "Wireless failed connections elevated in Meraki org <% .OrgID %>"
+    description: "Failed wireless connections over the configured window exceed the threshold. Review the Wireless scene for per-SSID/AP detail."
+  labels:
+    severity: warning
+    meraki_group: wireless
+    meraki_product: wireless
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: failed-connections
+    managed_by: meraki-plugin
