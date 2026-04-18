@@ -1,0 +1,72 @@
+kind: alert_rule_template
+id: readings-out-of-range
+group: sensors
+display_name: MT sensor reading out of range
+severity: warning
+thresholds:
+  - key: metric
+    type: list
+    default: [temperature]
+    label: Metrics to evaluate
+    help: Only evaluate MT sensor readings whose metric matches one of these values.
+    options: [temperature, humidity, co2]
+  - key: min_threshold
+    type: float
+    default: 15
+    label: Minimum acceptable value
+    help: Fire when the latest reading drops below this value.
+  - key: max_threshold
+    type: float
+    default: 30
+    label: Maximum acceptable value
+    help: Fire when the latest reading exceeds this value.
+  - key: for_duration
+    type: duration
+    default: 5m
+    label: Grace period before alerting
+    help: Reading must stay out of range for this duration before firing.
+rule:
+  title: "Meraki MT sensor reading out of range — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: sensorReadingsLatest
+    params:
+      orgId: "<% .OrgID %>"
+      metrics: <% yamlList .Thresholds.metric %>
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: sensorReadingsLatest
+        orgId: "<% .OrgID %>"
+        metrics: <% yamlList .Thresholds.metric %>
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: outside_range, params: [<% .Thresholds.min_threshold %>, <% .Thresholds.max_threshold %>] }
+        expression: B
+  annotations:
+    summary: "MT sensor reading out of range in Meraki org <% .OrgID %>"
+    description: "One or more MT sensors are reporting readings outside the configured min/max window. Open the Sensors scene for per-sensor detail."
+  labels:
+    severity: warning
+    meraki_group: sensors
+    meraki_product: sensor
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: readings-out-of-range
+    managed_by: meraki-plugin
