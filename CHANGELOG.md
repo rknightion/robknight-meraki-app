@@ -38,6 +38,20 @@ top-level pages.
   respect the §4.4.1-g LLDP/CDP exception rule and avoid blowing the rate
   budget on large orgs. Emits the two-frame Grafana Node Graph contract
   (nodes + edges).
+- **New Org Health Overview query kind** (v0.5 §4.4.4-E). Adds
+  `orgHealthSummary`: a single-row wide KPI frame with nine fields
+  (`devicesOnline`, `devicesOffline`, `alertsCritical`, `alertsWarning`,
+  `licensesExp30d`, `licensesExp7d`, `firmwareDrift`, `apiErrorPct`,
+  `uplinksDown`) fanned out in parallel via `golang.org/x/sync/errgroup`
+  across six existing handlers (`deviceStatusOverview`, `alertsOverview`,
+  `licensesList`, `firmwarePending`, `apiRequestsByInterval`,
+  `applianceUplinkStatuses`). `apiErrorPct` always reduces the last 1h of
+  API data regardless of panel range so the Home tile is stable. Per-KPI
+  partial-failure notices keep the row rendering when any single
+  downstream is unavailable. Handler re-entry is effectively free: the
+  underlying `meraki.Client` cache + singleflight absorb back-to-back Home
+  loads (pinned by `TestHandle_OrgHealthSummary_CachedSecondCallHitsNoBackend`).
+  Home-tile integration arrives with the §4.4.5 Home merge.
 - **Cross-cutting panels — v0.5 §4.4.3-1f.**
   - New `orgChangeFeed` query kind: server-side union of
     `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the
