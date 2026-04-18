@@ -12,6 +12,25 @@ export const testIds = {
     testConnection: 'data-testid ac-test-connection',
     connectionResult: 'data-testid ac-connection-result',
   },
+  alertRulesPanel: {
+    container: 'data-testid arp-container',
+    featureToggleBanner: 'data-testid arp-feature-toggle-banner',
+    driftBanner: 'data-testid arp-drift-banner',
+    resultBanner: 'data-testid arp-result-banner',
+    statusPill: 'data-testid arp-status-pill',
+    reconcileButton: 'data-testid arp-reconcile',
+    uninstallButton: 'data-testid arp-uninstall',
+    uninstallConfirm: 'data-testid arp-uninstall-confirm',
+    viewInGrafana: 'data-testid arp-view-in-grafana',
+    groupCard: (groupId: string) => `data-testid arp-group-${groupId}`,
+    groupInstallToggle: (groupId: string) => `data-testid arp-group-install-${groupId}`,
+    templateRow: (groupId: string, templateId: string) =>
+      `data-testid arp-template-${groupId}-${templateId}`,
+    ruleEnabled: (groupId: string, templateId: string) =>
+      `data-testid arp-rule-enabled-${groupId}-${templateId}`,
+    thresholdInput: (groupId: string, templateId: string, key: string) =>
+      `data-testid arp-threshold-${groupId}-${templateId}-${key}`,
+  },
   home: {
     container: 'data-testid home-container',
     orgCountStat: 'data-testid home-org-count',
