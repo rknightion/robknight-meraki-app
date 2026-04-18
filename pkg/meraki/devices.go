@@ -27,6 +27,12 @@ type Device struct {
 	Lng         float64  `json:"lng,omitempty"`
 	Address     string   `json:"address,omitempty"`
 	Notes       string   `json:"notes,omitempty"`
+	// FloorPlanID associates the device with a floor plan in its parent
+	// network. Meraki exposes this field on getOrganizationDevices (and on
+	// getDevice / updateDevice); it is the canonical link used by the
+	// `sensorFloorPlan` query kind to map an MT sensor back to its floor
+	// plan's anchor coordinates. Empty when the device is not placed.
+	FloorPlanID string `json:"floorPlanId,omitempty"`
 }
 
 // DeviceStatusOverview is the response shape of `GET /organizations/{orgId}/devices/statuses/overview`.

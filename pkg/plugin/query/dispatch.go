@@ -36,6 +36,10 @@ const (
 	KindSensorReadingsLatest  QueryKind = "sensorReadingsLatest"
 	KindSensorReadingsHistory QueryKind = "sensorReadingsHistory"
 	KindSensorAlertSummary    QueryKind = "sensorAlertSummary"
+	// §4.4.3-1e — floor-plan layout + latest readings per MT sensor. Emits a
+	// wide frame with nullable lat/lng so the panel can switch to a grid
+	// layout when no anchor coordinates are configured.
+	KindSensorFloorPlan QueryKind = "sensorFloorPlan"
 
 	// Wireless (MR) — phase 5.
 	KindWirelessChannelUtil QueryKind = "wirelessChannelUtil"
@@ -219,6 +223,7 @@ var handlers = map[QueryKind]handlerFn{
 	KindSensorReadingsLatest:  handleSensorReadingsLatest,
 	KindSensorReadingsHistory: handleSensorReadingsHistory,
 	KindSensorAlertSummary:    handleSensorAlertSummary,
+	KindSensorFloorPlan:       handleSensorFloorPlan,
 
 	KindWirelessChannelUtil: handleWirelessChannelUtil,
 	KindWirelessUsage:       handleWirelessUsage,

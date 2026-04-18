@@ -174,6 +174,67 @@ func (o SensorReadingsHistoryOptions) values() url.Values {
 	return v
 }
 
+// ---------------------------------------------------------------------------
+// Floor plans (v0.5 §4.4.3-1e)
+// ---------------------------------------------------------------------------
+
+// FloorPlanCorner is a geo anchor on a floor plan. Meraki exposes four
+// corners (bottomLeft, bottomRight, topLeft, topRight) plus a center. Each
+// corner is a lat/lng pair in WGS84.
+type FloorPlanCorner struct {
+	Lat float64 `json:"lat"`
+	Lng float64 `json:"lng"`
+}
+
+// FloorPlanDevice is a device placed on a floor plan. Meraki populates
+// `lat` / `lng` when the device has anchor coordinates (either set manually
+// or published from an auto-locate job); when the device is assigned to the
+// plan but has no anchor, the coordinates are absent / zero.
+type FloorPlanDevice struct {
+	Serial      string  `json:"serial"`
+	Name        string  `json:"name,omitempty"`
+	Model       string  `json:"model,omitempty"`
+	ProductType string  `json:"productType,omitempty"`
+	Lat         float64 `json:"lat,omitempty"`
+	Lng         float64 `json:"lng,omitempty"`
+}
+
+// FloorPlan mirrors `GET /networks/{networkId}/floorPlans` list entries.
+// Fields match the create/update body the Meraki OpenAPI spec documents
+// (center + four corners + imageContents metadata) plus the `devices`
+// array populated on the list response.
+type FloorPlan struct {
+	ID                string            `json:"floorPlanId"`
+	Name              string            `json:"name"`
+	FloorNumber       *int              `json:"floorNumber,omitempty"`
+	Center            *FloorPlanCorner  `json:"center,omitempty"`
+	BottomLeftCorner  *FloorPlanCorner  `json:"bottomLeftCorner,omitempty"`
+	BottomRightCorner *FloorPlanCorner  `json:"bottomRightCorner,omitempty"`
+	TopLeftCorner     *FloorPlanCorner  `json:"topLeftCorner,omitempty"`
+	TopRightCorner    *FloorPlanCorner  `json:"topRightCorner,omitempty"`
+	Devices           []FloorPlanDevice `json:"devices,omitempty"`
+}
+
+// GetNetworkFloorPlans returns the floor plans configured for a Meraki
+// network. Response is a plain JSON array (no pagination envelope) per the
+// `GET /networks/{networkId}/floorPlans` spec; callers can feed a 15 m TTL
+// since plan geometry + device anchors change rarely.
+func (c *Client) GetNetworkFloorPlans(ctx context.Context, networkID string, ttl time.Duration) ([]FloorPlan, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/floorPlans", Message: "missing network id"}}
+	}
+	var out []FloorPlan
+	// Floor plans are a small, unpaginated list. Use Get (single request) — if
+	// Meraki ever adds pagination we'll switch to GetAll without any caller
+	// change, since the endpoint path is stable.
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/floorPlans",
+		networkID, nil, ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GetOrganizationSensorReadingsHistory returns native-timeseries sensor samples. Pagination is
 // handled transparently (Link header).
 func (c *Client) GetOrganizationSensorReadingsHistory(ctx context.Context, orgID string, opts SensorReadingsHistoryOptions, ttl time.Duration) ([]SensorReadingHistoryPoint, error) {
