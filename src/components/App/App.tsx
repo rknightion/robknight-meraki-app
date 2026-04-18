@@ -13,6 +13,7 @@ import { sensorsPage } from '../../pages/Sensors/sensorsPage';
 import { insightsPage } from '../../pages/Insights/insightsPage';
 import { eventsPage } from '../../pages/Events/eventsPage';
 import { alertsPage } from '../../pages/Alerts/alertsPage';
+import { trafficPage } from '../../pages/Traffic/trafficPage';
 import { auditLogPage } from '../../pages/AuditLog/auditLogPage';
 import { clientsPage } from '../../pages/Clients/clientsPage';
 import { firmwarePage } from '../../pages/Firmware/firmwarePage';
@@ -39,6 +40,7 @@ function allPages(): SceneAppPageLike[] {
     insightsPage,
     eventsPage,
     alertsPage,
+    trafficPage,
     auditLogPage,
     clientsPage,
     firmwarePage,

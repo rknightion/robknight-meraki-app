@@ -172,6 +172,18 @@ export enum QueryKind {
   FirmwareUpgrades = 'firmwareUpgrades',
   FirmwarePending = 'firmwarePending',
   DeviceEol = 'deviceEol',
+
+  /* §4.4.4-C — Traffic Analytics page (L7 application breakdown).
+   *  - NetworkTraffic:                 per-network L7 row table from
+   *                                    /networks/{id}/traffic.
+   *  - TopApplicationsByUsage:         org-wide top-N applications.
+   *  - TopApplicationCategoriesByUsage: org-wide top-N categories.
+   *  - NetworkTrafficAnalysisMode:     per-network analysis mode lookup,
+   *                                    feeding the TrafficGuard banner. */
+  NetworkTraffic = 'networkTraffic',
+  TopApplicationsByUsage = 'topApplicationsByUsage',
+  TopApplicationCategoriesByUsage = 'topApplicationCategoriesByUsage',
+  NetworkTrafficAnalysisMode = 'networkTrafficAnalysisMode',
 }
 
 export interface MerakiQuery extends DataQuery {

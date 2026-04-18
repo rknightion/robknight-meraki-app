@@ -87,4 +87,12 @@ test.describe('Meraki app navigation', () => {
     // because the backend may not be configured in the test stack.
     await expect(page.getByText(/Pending upgrades|End-of-life devices/)).toBeVisible();
   });
+
+  test('Traffic page renders device-type selector', async ({ gotoPage, page }) => {
+    await gotoPage(`/${ROUTES.Traffic}`);
+    await expect(page.getByRole('heading', { name: 'Traffic' })).toBeVisible();
+    await expect(
+      page.getByLabel('Device type').or(page.getByText('Device type'))
+    ).toBeVisible();
+  });
 });

@@ -22,6 +22,14 @@ top-level pages.
   from Meraki's native `/organizations/{id}/inventory/devices` with
   `eoxStatuses[]` filter — no hand-maintained table. `firmwarePending` is
   MS+MR only per Meraki's documented endpoint limitation.
+- **New Traffic Analytics page** — L7 app and category breakdown with
+  per-network traffic-analysis guard (v0.5 §4.4.4-C). Adds four new query
+  kinds (`networkTraffic`, `topApplicationsByUsage`,
+  `topApplicationCategoriesByUsage`, `networkTrafficAnalysisMode`) plus a
+  new `TrafficGuard.tsx` helper that polls per selected network and
+  renders an "enable traffic analysis in Meraki" banner when any is in
+  `disabled` mode. `/networks/{id}/traffic` capped at 30 days in
+  `KnownEndpointRanges` per Meraki spec.
 - **Cross-cutting panels — v0.5 §4.4.3-1f.**
   - New `orgChangeFeed` query kind: server-side union of
     `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the

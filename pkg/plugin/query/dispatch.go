@@ -190,6 +190,19 @@ const (
 	KindFirmwareUpgrades QueryKind = "firmwareUpgrades"
 	KindFirmwarePending  QueryKind = "firmwarePending"
 	KindDeviceEol        QueryKind = "deviceEol"
+
+	// §4.4.4-C — Traffic Analytics page. Three primary kinds (per-network L7
+	// rows + org-wide top apps + top categories) plus a settings lookup the
+	// TrafficGuard React component uses to render a banner when traffic
+	// analysis is disabled on a selected network. Modelled as a separate
+	// `networkTrafficAnalysisMode` kind rather than piggy-backing the mode on
+	// `networkTraffic` because the guard needs to inspect every selected
+	// network independently of whether the user is currently looking at the
+	// per-network table panel (and the guard polls on a longer cadence).
+	KindNetworkTraffic                  QueryKind = "networkTraffic"
+	KindTopApplicationsByUsage          QueryKind = "topApplicationsByUsage"
+	KindTopApplicationCategoriesByUsage QueryKind = "topApplicationCategoriesByUsage"
+	KindNetworkTrafficAnalysisMode      QueryKind = "networkTrafficAnalysisMode"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -390,6 +403,12 @@ var handlers = map[QueryKind]handlerFn{
 	KindFirmwareUpgrades: handleFirmwareUpgrades,
 	KindFirmwarePending:  handleFirmwarePending,
 	KindDeviceEol:        handleDeviceEol,
+
+	// §4.4.4-C — Traffic Analytics page.
+	KindNetworkTraffic:                  handleNetworkTraffic,
+	KindTopApplicationsByUsage:          handleTopApplicationsByUsage,
+	KindTopApplicationCategoriesByUsage: handleTopApplicationCategoriesByUsage,
+	KindNetworkTrafficAnalysisMode:      handleNetworkTrafficAnalysisMode,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and
