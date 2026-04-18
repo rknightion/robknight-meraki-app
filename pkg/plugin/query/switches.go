@@ -20,6 +20,15 @@ const (
 	switchPortConfigTTL    = 5 * time.Minute
 	switchPortPacketsTTL   = 30 * time.Second
 	switchPortPacketsSpan  = 5 * time.Minute
+
+	// §4.4.3-1b TTLs — PoE piggybacks on the 30s ports feed; STP config is
+	// stable so 1 min; device clients change quickly (30s matches the ports
+	// feed); VLAN config is long-lived (5 min matches switchPortConfigTTL).
+	switchPoeTTL          = 30 * time.Second
+	switchStpTTL          = 1 * time.Minute
+	switchMacTableTTL     = 30 * time.Second
+	switchMacTableSpan    = 24 * time.Hour
+	switchVlansSummaryTTL = 5 * time.Minute
 )
 
 // handleSwitchPorts emits one row per port across every switch in the org.
@@ -485,4 +494,303 @@ func handleSwitchPortsUsageHistory(ctx context.Context, client *meraki.Client, q
 	}
 
 	return frames, nil
+}
+
+// ---------------------------------------------------------------------------
+// §4.4.3-1b — switchPoe / switchStp / switchMacTable / switchVlansSummary
+// ---------------------------------------------------------------------------
+
+// handleSwitchPoe emits one row per port carrying the PoE draw in watts. We
+// piggyback on the org-level `statuses/bySwitch` endpoint (same source as
+// handleSwitchPorts) — it already surfaces `powerUsageInWatts` per port, so
+// fetching a separate per-device statuses feed would just duplicate work and
+// shard the cache per serial. Serials/networkIds filter applies client-side
+// (see handleSwitchPorts for the rationale on not pushing those server-side).
+func handleSwitchPoe(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("switchPoe: orgId is required")
+	}
+	switches, err := client.GetOrganizationSwitchPortStatuses(ctx, q.OrgID, meraki.SwitchPortStatusOptions{}, switchPoeTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	serialFilter := stringSetOrNil(q.Serials)
+	networkFilter := stringSetOrNil(q.NetworkIDs)
+
+	var (
+		serials      []string
+		switchNames  []string
+		networkIDs   []string
+		networkNames []string
+		portIDs      []string
+		enableds     []bool
+		poeWatts     []float64
+	)
+	for _, sw := range switches {
+		if serialFilter != nil {
+			if _, ok := serialFilter[sw.Serial]; !ok {
+				continue
+			}
+		}
+		if networkFilter != nil {
+			if _, ok := networkFilter[sw.Network.ID]; !ok {
+				continue
+			}
+		}
+		for _, p := range sw.Ports {
+			serials = append(serials, sw.Serial)
+			switchNames = append(switchNames, sw.Name)
+			networkIDs = append(networkIDs, sw.Network.ID)
+			networkNames = append(networkNames, sw.Network.Name)
+			portIDs = append(portIDs, p.PortID)
+			enableds = append(enableds, p.Enabled)
+			poeWatts = append(poeWatts, p.PowerUsageInWatts)
+		}
+	}
+
+	return []*data.Frame{
+		data.NewFrame("switch_poe",
+			data.NewField("serial", nil, serials),
+			data.NewField("switchName", nil, switchNames),
+			data.NewField("networkId", nil, networkIDs),
+			data.NewField("networkName", nil, networkNames),
+			data.NewField("portId", nil, portIDs),
+			data.NewField("enabled", nil, enableds),
+			data.NewField("poeWatts", nil, poeWatts),
+		),
+	}, nil
+}
+
+// handleSwitchStp emits one row per bridge-priority entry from the network's
+// STP settings. A single frame carries:
+//   networkId, rstpEnabled, serial, stackId, stpPriority
+// The row-per-entry (rather than row-per-network) shape lets the topology
+// table show per-switch priority alongside the network-level rstpEnabled flag
+// without a client-side expand transform. Callers must pass at least one
+// networkId (the Meraki endpoint is per-network).
+func handleSwitchStp(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if len(q.NetworkIDs) == 0 {
+		return nil, fmt.Errorf("switchStp: at least one networkId is required")
+	}
+
+	var (
+		networkIDs   []string
+		rstpEnableds []bool
+		serials      []string
+		stackIDs     []string
+		priorities   []int64
+	)
+	for _, nid := range q.NetworkIDs {
+		if nid == "" {
+			continue
+		}
+		stp, err := client.GetNetworkSwitchStp(ctx, nid, switchStpTTL)
+		if err != nil {
+			return nil, fmt.Errorf("switchStp: %s: %w", nid, err)
+		}
+		if len(stp.StpBridgePriority) == 0 {
+			// Emit one descriptor row so the rstpEnabled flag is still visible
+			// when no explicit priorities are set on this network.
+			networkIDs = append(networkIDs, nid)
+			rstpEnableds = append(rstpEnableds, stp.RstpEnabled)
+			serials = append(serials, "")
+			stackIDs = append(stackIDs, "")
+			priorities = append(priorities, 0)
+			continue
+		}
+		for _, bp := range stp.StpBridgePriority {
+			// Expand each bridge-priority bucket across its switches and stacks.
+			if len(bp.Switches) == 0 && len(bp.Stacks) == 0 {
+				networkIDs = append(networkIDs, nid)
+				rstpEnableds = append(rstpEnableds, stp.RstpEnabled)
+				serials = append(serials, "")
+				stackIDs = append(stackIDs, "")
+				priorities = append(priorities, int64(bp.StpPriority))
+				continue
+			}
+			for _, s := range bp.Switches {
+				networkIDs = append(networkIDs, nid)
+				rstpEnableds = append(rstpEnableds, stp.RstpEnabled)
+				serials = append(serials, s)
+				stackIDs = append(stackIDs, "")
+				priorities = append(priorities, int64(bp.StpPriority))
+			}
+			for _, st := range bp.Stacks {
+				networkIDs = append(networkIDs, nid)
+				rstpEnableds = append(rstpEnableds, stp.RstpEnabled)
+				serials = append(serials, "")
+				stackIDs = append(stackIDs, st)
+				priorities = append(priorities, int64(bp.StpPriority))
+			}
+		}
+	}
+
+	return []*data.Frame{
+		data.NewFrame("switch_stp",
+			data.NewField("networkId", nil, networkIDs),
+			data.NewField("rstpEnabled", nil, rstpEnableds),
+			data.NewField("serial", nil, serials),
+			data.NewField("stackId", nil, stackIDs),
+			data.NewField("stpPriority", nil, priorities),
+		),
+	}, nil
+}
+
+// handleSwitchMacTable emits one row per client currently (or recently)
+// connected to the given switch. Data comes from
+// `GET /devices/{serial}/clients` which returns per-client usage + the
+// connected switchport. Default lookback window is 24h (the Meraki default
+// is 1d); callers can override via `q.TimespanSeconds`.
+func handleSwitchMacTable(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if len(q.Serials) == 0 {
+		return nil, fmt.Errorf("switchMacTable: at least one serial is required")
+	}
+
+	span := switchMacTableSpan
+	if q.TimespanSeconds > 0 {
+		span = time.Duration(q.TimespanSeconds) * time.Second
+	}
+
+	var (
+		serialsCol    []string
+		macs          []string
+		ips           []string
+		vlans         []string
+		ports         []string
+		descs         []string
+		users         []string
+		manufacturers []string
+		lastSeens     []time.Time
+		sentKb        []float64
+		recvKb        []float64
+	)
+
+	for _, serial := range q.Serials {
+		clients, err := client.GetDeviceClients(ctx, serial, span, switchMacTableTTL)
+		if err != nil {
+			return nil, fmt.Errorf("switchMacTable: %s: %w", serial, err)
+		}
+		for _, c := range clients {
+			serialsCol = append(serialsCol, serial)
+			macs = append(macs, c.MAC)
+			ips = append(ips, c.IP)
+			vlans = append(vlans, vlanString(c.VLAN))
+			ports = append(ports, c.SwitchPort)
+			descs = append(descs, c.Description)
+			users = append(users, c.User)
+			manufacturers = append(manufacturers, c.Manufacturer)
+			if c.LastSeen > 0 {
+				lastSeens = append(lastSeens, time.Unix(c.LastSeen, 0).UTC())
+			} else {
+				lastSeens = append(lastSeens, time.Time{})
+			}
+			sentKb = append(sentKb, c.Usage.Sent)
+			recvKb = append(recvKb, c.Usage.Recv)
+		}
+	}
+
+	return []*data.Frame{
+		data.NewFrame("switch_mac_table",
+			data.NewField("serial", nil, serialsCol),
+			data.NewField("mac", nil, macs),
+			data.NewField("ip", nil, ips),
+			data.NewField("vlan", nil, vlans),
+			data.NewField("switchPort", nil, ports),
+			data.NewField("description", nil, descs),
+			data.NewField("user", nil, users),
+			data.NewField("manufacturer", nil, manufacturers),
+			data.NewField("lastSeen", nil, lastSeens),
+			data.NewField("sentKb", nil, sentKb),
+			data.NewField("recvKb", nil, recvKb),
+		),
+	}, nil
+}
+
+// handleSwitchVlansSummary emits one row per (switch, vlan) giving the count
+// of configured ports in that VLAN on that switch. Sourced from
+// `GET /organizations/{orgId}/switch/ports/bySwitch` (the config-feed variant,
+// not the live statuses endpoint) so the port `type` field is authoritative.
+// We include both native and voice VLANs — voice is marked via a synthetic
+// "voice:<n>" prefix to distinguish from untagged VLANs.
+func handleSwitchVlansSummary(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("switchVlansSummary: orgId is required")
+	}
+	opts := meraki.SwitchBySwitchPortsOptions{
+		NetworkIDs: q.NetworkIDs,
+		Serials:    q.Serials,
+	}
+	switches, err := client.GetOrganizationSwitchPortsBySwitch(ctx, q.OrgID, opts, switchVlansSummaryTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Aggregate: (serial, vlan) → port count. Use a stable key so test order is
+	// deterministic-ish (we still sort serials/vlans before emission).
+	type key struct {
+		Serial string
+		Name   string
+		Net    string
+		Vlan   string
+	}
+	counts := make(map[key]int64)
+	for _, sw := range switches {
+		for _, p := range sw.Ports {
+			if !p.Enabled {
+				continue
+			}
+			if p.Vlan != 0 {
+				k := key{sw.Serial, sw.Name, sw.Network.ID, strconv.Itoa(p.Vlan)}
+				counts[k]++
+			}
+			if p.VoiceVlan != 0 {
+				k := key{sw.Serial, sw.Name, sw.Network.ID, "voice:" + strconv.Itoa(p.VoiceVlan)}
+				counts[k]++
+			}
+		}
+	}
+
+	var (
+		serialsCol  []string
+		switchNames []string
+		networkIDs  []string
+		vlans       []string
+		portCounts  []int64
+	)
+	for k, v := range counts {
+		serialsCol = append(serialsCol, k.Serial)
+		switchNames = append(switchNames, k.Name)
+		networkIDs = append(networkIDs, k.Net)
+		vlans = append(vlans, k.Vlan)
+		portCounts = append(portCounts, v)
+	}
+
+	return []*data.Frame{
+		data.NewFrame("switch_vlans_summary",
+			data.NewField("serial", nil, serialsCol),
+			data.NewField("switchName", nil, switchNames),
+			data.NewField("networkId", nil, networkIDs),
+			data.NewField("vlan", nil, vlans),
+			data.NewField("portCount", nil, portCounts),
+		),
+	}, nil
+}
+
+// stringSetOrNil returns a lookup set for non-empty entries or nil when the
+// slice is empty/all-empty. Used by the filter helpers above.
+func stringSetOrNil(xs []string) map[string]struct{} {
+	if len(xs) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(xs))
+	for _, s := range xs {
+		if s != "" {
+			out[s] = struct{}{}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

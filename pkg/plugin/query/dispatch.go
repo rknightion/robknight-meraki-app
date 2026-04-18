@@ -132,6 +132,14 @@ const (
 	// the new Org Health page (§4.4.4).
 	KindConfigurationChangesAnnotation QueryKind = "configurationChangesAnnotation"
 	KindAlertsMttrSummary              QueryKind = "alertsMttrSummary"
+
+	// §4.4.3-1b — MS (switches) panels: PoE draw, STP topology, MAC table,
+	// VLAN distribution. All snapshot kinds. Port-error timeline reshapes the
+	// existing switchPortPacketCounters kind (no new kind).
+	KindSwitchPoe          QueryKind = "switchPoe"
+	KindSwitchStp          QueryKind = "switchStp"
+	KindSwitchMacTable     QueryKind = "switchMacTable"
+	KindSwitchVlansSummary QueryKind = "switchVlansSummary"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -301,6 +309,12 @@ var handlers = map[QueryKind]handlerFn{
 	// §4.4.2 — v0.5 Phase 0 plumbing.
 	KindConfigurationChangesAnnotation: handleConfigurationChangesAnnotation,
 	KindAlertsMttrSummary:              handleAlertsMttrSummary,
+
+	// §4.4.3-1b — MS (switches) panels.
+	KindSwitchPoe:          handleSwitchPoe,
+	KindSwitchStp:          handleSwitchStp,
+	KindSwitchMacTable:     handleSwitchMacTable,
+	KindSwitchVlansSummary: handleSwitchVlansSummary,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

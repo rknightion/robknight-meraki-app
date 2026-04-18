@@ -431,6 +431,159 @@ type switchPortUsageIntervalData struct {
 	} `json:"usage"`
 }
 
+// ---------------------------------------------------------------------------
+// §4.4.3-1b — switchPoe / switchStp / switchMacTable / switchVlansSummary
+// ---------------------------------------------------------------------------
+
+// SwitchPortPoeStatus is a per-port PoE draw entry. Sourced by reusing the
+// existing org-level `statuses/bySwitch` endpoint (which already carries
+// `powerUsageInWatts` per port); we shape it per-port rather than per-switch
+// so callers can render a per-port PoE distribution without an expand
+// transform.
+type SwitchPortPoeStatus struct {
+	Serial      string  `json:"serial"`
+	SwitchName  string  `json:"switchName,omitempty"`
+	NetworkID   string  `json:"networkId,omitempty"`
+	NetworkName string  `json:"networkName,omitempty"`
+	PortID      string  `json:"portId"`
+	Enabled     bool    `json:"enabled"`
+	PoeWatts    float64 `json:"poeWatts"`
+}
+
+// SwitchStpSettings mirrors `GET /networks/{networkId}/switch/stp`.
+// Verified shape per Meraki v1 OpenAPI: {"rstpEnabled": bool,
+// "stpBridgePriority": [{"switches": [serial…], "stacks": [stackId…],
+// "switchProfiles": [profileId…], "stpPriority": int}]}.
+type SwitchStpSettings struct {
+	RstpEnabled       bool                    `json:"rstpEnabled"`
+	StpBridgePriority []SwitchStpBridgePriority `json:"stpBridgePriority"`
+}
+
+type SwitchStpBridgePriority struct {
+	Switches       []string `json:"switches,omitempty"`
+	Stacks         []string `json:"stacks,omitempty"`
+	SwitchProfiles []string `json:"switchProfiles,omitempty"`
+	StpPriority    int      `json:"stpPriority"`
+}
+
+// GetNetworkSwitchStp returns the STP settings for a switch network.
+func (c *Client) GetNetworkSwitchStp(ctx context.Context, networkID string, ttl time.Duration) (*SwitchStpSettings, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/switch/stp", Message: "missing network id"}}
+	}
+	var out SwitchStpSettings
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/switch/stp",
+		"", nil, ttl, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeviceClient mirrors one entry of `GET /devices/{serial}/clients` — the
+// per-device client list. For a switch the `switchport` field is populated;
+// for APs it's null (callers here filter for switches, so it's always set).
+// Usage is in kilobytes per the Meraki spec.
+type DeviceClient struct {
+	ID          string  `json:"id,omitempty"`
+	MAC         string  `json:"mac"`
+	Description string  `json:"description,omitempty"`
+	IP          string  `json:"ip,omitempty"`
+	IP6         string  `json:"ip6,omitempty"`
+	User        string  `json:"user,omitempty"`
+	VLAN        int     `json:"vlan,omitempty"`
+	SwitchPort  string  `json:"switchport,omitempty"`
+	Manufacturer string  `json:"manufacturer,omitempty"`
+	OS          string  `json:"os,omitempty"`
+	Usage        struct {
+		Sent float64 `json:"sent"`
+		Recv float64 `json:"recv"`
+	} `json:"usage"`
+	FirstSeen int64 `json:"firstSeen,omitempty"`
+	LastSeen  int64 `json:"lastSeen,omitempty"`
+}
+
+// GetDeviceClients fetches the client list for one device. `timespan` is in
+// seconds and passed through when > 0 (max 31 days per the Meraki spec). Used
+// by the switch MAC-table panel — one row per MAC that was connected to this
+// switch in the requested window.
+func (c *Client) GetDeviceClients(ctx context.Context, serial string, timespan time.Duration, ttl time.Duration) ([]DeviceClient, error) {
+	if serial == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "devices/{serial}/clients", Message: "missing serial"}}
+	}
+	params := url.Values{}
+	if timespan > 0 {
+		params.Set("timespan", strconv.Itoa(int(timespan.Seconds())))
+	}
+	var out []DeviceClient
+	if err := c.Get(ctx,
+		"devices/"+url.PathEscape(serial)+"/clients",
+		"", params, ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SwitchBySwitchPortsOptions filters `/organizations/{orgId}/switch/ports/bySwitch`.
+// Used by the VLAN-summary handler (port count per VLAN per switch). Same
+// serials/networkIds filter contract as the statuses/bySwitch endpoint.
+type SwitchBySwitchPortsOptions struct {
+	NetworkIDs []string
+	Serials    []string
+}
+
+func (o SwitchBySwitchPortsOptions) values() url.Values {
+	v := url.Values{"perPage": []string{"50"}}
+	for _, id := range o.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range o.Serials {
+		v.Add("serials[]", s)
+	}
+	return v
+}
+
+// SwitchBySwitch is one entry in `GET /organizations/{orgId}/switch/ports/bySwitch`
+// — a switch with its list of configured ports (NOT live statuses). Used for
+// port-count-per-VLAN-per-switch aggregation.
+type SwitchBySwitch struct {
+	Serial  string              `json:"serial"`
+	Name    string              `json:"name,omitempty"`
+	Model   string              `json:"model,omitempty"`
+	MAC     string              `json:"mac,omitempty"`
+	Network SwitchNetworkRef    `json:"network"`
+	Ports   []SwitchBySwitchPort `json:"ports"`
+}
+
+// SwitchBySwitchPort is the port-config row embedded on each `SwitchBySwitch`.
+type SwitchBySwitchPort struct {
+	PortID       string `json:"portId"`
+	Name         string `json:"name,omitempty"`
+	Enabled      bool   `json:"enabled"`
+	Type         string `json:"type,omitempty"`
+	Vlan         int    `json:"vlan,omitempty"`
+	VoiceVlan    int    `json:"voiceVlan,omitempty"`
+	AllowedVlans string `json:"allowedVlans,omitempty"`
+}
+
+// GetOrganizationSwitchPortsBySwitch fetches the config-feed variant of the
+// bySwitch endpoint (distinct from `/switch/ports/statuses/bySwitch`). The
+// response wraps items in an `items` object like the statuses variant.
+func (c *Client) GetOrganizationSwitchPortsBySwitch(ctx context.Context, orgID string, opts SwitchBySwitchPortsOptions, ttl time.Duration) ([]SwitchBySwitch, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/switch/ports/bySwitch", Message: "missing organization id"}}
+	}
+	var wrapper struct {
+		Items []SwitchBySwitch `json:"items"`
+	}
+	if err := c.Get(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/switch/ports/bySwitch",
+		orgID, opts.values(), ttl, &wrapper); err != nil {
+		return nil, err
+	}
+	return wrapper.Items, nil
+}
+
 // GetOrganizationSwitchPortsUsageHistory paginates through the switch ports
 // usage history endpoint for an org. It follows Link: rel=next headers.
 // Results are aggregated to per-device per-interval (summed across all ports).

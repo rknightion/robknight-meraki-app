@@ -14,6 +14,227 @@ import (
 	"github.com/robknight/grafana-meraki-plugin/pkg/meraki"
 )
 
+// §4.4.3-1b — switchPoe / switchStp / switchMacTable / switchVlansSummary tests.
+
+// TestHandle_SwitchPoe_FlattensPerPort verifies the PoE handler emits one row
+// per port across every switch, with the expected columns.
+func TestHandle_SwitchPoe_FlattensPerPort(t *testing.T) {
+	const payload = `{"items":[
+	  {"serial":"Q2SW-0001","name":"sw-a","network":{"id":"N1","name":"HQ"},"ports":[
+	    {"portId":"1","enabled":true,"powerUsageInWatts":7.5},
+	    {"portId":"2","enabled":true,"powerUsageInWatts":0}
+	  ]},
+	  {"serial":"Q2SW-0002","name":"sw-b","network":{"id":"N1","name":"HQ"},"ports":[
+	    {"portId":"1","enabled":false,"powerUsageInWatts":0}
+	  ]}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/switch/ports/statuses/bySwitch") {
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	resp, err := Handle(context.Background(), client, &QueryRequest{
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindSwitchPoe, OrgID: "o1"}},
+	}, Options{})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(resp.Frames) != 1 {
+		t.Fatalf("got %d frames, want 1", len(resp.Frames))
+	}
+	var frame data.Frame
+	if err := json.Unmarshal(resp.Frames[0], &frame); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	rows, _ := frame.RowLen()
+	if rows != 3 {
+		t.Fatalf("got %d rows, want 3", rows)
+	}
+	for _, col := range []string{"serial", "switchName", "portId", "enabled", "poeWatts"} {
+		if f, _ := frame.FieldByName(col); f == nil {
+			t.Fatalf("missing column %q; fields=%v", col, frame.Fields)
+		}
+	}
+	// Verify serial filter applies client-side. Use fresh client to avoid
+	// hitting the TTL cache from the previous call.
+	client2, _ := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	resp, err = Handle(context.Background(), client2, &QueryRequest{
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindSwitchPoe, OrgID: "o1", Serials: []string{"Q2SW-0001"}}},
+	}, Options{})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	var f2 data.Frame
+	_ = json.Unmarshal(resp.Frames[0], &f2)
+	if r, _ := f2.RowLen(); r != 2 {
+		t.Fatalf("filtered: got %d rows, want 2", r)
+	}
+}
+
+// TestHandle_SwitchStp_ExpandsBridgePriorities verifies the STP handler
+// emits one row per (network, switch-or-stack) with rstpEnabled + priority.
+func TestHandle_SwitchStp_ExpandsBridgePriorities(t *testing.T) {
+	const payload = `{
+	  "rstpEnabled": true,
+	  "stpBridgePriority": [
+	    {"switches":["Q2SW-0001","Q2SW-0002"],"stpPriority":4096},
+	    {"stacks":["STACK-1"],"stpPriority":8192}
+	  ]
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/switch/stp") {
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	resp, err := Handle(context.Background(), client, &QueryRequest{
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindSwitchStp, NetworkIDs: []string{"N1"}}},
+	}, Options{})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	var frame data.Frame
+	if err := json.Unmarshal(resp.Frames[0], &frame); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	rows, _ := frame.RowLen()
+	if rows != 3 {
+		t.Fatalf("got %d rows, want 3 (2 switches + 1 stack)", rows)
+	}
+	for _, col := range []string{"networkId", "rstpEnabled", "serial", "stackId", "stpPriority"} {
+		if f, _ := frame.FieldByName(col); f == nil {
+			t.Fatalf("missing column %q", col)
+		}
+	}
+}
+
+// TestHandle_SwitchMacTable_PerClientRows verifies the MAC-table handler
+// surfaces one row per client connected to a given switch.
+func TestHandle_SwitchMacTable_PerClientRows(t *testing.T) {
+	const payload = `[
+	  {"id":"C1","mac":"aa:bb:cc:dd:ee:01","description":"laptop","ip":"10.0.0.5","vlan":10,"switchport":"3","manufacturer":"Apple","user":"alice","usage":{"sent":1234,"recv":5678},"lastSeen":1713440000},
+	  {"mac":"aa:bb:cc:dd:ee:02","ip":"10.0.0.6","vlan":20,"switchport":"4","usage":{"sent":10,"recv":20},"lastSeen":1713440100}
+	]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/clients") {
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	resp, err := Handle(context.Background(), client, &QueryRequest{
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindSwitchMacTable, Serials: []string{"Q2SW-0001"}}},
+	}, Options{})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	var frame data.Frame
+	if err := json.Unmarshal(resp.Frames[0], &frame); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	rows, _ := frame.RowLen()
+	if rows != 2 {
+		t.Fatalf("got %d rows, want 2", rows)
+	}
+	for _, col := range []string{"serial", "mac", "ip", "vlan", "switchPort", "lastSeen", "sentKb", "recvKb"} {
+		if f, _ := frame.FieldByName(col); f == nil {
+			t.Fatalf("missing column %q", col)
+		}
+	}
+}
+
+// TestHandle_SwitchVlansSummary_AggregatesPortCount verifies the VLAN-summary
+// handler aggregates enabled ports per (switch, vlan) and includes voice VLANs
+// as a separate synthetic row.
+func TestHandle_SwitchVlansSummary_AggregatesPortCount(t *testing.T) {
+	const payload = `{"items":[
+	  {"serial":"Q2SW-0001","name":"sw-a","network":{"id":"N1"},"ports":[
+	    {"portId":"1","enabled":true,"vlan":10},
+	    {"portId":"2","enabled":true,"vlan":10,"voiceVlan":100},
+	    {"portId":"3","enabled":true,"vlan":20},
+	    {"portId":"4","enabled":false,"vlan":10}
+	  ]}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/switch/ports/bySwitch") {
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	resp, err := Handle(context.Background(), client, &QueryRequest{
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindSwitchVlansSummary, OrgID: "o1"}},
+	}, Options{})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	var frame data.Frame
+	if err := json.Unmarshal(resp.Frames[0], &frame); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	rows, _ := frame.RowLen()
+	// Expected: vlan 10 → 2 ports (1 & 2; port 4 disabled), vlan 20 → 1,
+	// voice:100 → 1. That's 3 rows.
+	if rows != 3 {
+		t.Fatalf("got %d rows, want 3", rows)
+	}
+	for _, col := range []string{"serial", "vlan", "portCount"} {
+		if f, _ := frame.FieldByName(col); f == nil {
+			t.Fatalf("missing column %q", col)
+		}
+	}
+	vlanField, _ := frame.FieldByName("vlan")
+	countField, _ := frame.FieldByName("portCount")
+	found10, foundVoice := false, false
+	for i := 0; i < rows; i++ {
+		v, _ := vlanField.ConcreteAt(i)
+		c, _ := countField.ConcreteAt(i)
+		if v == "10" && c.(int64) == 2 {
+			found10 = true
+		}
+		if v == "voice:100" && c.(int64) == 1 {
+			foundVoice = true
+		}
+	}
+	if !found10 {
+		t.Errorf("vlan=10 row with count=2 not found")
+	}
+	if !foundVoice {
+		t.Errorf("voice:100 row with count=1 not found")
+	}
+}
+
 // §3.1 — Switch ports overview by speed + usage history handler tests.
 
 // TestHandle_SwitchPortsOverviewBySpeed_Table verifies the handler emits a
