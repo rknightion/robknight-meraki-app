@@ -2,6 +2,9 @@ import { VizPanel } from '@grafana/scenes';
 import {
   applianceUplinksOverviewRow,
   mxStatusKpiRow,
+  mxUplinksUsageByNetworkTable,
+  mxUplinksUsageHistoryTimeseries,
+  uplinkLossLatencyHistoryTimeseries,
   uplinkLossLatencyTimeseries,
 } from './panels';
 
@@ -61,5 +64,42 @@ describe('uplinkLossLatencyTimeseries', () => {
     // y-axis autoscale instead of clipping real outages to [0, 100].
     expect(panel.state.fieldConfig.defaults.min).toBeUndefined();
     expect(panel.state.fieldConfig.defaults.max).toBeUndefined();
+  });
+});
+
+describe('uplinkLossLatencyHistoryTimeseries', () => {
+  it('returns a timeseries VizPanel with percent unit for lossPercent', () => {
+    const panel = uplinkLossLatencyHistoryTimeseries('lossPercent');
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('timeseries');
+    expect(panel.state.fieldConfig.defaults.unit).toBe('percent');
+    expect(panel.state.fieldConfig.defaults.min).toBe(0);
+    expect(panel.state.fieldConfig.defaults.max).toBe(100);
+  });
+
+  it('returns a timeseries VizPanel with ms unit for latencyMs', () => {
+    const panel = uplinkLossLatencyHistoryTimeseries('latencyMs');
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('timeseries');
+    expect(panel.state.fieldConfig.defaults.unit).toBe('ms');
+    expect(panel.state.fieldConfig.defaults.min).toBeUndefined();
+    expect(panel.state.fieldConfig.defaults.max).toBeUndefined();
+  });
+});
+
+describe('mxUplinksUsageHistoryTimeseries', () => {
+  it('returns a timeseries VizPanel with kbytes unit', () => {
+    const panel = mxUplinksUsageHistoryTimeseries();
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('timeseries');
+    expect(panel.state.fieldConfig.defaults.unit).toBe('kbytes');
+  });
+});
+
+describe('mxUplinksUsageByNetworkTable', () => {
+  it('returns a table VizPanel', () => {
+    const panel = mxUplinksUsageByNetworkTable();
+    expect(panel).toBeInstanceOf(VizPanel);
+    expect(panel.state.pluginId).toBe('table');
   });
 });

@@ -405,6 +405,195 @@ func (c *Client) GetNetworkAppliancePortForwardingRules(ctx context.Context, net
 	return env.Rules, nil
 }
 
+// DeviceUplinkLossLatencyHistoryPoint is one interval sample from
+// `GET /devices/{serial}/uplinks/lossAndLatencyHistory`. Response shape per
+// Meraki v1 spec:
+//
+//	[{
+//	  "startTs": "2026-04-01T00:00:00Z",
+//	  "endTs":   "2026-04-01T00:01:00Z",
+//	  "lossPercent": 0.5,   // nullable
+//	  "latencyMs":   12.3,  // nullable
+//	  "uplink":      "wan1",
+//	  "ip":          "8.8.8.8"
+//	}, ...]
+//
+// LossPercent and LatencyMs are *float64 so that nil values survive
+// round-tripping through data.Frame as gaps (not zeros).
+type DeviceUplinkLossLatencyHistoryPoint struct {
+	StartTs     time.Time `json:"startTs"`
+	EndTs       time.Time `json:"endTs"`
+	LossPercent *float64  `json:"lossPercent"`
+	LatencyMs   *float64  `json:"latencyMs"`
+	Uplink      string    `json:"uplink"`
+	IP          string    `json:"ip"`
+}
+
+// DeviceUplinkLossLatencyHistoryOptions filters the per-device history call.
+// MaxTimespan: 31 days. Resolution must be one of 60/600/3600/86400 seconds.
+type DeviceUplinkLossLatencyHistoryOptions struct {
+	IP         string
+	Uplink     string
+	Window     *TimeRangeWindow
+	Resolution time.Duration
+}
+
+func (o DeviceUplinkLossLatencyHistoryOptions) values() url.Values {
+	v := url.Values{}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+	}
+	if o.Resolution > 0 {
+		v.Set("resolution", strconv.Itoa(int(o.Resolution.Seconds())))
+	}
+	if o.Uplink != "" {
+		v.Set("uplink", o.Uplink)
+	}
+	if o.IP != "" {
+		v.Set("ip", o.IP)
+	}
+	return v
+}
+
+// GetDeviceUplinksLossAndLatencyHistory returns per-interval loss/latency
+// samples for a single device's uplinks. Not paginated — the endpoint returns
+// a single array.
+//
+// Endpoint: GET /devices/{serial}/uplinks/lossAndLatencyHistory
+// MaxTimespan: 31 days. AllowedResolutions: 60, 600, 3600, 86400 seconds.
+func (c *Client) GetDeviceUplinksLossAndLatencyHistory(ctx context.Context, serial string, opts DeviceUplinkLossLatencyHistoryOptions, ttl time.Duration) ([]DeviceUplinkLossLatencyHistoryPoint, error) {
+	if serial == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "devices/{serial}/uplinks/lossAndLatencyHistory", Message: "missing serial"}}
+	}
+	var out []DeviceUplinkLossLatencyHistoryPoint
+	if err := c.Get(ctx,
+		"devices/"+url.PathEscape(serial)+"/uplinks/lossAndLatencyHistory",
+		"", opts.values(), ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ApplianceUplinksUsageHistoryPoint is one interval sample from
+// `GET /networks/{networkId}/appliance/uplinks/usageHistory`. Response shape
+// per Meraki v1 spec:
+//
+//	[{
+//	  "startTs": "2026-04-01T00:00:00Z",
+//	  "endTs":   "2026-04-01T00:01:00Z",
+//	  "byUplink": [
+//	    {"interface": "wan1", "sent": 12345, "received": 67890},
+//	    {"interface": "wan2", "sent": 0, "received": 0}
+//	  ]
+//	}, ...]
+//
+// Sent/Recv are in kilobytes per the v1 spec.
+type ApplianceUplinksUsageHistoryPoint struct {
+	StartTs  time.Time                    `json:"startTs"`
+	EndTs    time.Time                    `json:"endTs"`
+	ByUplink []ApplianceUplinkUsageSample `json:"byUplink"`
+}
+
+// ApplianceUplinkUsageSample is one uplink's sent/recv counters within a
+// usage history interval. The "received" field is the JSON key on this
+// endpoint (distinct from the byNetwork endpoint which uses "recv").
+type ApplianceUplinkUsageSample struct {
+	Interface string `json:"interface"`
+	Sent      int64  `json:"sent"`
+	Recv      int64  `json:"received"`
+}
+
+// ApplianceUplinksUsageHistoryOptions filters the usageHistory call.
+type ApplianceUplinksUsageHistoryOptions struct {
+	Window     *TimeRangeWindow
+	Resolution time.Duration
+}
+
+func (o ApplianceUplinksUsageHistoryOptions) values() url.Values {
+	v := url.Values{}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+	}
+	if o.Resolution > 0 {
+		v.Set("resolution", strconv.Itoa(int(o.Resolution.Seconds())))
+	}
+	return v
+}
+
+// GetNetworkApplianceUplinksUsageHistory returns per-interval sent/received
+// bytes per uplink for one network. Not paginated.
+//
+// Endpoint: GET /networks/{networkId}/appliance/uplinks/usageHistory
+// MaxTimespan: 31 days. AllowedResolutions: 60, 600, 3600, 86400 seconds.
+func (c *Client) GetNetworkApplianceUplinksUsageHistory(ctx context.Context, networkID string, opts ApplianceUplinksUsageHistoryOptions, ttl time.Duration) ([]ApplianceUplinksUsageHistoryPoint, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/appliance/uplinks/usageHistory", Message: "missing network id"}}
+	}
+	var out []ApplianceUplinksUsageHistoryPoint
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/appliance/uplinks/usageHistory",
+		"", opts.values(), ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ApplianceUplinksUsageByNetworkEntry is one row from
+// `GET /organizations/{orgId}/appliance/uplinks/usage/byNetwork`. Response shape:
+//
+//	[{
+//	  "network": {"id": "N_xxx", "name": "Branch"},
+//	  "byUplink": [
+//	    {"interface": "wan1", "sent": 12345, "received": 67890}
+//	  ]
+//	}, ...]
+type ApplianceUplinksUsageByNetworkEntry struct {
+	Network  ApplianceUsageNetwork        `json:"network"`
+	ByUplink []ApplianceUplinkUsageSample `json:"byUplink"`
+}
+
+// ApplianceUsageNetwork is the nested network identity block.
+type ApplianceUsageNetwork struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// ApplianceUplinksUsageByNetworkOptions filters the org-level byNetwork call.
+type ApplianceUplinksUsageByNetworkOptions struct {
+	Timespan time.Duration
+	Window   *TimeRangeWindow
+}
+
+func (o ApplianceUplinksUsageByNetworkOptions) values() url.Values {
+	v := url.Values{}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+	} else if o.Timespan > 0 {
+		v.Set("timespan", strconv.Itoa(int(o.Timespan.Seconds())))
+	}
+	return v
+}
+
+// GetOrganizationApplianceUplinksUsageByNetwork returns per-network uplink
+// usage totals for the specified org. Not paginated (single GET).
+//
+// Endpoint: GET /organizations/{orgId}/appliance/uplinks/usage/byNetwork
+func (c *Client) GetOrganizationApplianceUplinksUsageByNetwork(ctx context.Context, orgID string, opts ApplianceUplinksUsageByNetworkOptions, ttl time.Duration) ([]ApplianceUplinksUsageByNetworkEntry, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/appliance/uplinks/usage/byNetwork", Message: "missing organization id"}}
+	}
+	var out []ApplianceUplinksUsageByNetworkEntry
+	if err := c.Get(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/appliance/uplinks/usage/byNetwork",
+		orgID, opts.values(), ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ApplianceSettings is the response shape of
 // `GET /networks/{networkId}/appliance/settings`.
 type ApplianceSettings struct {

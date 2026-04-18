@@ -78,7 +78,17 @@ type FormState = {
   showEmptyFamilies: boolean;
 };
 
-type HealthResult = { status: 'ok' | 'error'; message: string } | null;
+type HealthDetails = {
+  email?: string;
+  name?: string;
+  twoFactorEnabled?: boolean;
+  samlEnabled?: boolean;
+  organizationCount?: number;
+};
+
+type HealthResult =
+  | { status: 'ok' | 'error'; message: string; details?: HealthDetails }
+  | null;
 type SaveState = null | { ok: true; message: string } | { ok: false; message: string };
 
 // Keep the "saved successfully, reloading…" banner on screen briefly so the user sees
@@ -417,6 +427,27 @@ export const MerakiConfigForm = ({ meta, variant = 'full' }: MerakiConfigFormPro
           onRemove={() => setHealth(null)}
         >
           {health.message}
+          {health.status === 'ok' && health.details?.email && (
+            <div className={s.connectionDetails}>
+              <div>
+                <strong>Signed in as:</strong>{' '}
+                {health.details.name
+                  ? `${health.details.name} (${health.details.email})`
+                  : health.details.email}
+              </div>
+              {typeof health.details.organizationCount === 'number' && (
+                <div>
+                  <strong>Organizations visible:</strong>{' '}
+                  {health.details.organizationCount}
+                </div>
+              )}
+              {health.details.twoFactorEnabled && (
+                <div>
+                  <strong>Two-factor auth:</strong> enabled
+                </div>
+              )}
+            </div>
+          )}
         </Alert>
       )}
     </div>
@@ -457,7 +488,15 @@ async function updatePlugin(pluginId: string, data: Partial<PluginMeta<AppJsonDa
 }
 
 async function runHealthCheck(pluginId: string): Promise<HealthResult> {
-  const response = getBackendSrv().fetch<{ status: string; message: string }>({
+  // Grafana surfaces the CheckHealthResult.JSONDetails payload under
+  // `data.details` on the /health response envelope. Older Grafana versions
+  // that ignore JSONDetails just omit the field — the UI falls back to the
+  // human-readable message in that case.
+  const response = getBackendSrv().fetch<{
+    status: string;
+    message: string;
+    details?: HealthDetails;
+  }>({
     url: `/api/plugins/${pluginId}/health`,
     method: 'GET',
   });
@@ -466,6 +505,7 @@ async function runHealthCheck(pluginId: string): Promise<HealthResult> {
   return {
     status: ok ? 'ok' : 'error',
     message: data?.message || (ok ? 'Reachable.' : 'Unknown error.'),
+    details: data?.details,
   };
 }
 
@@ -509,5 +549,12 @@ const getStyles = (theme: GrafanaTheme2) => ({
   moreSettingsLead: css`
     margin: 0 0 ${theme.spacing(2)} 0;
     color: ${theme.colors.text.secondary};
+  `,
+  connectionDetails: css`
+    margin-top: ${theme.spacing(1.5)};
+    display: flex;
+    flex-direction: column;
+    gap: ${theme.spacing(0.5)};
+    font-size: ${theme.typography.bodySmall.fontSize};
   `,
 });

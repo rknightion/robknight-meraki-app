@@ -464,3 +464,111 @@ func TestHandle_TopSwitchesByEnergy_ConvertsJoulesToKwh(t *testing.T) {
 		t.Fatalf("energyKwh = %v, want 2.0 (7.2MJ / 3.6M)", got)
 	}
 }
+
+// TestHandle_LicensesOverview_FallsBackToSubscription verifies the
+// subscription-licensing fallback: when /licenses/overview returns a 400
+// with a subscription-model error body, the handler falls through to
+// /administered/licensing/subscription/subscriptions and synthesises the
+// KPI frame from the subscription list.
+func TestHandle_LicensesOverview_FallsBackToSubscription(t *testing.T) {
+	// Two active subscriptions, one expiring soon (within 30 days), one with
+	// a far-future end date. SummariseSeats should report total=30 across
+	// both, active=30, expiring30=10 (just the first).
+	soonExp := time.Now().UTC().Add(15 * 24 * time.Hour).Format(time.RFC3339)
+	farExp := time.Now().UTC().Add(365 * 24 * time.Hour).Format(time.RFC3339)
+	subsPayload := `[` +
+		`{"subscriptionId":"S1","name":"Corp","status":"active","endDate":"` + soonExp + `","counts":{"seats":{"limit":10,"assigned":10,"available":0}}},` +
+		`{"subscriptionId":"S2","name":"Branch","status":"active","endDate":"` + farExp + `","counts":{"seats":{"limit":20,"assigned":18,"available":2}}}` +
+		`]`
+
+	srv := newInsightsServer().
+		handle("/licenses/overview", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errors":["This organization uses subscription licensing and does not support this endpoint."]}`))
+		}).
+		handle("/administered/licensing/subscription/subscriptions", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(subsPayload))
+		}).start(t)
+	client := newInsightsClient(t, srv)
+
+	frame := runSingleFrame(t, client, MerakiQuery{RefID: "A", Kind: KindLicensesOverview, OrgID: "o1"}, TimeRange{}, Options{})
+
+	if got := fieldInt64(t, frame, "total"); got != 30 {
+		t.Fatalf("total = %d, want 30 (10 + 20)", got)
+	}
+	if got := fieldInt64(t, frame, "active"); got != 30 {
+		t.Fatalf("active = %d, want 30", got)
+	}
+	if got := fieldInt64(t, frame, "expiring30"); got != 10 {
+		t.Fatalf("expiring30 = %d, want 10 (only the 15-day subscription)", got)
+	}
+	if got := fieldBool(t, frame, "coterm"); got {
+		t.Fatalf("coterm = true, want false on subscription org")
+	}
+	// Diagnostic notice should explain this came from the subscription fallback.
+	if len(frame.Meta.Notices) == 0 {
+		t.Fatalf("expected diagnostic notice on subscription frame")
+	}
+	found := false
+	for _, n := range frame.Meta.Notices {
+		if strings.Contains(n.Text, "/administered/licensing/subscription/subscriptions") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected notice mentioning the administered endpoint; got %+v", frame.Meta.Notices)
+	}
+}
+
+// TestHandle_LicensesList_FallsBackToSubscriptions verifies the per-row
+// fallback: /licenses 400 on a subscription-licensed org falls through to
+// /administered/licensing/subscription/subscriptions, and each subscription
+// becomes one row in the licenses_list frame.
+func TestHandle_LicensesList_FallsBackToSubscriptions(t *testing.T) {
+	subsPayload := `[` +
+		`{"subscriptionId":"S1","name":"Corp","status":"active","type":"enterpriseAgreement","endDate":"2027-03-01T00:00:00Z","counts":{"seats":{"limit":10,"assigned":10,"available":0}}}` +
+		`]`
+	srv := newInsightsServer().
+		handle("/licenses/overview", func(w http.ResponseWriter, _ *http.Request) {
+			// Per-device shape so the overview probe inside handleLicensesList
+			// doesn't short-circuit on coterm. The list call is what needs to
+			// trigger the 400 fallback.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"states":{"active":{"count":0},"expired":{"count":0},"expiring":{"count":0},"recentlyQueued":{"count":0},"unused":{"count":0},"unusedActive":{"count":0}}}`))
+		}).
+		handle("/administered/licensing/subscription/subscriptions", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(subsPayload))
+		}).
+		handle("/licenses", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"errors":["subscription licensing org - use /administered endpoints"]}`))
+		}).start(t)
+	client := newInsightsClient(t, srv)
+
+	frame := runSingleFrame(t, client, MerakiQuery{RefID: "A", Kind: KindLicensesList, OrgID: "o1"}, TimeRange{}, Options{})
+
+	rows, _ := frame.RowLen()
+	if rows != 1 {
+		t.Fatalf("rows = %d, want 1 (one subscription)", rows)
+	}
+	if field, _ := frame.FieldByName("state"); field == nil {
+		t.Fatalf("frame missing state column")
+	} else if got, _ := field.ConcreteAt(0); got != "active" {
+		t.Fatalf("state row 0 = %v, want 'active'", got)
+	}
+	if field, _ := frame.FieldByName("licenseType"); field != nil {
+		if got, _ := field.ConcreteAt(0); got != "enterpriseAgreement" {
+			t.Fatalf("licenseType row 0 = %v, want 'enterpriseAgreement'", got)
+		}
+	}
+	if field, _ := frame.FieldByName("seatCount"); field != nil {
+		if got, _ := field.ConcreteAt(0); got != int64(10) {
+			t.Fatalf("seatCount row 0 = %v, want 10", got)
+		}
+	}
+}

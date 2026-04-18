@@ -175,8 +175,16 @@ func (a *App) Configured() bool {
 	return a.client != nil
 }
 
-// CheckHealth validates the configured API key by calling GET /organizations with a 15s
-// timeout. Returns OK with the org count on success, or an error message on failure.
+// CheckHealth validates the configured API key by calling GET /organizations
+// with a 15s timeout. When the orgs probe succeeds, it also probes
+// /administered/identities/me so the AppConfig UI can render the API key
+// owner's email in a "Connection" card — the identity probe is best-effort
+// and does not fail the health check if it 4xx/5xx's.
+//
+// The identity payload (email + name) is returned via
+// CheckHealthResult.JSONDetails so the frontend can surface it without
+// scraping the human-readable Message. Older Grafana versions that ignore
+// JSONDetails still get the friendly message.
 func (a *App) CheckHealth(ctx context.Context, _ *backend.CheckHealthRequest) (*backend.CheckHealthResult, error) {
 	if a.client == nil {
 		return &backend.CheckHealthResult{
@@ -186,17 +194,77 @@ func (a *App) CheckHealth(ctx context.Context, _ *backend.CheckHealthRequest) (*
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	orgs, err := a.client.GetOrganizations(ctx, 0)
-	if err != nil {
-		a.logger.Warn("meraki health check failed", "err", err)
+
+	// Run the two probes in parallel. Meraki rate-limits per-org rather than
+	// per-endpoint, so issuing two GETs concurrently costs one extra RPS but
+	// halves the wall-time of the health check — matters because Grafana
+	// runs this on every panel-level auth retry.
+	type orgsResult struct {
+		orgs []meraki.Organization
+		err  error
+	}
+	type identityResult struct {
+		identity *meraki.AdministeredIdentity
+		err      error
+	}
+	orgsCh := make(chan orgsResult, 1)
+	identityCh := make(chan identityResult, 1)
+	go func() {
+		orgs, err := a.client.GetOrganizations(ctx, 0)
+		orgsCh <- orgsResult{orgs: orgs, err: err}
+	}()
+	go func() {
+		identity, err := a.client.GetAdministeredIdentitiesMe(ctx, 0)
+		identityCh <- identityResult{identity: identity, err: err}
+	}()
+	orgs := <-orgsCh
+	identity := <-identityCh
+
+	if orgs.err != nil {
+		a.logger.Warn("meraki health check failed", "err", orgs.err)
 		return &backend.CheckHealthResult{
 			Status:  backend.HealthStatusError,
-			Message: friendlyError(err),
+			Message: friendlyError(orgs.err),
 		}, nil
 	}
+
+	// Identity probe failure is non-fatal — we can't surface the owner card
+	// but connectivity is still confirmed by the org probe.
+	if identity.err != nil {
+		a.logger.Debug("meraki identity probe failed (non-fatal)", "err", identity.err)
+	}
+
+	message := fmt.Sprintf("Connected to Meraki; %d organization%s visible.", len(orgs.orgs), pluralSuffix(len(orgs.orgs)))
+	if identity.identity != nil && identity.identity.Email != "" {
+		message = fmt.Sprintf("Connected to Meraki as %s; %d organization%s visible.", identity.identity.Email, len(orgs.orgs), pluralSuffix(len(orgs.orgs)))
+	}
+
+	type healthDetails struct {
+		Email             string `json:"email,omitempty"`
+		Name              string `json:"name,omitempty"`
+		TwoFactorEnabled  bool   `json:"twoFactorEnabled,omitempty"`
+		SAMLEnabled       bool   `json:"samlEnabled,omitempty"`
+		OrganizationCount int    `json:"organizationCount"`
+	}
+	details := healthDetails{OrganizationCount: len(orgs.orgs)}
+	if identity.identity != nil {
+		details.Email = identity.identity.Email
+		details.Name = identity.identity.Name
+		if identity.identity.Authentication != nil {
+			if identity.identity.Authentication.TwoFactor != nil {
+				details.TwoFactorEnabled = identity.identity.Authentication.TwoFactor.Enabled
+			}
+			if identity.identity.Authentication.SAML != nil {
+				details.SAMLEnabled = identity.identity.Authentication.SAML.Enabled
+			}
+		}
+	}
+	detailsJSON, _ := json.Marshal(details)
+
 	return &backend.CheckHealthResult{
-		Status:  backend.HealthStatusOk,
-		Message: fmt.Sprintf("Connected to Meraki; %d organization%s visible.", len(orgs), pluralSuffix(len(orgs))),
+		Status:      backend.HealthStatusOk,
+		Message:     message,
+		JSONDetails: detailsJSON,
 	}, nil
 }
 

@@ -636,6 +636,359 @@ func handleDeviceUplinksLossLatency(ctx context.Context, client *meraki.Client, 
 	return frames, nil
 }
 
+// deviceUplinkHistoryEndpoint is the KnownEndpointRanges key for the per-device
+// uplink loss/latency history endpoint (§2.2).
+const deviceUplinkHistoryEndpoint = "devices/{serial}/uplinks/lossAndLatencyHistory"
+
+// applianceUplinksUsageHistoryEndpoint is the KnownEndpointRanges key for the
+// per-network appliance uplinks usage history endpoint (§3.5).
+const applianceUplinksUsageHistoryEndpoint = "networks/{networkId}/appliance/uplinks/usageHistory"
+
+// TTLs for the new kinds.
+const (
+	deviceUplinkHistoryTTL         = 1 * time.Minute
+	applianceUplinksUsageHistoryTTL = 1 * time.Minute
+	applianceUplinksUsageByNetTTL   = 1 * time.Minute
+)
+
+// lossLatencyHistKey groups per-device history points into one frame per
+// (uplink, ip, metric).
+type lossLatencyHistKey struct {
+	uplink string
+	ip     string
+	metric string
+}
+
+// handleDeviceUplinksLossLatencyHistory fetches the per-device uplink
+// loss/latency history (up to 31 days) and emits one native timeseries frame
+// per (uplink, ip, metric) — where metric ∈ {"lossPercent", "latencyMs"}.
+//
+// Requires q.Serials[0]. q.Metrics[0] optionally filters to one uplink;
+// q.Metrics[1] optionally filters to one IP.
+//
+// Mirrors the per-org snapshot handler (handleDeviceUplinksLossLatency) in
+// frame shape and label set so existing panels can switch kinds without
+// changing their transform chain.
+func handleDeviceUplinksLossLatencyHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
+	if len(q.Serials) == 0 {
+		return nil, fmt.Errorf("deviceUplinksLossLatencyHistory: serials[0] is required")
+	}
+	serial := q.Serials[0]
+
+	from := toRFCTime(tr.From)
+	to := toRFCTime(tr.To)
+	if from.IsZero() || to.IsZero() {
+		return nil, fmt.Errorf("deviceUplinksLossLatencyHistory: time range is required")
+	}
+
+	spec, ok := meraki.KnownEndpointRanges[deviceUplinkHistoryEndpoint]
+	if !ok {
+		return nil, fmt.Errorf("deviceUplinksLossLatencyHistory: missing endpoint spec")
+	}
+	window, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
+	if err != nil {
+		return nil, fmt.Errorf("deviceUplinksLossLatencyHistory: resolve window: %w", err)
+	}
+
+	uplinkFilter := ""
+	ipFilter := ""
+	if len(q.Metrics) > 0 {
+		uplinkFilter = q.Metrics[0]
+	}
+	if len(q.Metrics) > 1 {
+		ipFilter = q.Metrics[1]
+	}
+
+	reqOpts := meraki.DeviceUplinkLossLatencyHistoryOptions{
+		Window:     &window,
+		Resolution: window.Resolution,
+		Uplink:     uplinkFilter,
+		IP:         ipFilter,
+	}
+	points, err := client.GetDeviceUplinksLossAndLatencyHistory(ctx, serial, reqOpts, deviceUplinkHistoryTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Serial→name resolution for legend display, gated on LabelMode.
+	var nameBySerial map[string]string
+	if opts.LabelMode == "name" {
+		if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "appliance"); lookupErr == nil {
+			nameBySerial = names
+		}
+	}
+
+	type seriesBuf struct {
+		ts     []time.Time
+		values []*float64
+	}
+	groups := make(map[lossLatencyHistKey]*seriesBuf)
+	for _, pt := range points {
+		ts := pt.StartTs.UTC()
+		lossKey := lossLatencyHistKey{uplink: pt.Uplink, ip: pt.IP, metric: "lossPercent"}
+		latencyKey := lossLatencyHistKey{uplink: pt.Uplink, ip: pt.IP, metric: "latencyMs"}
+		if _, exists := groups[lossKey]; !exists {
+			groups[lossKey] = &seriesBuf{}
+		}
+		if _, exists := groups[latencyKey]; !exists {
+			groups[latencyKey] = &seriesBuf{}
+		}
+		groups[lossKey].ts = append(groups[lossKey].ts, ts)
+		groups[lossKey].values = append(groups[lossKey].values, pt.LossPercent)
+		groups[latencyKey].ts = append(groups[latencyKey].ts, ts)
+		groups[latencyKey].values = append(groups[latencyKey].values, pt.LatencyMs)
+	}
+
+	if len(groups) == 0 {
+		empty := data.NewFrame("device_uplinks_loss_latency_history",
+			data.NewField("ts", nil, []time.Time{}),
+			data.NewField("value", nil, []*float64{}),
+		)
+		frames := []*data.Frame{empty}
+		if window.Truncated {
+			for _, ann := range window.Annotations {
+				frames[0].AppendNotices(data.Notice{Severity: data.NoticeSeverityWarning, Text: ann})
+			}
+		}
+		return frames, nil
+	}
+
+	// Sort keys for deterministic frame order.
+	keys := make([]lossLatencyHistKey, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].uplink != keys[j].uplink {
+			return keys[i].uplink < keys[j].uplink
+		}
+		if keys[i].ip != keys[j].ip {
+			return keys[i].ip < keys[j].ip
+		}
+		return keys[i].metric < keys[j].metric
+	})
+
+	frames := make([]*data.Frame, 0, len(keys))
+	for _, k := range keys {
+		buf := groups[k]
+
+		labels := data.Labels{
+			"serial": serial,
+			"uplink": k.uplink,
+			"ip":     k.ip,
+			"metric": k.metric,
+		}
+		valueField := data.NewField("value", labels, buf.values)
+
+		display := serial
+		if nameBySerial != nil {
+			if name := nameBySerial[serial]; name != "" {
+				display = name
+			}
+		}
+		displayName := fmt.Sprintf("%s / %s / %s / %s", display, k.uplink, k.ip, k.metric)
+
+		unit := "ms"
+		if k.metric == "lossPercent" {
+			unit = "percent"
+		}
+		valueField.Config = &data.FieldConfig{
+			DisplayNameFromDS: displayName,
+			Unit:              unit,
+		}
+
+		frame := data.NewFrame("device_uplinks_loss_latency_history",
+			data.NewField("ts", nil, buf.ts),
+			valueField,
+		)
+		frames = append(frames, frame)
+	}
+
+	if window.Truncated && len(frames) > 0 {
+		for _, ann := range window.Annotations {
+			frames[0].AppendNotices(data.Notice{Severity: data.NoticeSeverityWarning, Text: ann})
+		}
+	}
+	return frames, nil
+}
+
+// uplinkUsageKey groups per-interval usage samples into one frame per
+// (interface, metric).
+type uplinkUsageKey struct {
+	iface  string
+	metric string // "sent" | "recv"
+}
+
+// handleApplianceUplinksUsageHistory fetches the per-network uplink usage
+// history (up to 31 days) and emits one native timeseries frame per
+// (interface, metric) with labels {"networkId", "interface", "metric"}.
+//
+// Requires q.NetworkIDs[0].
+func handleApplianceUplinksUsageHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+	if len(q.NetworkIDs) == 0 {
+		return nil, fmt.Errorf("applianceUplinksUsageHistory: networkIds[0] is required")
+	}
+	networkID := q.NetworkIDs[0]
+
+	from := toRFCTime(tr.From)
+	to := toRFCTime(tr.To)
+	if from.IsZero() || to.IsZero() {
+		return nil, fmt.Errorf("applianceUplinksUsageHistory: time range is required")
+	}
+
+	spec, ok := meraki.KnownEndpointRanges[applianceUplinksUsageHistoryEndpoint]
+	if !ok {
+		return nil, fmt.Errorf("applianceUplinksUsageHistory: missing endpoint spec")
+	}
+	window, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
+	if err != nil {
+		return nil, fmt.Errorf("applianceUplinksUsageHistory: resolve window: %w", err)
+	}
+
+	reqOpts := meraki.ApplianceUplinksUsageHistoryOptions{
+		Window:     &window,
+		Resolution: window.Resolution,
+	}
+	points, err := client.GetNetworkApplianceUplinksUsageHistory(ctx, networkID, reqOpts, applianceUplinksUsageHistoryTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	type seriesBuf struct {
+		ts     []time.Time
+		values []int64
+	}
+	groups := make(map[uplinkUsageKey]*seriesBuf)
+	for _, pt := range points {
+		ts := pt.StartTs.UTC()
+		for _, u := range pt.ByUplink {
+			sentKey := uplinkUsageKey{iface: u.Interface, metric: "sent"}
+			recvKey := uplinkUsageKey{iface: u.Interface, metric: "recv"}
+			if _, exists := groups[sentKey]; !exists {
+				groups[sentKey] = &seriesBuf{}
+			}
+			if _, exists := groups[recvKey]; !exists {
+				groups[recvKey] = &seriesBuf{}
+			}
+			groups[sentKey].ts = append(groups[sentKey].ts, ts)
+			groups[sentKey].values = append(groups[sentKey].values, u.Sent)
+			groups[recvKey].ts = append(groups[recvKey].ts, ts)
+			groups[recvKey].values = append(groups[recvKey].values, u.Recv)
+		}
+	}
+
+	if len(groups) == 0 {
+		empty := data.NewFrame("appliance_uplinks_usage_history",
+			data.NewField("ts", nil, []time.Time{}),
+			data.NewField("value", nil, []int64{}),
+		)
+		frames := []*data.Frame{empty}
+		if window.Truncated {
+			for _, ann := range window.Annotations {
+				frames[0].AppendNotices(data.Notice{Severity: data.NoticeSeverityWarning, Text: ann})
+			}
+		}
+		return frames, nil
+	}
+
+	// Sort keys for deterministic frame order.
+	keys := make([]uplinkUsageKey, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].iface != keys[j].iface {
+			return keys[i].iface < keys[j].iface
+		}
+		return keys[i].metric < keys[j].metric
+	})
+
+	frames := make([]*data.Frame, 0, len(keys))
+	for _, k := range keys {
+		buf := groups[k]
+
+		labels := data.Labels{
+			"networkId": networkID,
+			"interface": k.iface,
+			"metric":    k.metric,
+		}
+		displayName := fmt.Sprintf("%s / %s / %s", networkID, k.iface, k.metric)
+		valueField := data.NewField("value", labels, buf.values)
+		valueField.Config = &data.FieldConfig{
+			DisplayNameFromDS: displayName,
+			Unit:              "kbytes",
+		}
+
+		frame := data.NewFrame("appliance_uplinks_usage_history",
+			data.NewField("ts", nil, buf.ts),
+			valueField,
+		)
+		frames = append(frames, frame)
+	}
+
+	if window.Truncated && len(frames) > 0 {
+		for _, ann := range window.Annotations {
+			frames[0].AppendNotices(data.Notice{Severity: data.NoticeSeverityWarning, Text: ann})
+		}
+	}
+	return frames, nil
+}
+
+// handleApplianceUplinksUsageByNetwork fetches org-wide uplink usage totals
+// per network and emits a flat table frame with one row per
+// (networkId, interface). Columns: networkId, networkName, interface, sent,
+// recv, total.
+func handleApplianceUplinksUsageByNetwork(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("applianceUplinksUsageByNetwork: orgId is required")
+	}
+
+	from := toRFCTime(tr.From)
+	to := toRFCTime(tr.To)
+
+	var reqOpts meraki.ApplianceUplinksUsageByNetworkOptions
+	if !from.IsZero() && !to.IsZero() {
+		reqOpts.Window = &meraki.TimeRangeWindow{T0: from, T1: to}
+	} else if q.TimespanSeconds > 0 {
+		reqOpts.Timespan = time.Duration(q.TimespanSeconds) * time.Second
+	}
+
+	entries, err := client.GetOrganizationApplianceUplinksUsageByNetwork(ctx, q.OrgID, reqOpts, applianceUplinksUsageByNetTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		networkIDs   []string
+		networkNames []string
+		interfaces   []string
+		sentKB       []int64
+		recvKB       []int64
+		totalKB      []int64
+	)
+	for _, entry := range entries {
+		for _, u := range entry.ByUplink {
+			networkIDs = append(networkIDs, entry.Network.ID)
+			networkNames = append(networkNames, entry.Network.Name)
+			interfaces = append(interfaces, u.Interface)
+			sentKB = append(sentKB, u.Sent)
+			recvKB = append(recvKB, u.Recv)
+			totalKB = append(totalKB, u.Sent+u.Recv)
+		}
+	}
+
+	return []*data.Frame{
+		data.NewFrame("appliance_uplinks_usage_by_network",
+			data.NewField("networkId", nil, networkIDs),
+			data.NewField("networkName", nil, networkNames),
+			data.NewField("interface", nil, interfaces),
+			data.NewField("sent", nil, sentKB),
+			data.NewField("recv", nil, recvKB),
+			data.NewField("total", nil, totalKB),
+		),
+	}, nil
+}
+
 // handleAppliancePortForwarding concatenates port-forwarding rules across the
 // requested networks into a single table-shaped frame. One row per rule per
 // network; errors on a single network are swallowed (continue-on-error) so a

@@ -258,7 +258,7 @@ export function applianceUplinkStatusTable(serial?: string): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open appliance',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.Appliances}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.Appliances}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('status').overrideCustomFieldConfig('cellOptions', {
@@ -294,7 +294,7 @@ export function applianceInventoryTable(): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open appliance',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.Appliances}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.Appliances}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('firmware').overrideCustomFieldConfig('width', 140);
@@ -465,6 +465,129 @@ export function uplinkLossLatencyTimeseries(
   }
 
   return builder.build();
+}
+
+// §2.2 — Per-device uplink loss/latency history (31-day window) -------------
+
+/**
+ * Native-timeseries panel for a single appliance's uplink loss OR latency
+ * history over up to 31 days. Uses the `$mx` variable for the serial so
+ * this panel is suitable for org-level scenes with a device picker (rather
+ * than the per-device drilldown panels that take a hard-coded serial).
+ *
+ * Mirrors `uplinkLossLatencyTimeseries` in frame shape and transform pattern:
+ * the backend emits one frame per (serial, uplink, ip, metric); we filter to
+ * the desired metric by matching the baked `DisplayNameFromDS` suffix.
+ *
+ * Unit + bounds:
+ *  - lossPercent → percent, min 0, max 100.
+ *  - latencyMs → ms (no bounds; latency can spike into the seconds).
+ */
+export function uplinkLossLatencyHistoryTimeseries(
+  metric: 'lossPercent' | 'latencyMs'
+): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.DeviceUplinksLossLatencyHistory,
+    serials: ['$mx'],
+    maxDataPoints: 500,
+  });
+
+  const filtered = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'filterFieldsByName',
+        options: {
+          include: {
+            pattern: `/^ts$|${metric}$/`,
+          },
+        },
+      },
+    ],
+  });
+
+  const title = metric === 'lossPercent' ? 'Uplink packet loss (history)' : 'Uplink latency (history)';
+  const description =
+    metric === 'lossPercent'
+      ? 'Per-uplink packet loss over time (up to 31 days, resolution auto-scaled).'
+      : 'Per-uplink latency over time (up to 31 days, resolution auto-scaled).';
+
+  const builder = PanelBuilders.timeseries()
+    .setTitle(title)
+    .setDescription(description)
+    .setData(filtered)
+    .setNoValue('No probe data in the selected range.')
+    .setColor({ mode: FieldColorModeId.PaletteClassic })
+    .setCustomFieldConfig('lineWidth', 2)
+    .setCustomFieldConfig('fillOpacity', 10)
+    .setCustomFieldConfig('spanNulls', false)
+    .setCustomFieldConfig('showPoints', 'auto' as any)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any);
+
+  if (metric === 'lossPercent') {
+    builder.setUnit('percent').setMin(0).setMax(100);
+  } else {
+    builder.setUnit('ms');
+  }
+
+  return builder.build();
+}
+
+// §3.5 — MX uplinks usage history + org-wide usage by network ---------------
+
+/**
+ * Native-timeseries panel for a single network's MX uplink usage (sent +
+ * received bytes over time). Uses the `$network` variable. The backend emits
+ * one frame per (interface, metric ∈ {sent, recv}) with kbytes unit.
+ */
+export function mxUplinksUsageHistoryTimeseries(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.ApplianceUplinksUsageHistory,
+    // networkIds interpolates to the selected $network value.
+    networkIds: ['$network'],
+    maxDataPoints: 500,
+  });
+
+  return PanelBuilders.timeseries()
+    .setTitle('MX uplinks usage (history)')
+    .setDescription('Sent and received kilobytes per uplink over the selected time range.')
+    .setData(runner)
+    .setNoValue('No usage data in the selected range.')
+    .setUnit('kbytes')
+    .setColor({ mode: FieldColorModeId.PaletteClassic })
+    .setCustomFieldConfig('lineWidth', 2)
+    .setCustomFieldConfig('fillOpacity', 10)
+    .setCustomFieldConfig('spanNulls', false)
+    .setCustomFieldConfig('showPoints', 'auto' as any)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
+    .build();
+}
+
+/**
+ * Table of MX uplink usage totals per network for the entire org. Backed by
+ * the `ApplianceUplinksUsageByNetwork` kind which is a snapshot (no time
+ * range). Columns: networkName, interface, sent, recv, total — all in kbytes.
+ */
+export function mxUplinksUsageByNetworkTable(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.ApplianceUplinksUsageByNetwork,
+  });
+
+  return PanelBuilders.table()
+    .setTitle('MX uplinks usage by network')
+    .setDescription('Org-wide per-network uplink usage totals (kilobytes sent + received).')
+    .setData(hideColumns(runner, ['networkId']))
+    .setNoValue('No usage data reported for this organization.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('sent').overrideUnit('kbytes');
+      b.matchFieldsWithName('recv').overrideUnit('kbytes');
+      b.matchFieldsWithName('total').overrideUnit('kbytes');
+      b.matchFieldsWithName('networkName').overrideCustomFieldConfig('width', 220);
+      b.matchFieldsWithName('interface').overrideCustomFieldConfig('width', 110);
+    })
+    .build();
 }
 
 // Firewall tab panels --------------------------------------------------------

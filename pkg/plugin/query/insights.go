@@ -22,6 +22,7 @@ import (
 const (
 	licensesOverviewTTL      = 15 * time.Minute
 	licensesListTTL          = 15 * time.Minute
+	subscriptionsTTL         = 15 * time.Minute
 	apiRequestsOverviewTTL   = 1 * time.Minute
 	apiRequestsByIntervalTTL = 5 * time.Minute
 	clientsOverviewTTL       = 5 * time.Minute
@@ -59,6 +60,14 @@ func handleLicensesOverview(ctx context.Context, client *meraki.Client, q Meraki
 	}
 	overview, err := client.GetOrganizationLicensesOverview(ctx, q.OrgID, licensesOverviewTTL)
 	if err != nil {
+		// Subscription-licensed orgs return HTTP 400 from /licenses/overview.
+		// Fall back to /administered/licensing/subscription/subscriptions and
+		// synthesise the same KPI columns by bucketing subscriptions on end
+		// date. Any other error is surfaced unchanged — the caller will turn
+		// it into a frame notice.
+		if meraki.IsSubscriptionLicensingError(err) {
+			return subscriptionLicensesOverviewFrame(ctx, client, q.OrgID)
+		}
 		return nil, err
 	}
 
@@ -107,18 +116,57 @@ func handleLicensesOverview(ctx context.Context, client *meraki.Client, q Meraki
 		data.NewField("cotermExpiration", nil, []time.Time{cotermExpiration}),
 		data.NewField("cotermStatus", nil, []string{cotermStatus}),
 	)
-	// Diagnostic notice: help users tell "no licenses visible for this API key"
-	// apart from "the /licenses/overview endpoint returned an empty body".
-	// Subscription-based orgs (managed in LicenseHub) don't populate this
-	// legacy endpoint — the org uses a different licensing API that the
-	// plugin does not yet call.
+	// If /licenses/overview succeeded but returned an empty body, it's
+	// almost always because the org is subscription-licensed but the endpoint
+	// hasn't fully propagated the 400 we now handle above. Probe the fallback
+	// regardless — if it returns data, swap to the synthesised frame; if it
+	// 400s with a different error we emit the original empty frame with a
+	// diagnostic notice.
 	if !coterm && total == 0 {
+		if subs, subErr := client.GetAdministeredLicensingSubscriptions(ctx, meraki.AdministeredSubscriptionOptions{OrganizationIDs: []string{q.OrgID}}, subscriptionsTTL); subErr == nil && len(subs) > 0 {
+			return subscriptionFrameFromSubs(subs), nil
+		}
 		frame.AppendNotices(data.Notice{
 			Severity: data.NoticeSeverityInfo,
-			Text:     "No data returned by /organizations/{id}/licenses/overview. If this organisation is managed via subscription / LicenseHub, use the Meraki dashboard directly until the plugin adds the subscription API.",
+			Text:     "No data returned by /organizations/{id}/licenses/overview or the subscription fallback. If this org is managed via LicenseHub / subscription, check that the API key has read scope on /administered/licensing.",
 		})
 	}
 	return []*data.Frame{frame}, nil
+}
+
+// subscriptionLicensesOverviewFrame is the fallback path for orgs on the
+// newer subscription licensing model. Shape mirrors the /licenses/overview
+// frame so panels bind to the same field names regardless of which licensing
+// model the org uses.
+func subscriptionLicensesOverviewFrame(ctx context.Context, client *meraki.Client, orgID string) ([]*data.Frame, error) {
+	subs, err := client.GetAdministeredLicensingSubscriptions(ctx, meraki.AdministeredSubscriptionOptions{OrganizationIDs: []string{orgID}}, subscriptionsTTL)
+	if err != nil {
+		return nil, err
+	}
+	return subscriptionFrameFromSubs(subs), nil
+}
+
+// subscriptionFrameFromSubs builds the licenses_overview frame from a
+// subscription slice. Kept separate from the HTTP call so tests can exercise
+// bucketing logic without stubbing the network.
+func subscriptionFrameFromSubs(subs []meraki.AdministeredSubscription) []*data.Frame {
+	summary := meraki.SummariseSeats(subs, time.Now().UTC())
+	frame := data.NewFrame("licenses_overview",
+		data.NewField("active", nil, []int64{summary.Active}),
+		data.NewField("expiring30", nil, []int64{summary.Expiring30}),
+		data.NewField("expired", nil, []int64{summary.Expired}),
+		data.NewField("recentlyQueued", nil, []int64{int64(0)}),
+		data.NewField("unusedActive", nil, []int64{int64(0)}),
+		data.NewField("total", nil, []int64{summary.Total}),
+		data.NewField("coterm", nil, []bool{false}),
+		data.NewField("cotermExpiration", nil, []time.Time{summary.EarliestExpiration}),
+		data.NewField("cotermStatus", nil, []string{"subscription"}),
+	)
+	frame.AppendNotices(data.Notice{
+		Severity: data.NoticeSeverityInfo,
+		Text:     "Licensing KPIs synthesised from /administered/licensing/subscription/subscriptions — this organization uses the subscription licensing model.",
+	})
+	return []*data.Frame{frame}
 }
 
 // handleLicensesList emits a table frame of per-device licenses. Co-term orgs
@@ -157,6 +205,15 @@ func handleLicensesList(ctx context.Context, client *meraki.Client, q MerakiQuer
 
 	licenses, err := client.GetOrganizationLicenses(ctx, q.OrgID, opts, licensesListTTL)
 	if err != nil {
+		// Subscription-licensed orgs reject /licenses with HTTP 400. Fall
+		// back to the administered subscription list and emit a per-
+		// subscription row in the same column shape — `licenseType` carries
+		// the subscription type (enterpriseAgreement / termed), `state` the
+		// subscription status, and `deviceSerial` is left blank because
+		// subscriptions span an org, not a device.
+		if meraki.IsSubscriptionLicensingError(err) {
+			return subscriptionLicensesListFrame(ctx, client, q.OrgID)
+		}
 		return nil, err
 	}
 
@@ -213,6 +270,87 @@ func handleLicensesList(ctx context.Context, client *meraki.Client, q MerakiQuer
 			data.NewField("daysUntilExpiry", nil, daysUntilExpiry),
 		),
 	}, nil
+}
+
+// subscriptionLicensesListFrame builds a licenses_list-shaped frame from the
+// administered subscription endpoint so panels keep binding to the same
+// column set for subscription-licensed orgs. `deviceSerial` stays blank
+// because subscriptions are org-scoped; `networkId` carries subscription
+// name instead so the UI still has a readable secondary label; `state` maps
+// to subscription Status; `expirationDate` maps to subscription EndDate.
+func subscriptionLicensesListFrame(ctx context.Context, client *meraki.Client, orgID string) ([]*data.Frame, error) {
+	subs, err := client.GetAdministeredLicensingSubscriptions(ctx, meraki.AdministeredSubscriptionOptions{OrganizationIDs: []string{orgID}}, subscriptionsTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		ids              []string
+		licenseTypes     []string
+		states           []string
+		serials          []string
+		networkIDs       []string
+		seatCounts       []int64
+		activations      []time.Time
+		expirations      []time.Time
+		headLicenseIDs   []string
+		daysUntilExpiry  []int64
+	)
+	now := time.Now().UTC()
+	for _, s := range subs {
+		ids = append(ids, s.SubscriptionID)
+		licenseTypes = append(licenseTypes, s.Type)
+		states = append(states, s.Status)
+		serials = append(serials, "")
+		// Use the subscription name as a secondary identifier since
+		// subscriptions aren't scoped to a network. Keeps panels that
+		// previously keyed on `networkId` from breaking.
+		networkIDs = append(networkIDs, s.Name)
+
+		var seat int64
+		if s.Counts != nil {
+			seat = s.Counts.Seats.Limit
+		}
+		if seat == 0 {
+			for _, e := range s.Entitlements {
+				seat += e.Seats.Limit
+			}
+		}
+		seatCounts = append(seatCounts, seat)
+
+		if s.StartDate != nil {
+			activations = append(activations, s.StartDate.UTC())
+		} else {
+			activations = append(activations, time.Time{})
+		}
+		if s.EndDate != nil {
+			exp := s.EndDate.UTC()
+			expirations = append(expirations, exp)
+			daysUntilExpiry = append(daysUntilExpiry, int64(exp.Sub(now)/(24*time.Hour)))
+		} else {
+			expirations = append(expirations, time.Time{})
+			daysUntilExpiry = append(daysUntilExpiry, -1)
+		}
+		headLicenseIDs = append(headLicenseIDs, "")
+	}
+
+	frame := data.NewFrame("licenses_list",
+		data.NewField("id", nil, ids),
+		data.NewField("licenseType", nil, licenseTypes),
+		data.NewField("state", nil, states),
+		data.NewField("deviceSerial", nil, serials),
+		data.NewField("networkId", nil, networkIDs),
+		data.NewField("seatCount", nil, seatCounts),
+		data.NewField("activationDate", nil, activations),
+		data.NewField("expirationDate", nil, expirations),
+		data.NewField("headLicenseId", nil, headLicenseIDs),
+		data.NewField("daysUntilExpiry", nil, daysUntilExpiry),
+	)
+	frame.AppendNotices(data.Notice{
+		Severity: data.NoticeSeverityInfo,
+		Text:     "Subscription-licensed org — rows sourced from /administered/licensing/subscription/subscriptions. `networkId` column carries the subscription name; `deviceSerial` is blank because subscriptions are org-scoped.",
+	})
+	return []*data.Frame{frame}, nil
 }
 
 // emptyLicensesFrame constructs the zero-row licenses_list frame with the
