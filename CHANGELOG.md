@@ -110,6 +110,15 @@ top-level pages.
 
 ### Changed
 
+- **Home reworked** — 6-stat at-a-glance KPI row (devicesOffline,
+  alertsCritical, licensesExp30d, firmwareDrift, apiErrorPct, uplinksDown —
+  backed by the new `orgHealthSummary` kind), 24h change feed tile
+  polished out of stub, availability-by-family stacked bar (new
+  `deviceStatusByFamily` kind reshaping the availabilities feed by
+  productType); org inventory kept as the drill-out surface. HomeIntro
+  condensed from a welcome block + CTA grid to a 40 px single-line hint
+  since navigation lives in the left sidebar (v0.5 §4.4.5).
+
 - **UX change — Appliances VPN tab.** The VPN peer-matrix table has been
   **REPLACED** with a source × peer reachability **heatmap** (new
   `applianceVpnHeatmap` query kind). The previous matrix became hard to

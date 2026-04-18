@@ -2,10 +2,23 @@ import { test, expect } from './fixtures';
 import { ROUTES } from '../src/constants';
 
 test.describe('Meraki app navigation', () => {
-  test('Home page renders the intro panel', async ({ gotoPage, page }) => {
+  test('Home page renders the condensed intro banner + KPI row (v0.5 §4.4.5)', async ({
+    gotoPage,
+    page,
+  }) => {
     await gotoPage(`/${ROUTES.Home}`);
-    await expect(page.getByRole('heading', { name: 'Cisco Meraki' })).toBeVisible();
-    await expect(page.getByText(/Meraki API key/i)).toBeVisible();
+    // Row 2 — condensed intro. The old welcome block + CTA grid was removed;
+    // only a single-line hint remains.
+    await expect(page.getByText('Cisco Meraki').first()).toBeVisible();
+    await expect(page.getByText(/pick an organization/i)).toBeVisible();
+    // Row 3 — "At a glance" KPI row. Titles come from HOME_AT_A_GLANCE_KPIS.
+    await expect(page.getByText('Devices offline')).toBeVisible();
+    await expect(page.getByText('Critical alerts')).toBeVisible();
+    await expect(page.getByText('Uplinks down')).toBeVisible();
+    // Row 4 — 24h change feed tile title.
+    await expect(page.getByText('What changed in the last 24 hours')).toBeVisible();
+    // Row 5 — availability by family stacked bar.
+    await expect(page.getByText('Availability by device family')).toBeVisible();
   });
 
   test('Organizations page renders', async ({ gotoPage, page }) => {
