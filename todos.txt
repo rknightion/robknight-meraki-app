@@ -944,67 +944,23 @@ Scope EXCLUDES:
           - VPN tab renders heatmap; failover history + shaping render
             on respective tabs.
 
-  1d  MG (Cellular Gateways, 1 panel)                           Track A #18
-      New kind:   cellularDataUsage (monthly cumulative data per MG)
-      Meraki endpoint + wrapper in pkg/meraki/cellular.go:
-        GET /organizations/{id}/cellularGateway/uplink/statuses
-          — already exists (mgUplinks); add data-usage field extraction.
-        OR GET /devices/{serial}/cellularGateway/dataUsage (if per-device).
-        Confirm at implementation time which API surfaces monthly totals.
-      TTLs:       1h (monthly counters don't change fast).
-      Scene wiring: src/pages/CellularGateways/panels.ts, add stacked-area
-                    or bar per MG. Include a configurable "plan cap"
-                    threshold via panel override (NOT AppJsonData — we
-                    don't have per-MG config yet; defer to v0.6 alerts
-                    bundle where the cap lives in rule config).
-      Tests:      cellular_test.go addition.
+  1d  MG (Cellular Gateways)                                    [DROPPED 2026-04-18]
+      Original scope: one cellularDataUsage panel (monthly cumulative data
+      per MG). Dropped during v0.5 execution — Meraki v1 API exposes no
+      endpoint carrying monthly data-usage totals for MG hardware. Verified:
+        - GET /organizations/{id}/cellularGateway/uplink/statuses →
+          signal / APN / provider / ICCID only, no byte counters.
+        - GET /devices/{serial}/cellularGateway/dataUsage → not in spec.
+        - /networks/{id}/sm/devices/.../cellularUsageHistory is Systems
+          Manager (MDM clients on phones), unrelated to MG.
+      Reference exporter (meraki-dashboard-exporter collectors/devices/mg.py)
+      confirms no known undocumented path. Revisit if Meraki ships the
+      endpoint — otherwise do NOT re-plan as a synthetic counter from
+      lastReportedAt deltas (would require a state store we don't have
+      and is out of scope for v0.5).
 
-      1d.P  EXECUTION PLAN
-
-        Preconditions
-          - Confirm via ctx7 which endpoint surfaces monthly data:
-            `/organizations/{id}/cellularGateway/uplink/statuses` vs
-            `/devices/{serial}/cellularGateway/dataUsage`. Prefer org-wide.
-
-        Files
-          Modify: pkg/meraki/cellular.go          (1 new wrapper)
-          Modify: pkg/plugin/query/cellular.go    (1 new handler)
-          Modify: pkg/plugin/query/cellular_test.go
-          Modify: pkg/plugin/query/dispatch.go
-          Modify: src/datasource/types.ts
-          Modify: src/pages/CellularGateways/panels.ts
-          Modify: src/pages/CellularGateways/cellularUplinkScene.ts
-
-        [ ] 1. Confirm endpoint (ctx7). Document choice in cellular.go
-               doc-comment above the wrapper.
-        [ ] 2. Add kind const (front + back).
-        [ ] 3. Add wrapper in pkg/meraki/cellular.go; reuse pagination
-               helpers in pkg/meraki/pagination.go.
-        [ ] 4. Write failing handler test: stub endpoint, assert wide
-               table: serial, month, usedBytes, usedPct (nullable if no
-               cap known), capBytes (nullable).
-        [ ] 5. Run test; expected: FAIL.
-        [ ] 6. Implement handler; if cap is unknown, emit null for usedPct.
-               Cap is set per-rule in v0.6 alerts; for the v0.5 panel,
-               accept an optional panelParam from q.Metrics[0] (§G.21) —
-               empty = no cap.
-        [ ] 7. Wire; re-run; PASS.
-        [ ] 8. Panel: stacked bar (per-MG, per-month) in
-               src/pages/CellularGateways/panels.ts. Add threshold
-               override for usedPct if cap provided.
-        [ ] 9. Wire panel into cellularUplinkScene.ts (or a new
-               "Data usage" sub-tab of the detail page — decide based
-               on visual density).
-        [ ] 10. Jest panels.test.ts update.
-        [ ] 11. Go + JS test suites green.
-        [ ] 12. CHANGELOG: "- Cellular Gateways: monthly data usage
-                             panel (v0.5 §4.4.3-1d)."
-        [ ] 13. Commit.
-
-        Acceptance
-          - Kind tested; panel renders with/without cap override.
-          - Handler doc-comment captures the endpoint choice for future
-            reference.
+      v0.5 panel count therefore drops from 23 → 22; new-kind count from
+      ~13 → ~12.
 
   1e  MT (Sensors, 3 panels)                                    Track A #21-23
       New kind:   sensorFloorPlan (floor-plan layout + latest readings)
@@ -2275,7 +2231,10 @@ API 429, config-change-rate).
     5d  wireless      — ap-channel-util, failed-connections
                         (failed-connections requires Track A 1a kind;
                          verify v0.5 shipped it before starting 5d)
-    5e  cellular      — mg-data-cap  (requires Track A 1d cellularDataUsage)
+    5e  cellular      — [DROPPED] mg-data-cap was blocked on v0.5 §4.4.3-1d
+                        which itself was dropped because Meraki v1 exposes
+                        no monthly-usage endpoint. Revisit if the endpoint
+                        ships.
     5f  cameras       — offline  (reuses deviceAvailabilities)
     5g  lifecycle     — license-expiring  (reuses licensesList)
 
@@ -2339,9 +2298,10 @@ API 429, config-change-rate).
     5d  wireless:      ap-channel-util, failed-connections  (2 templates;
                        blocked on v0.5 §4.4.3-1a shipping
                        wirelessFailedConnections kind)
-    5e  cellular:      mg-data-cap                          (1 template;
-                       blocked on v0.5 §4.4.3-1d shipping
-                       cellularDataUsage kind)
+    5e  cellular:      [DROPPED] mg-data-cap depended on v0.5 §4.4.3-1d
+                       cellularDataUsage kind, which was dropped because
+                       Meraki v1 exposes no monthly-usage endpoint.
+                       Revisit if the endpoint ships.
     5f  cameras:       offline                              (1 template;
                        reuses deviceAvailabilities + productType filter)
     5g  lifecycle:     license-expiring                     (1 template;
