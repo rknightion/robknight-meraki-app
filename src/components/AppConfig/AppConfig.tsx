@@ -25,6 +25,7 @@ import { testIds } from '../testIds';
 import { AppJsonData, AppSecureJsonData, DeviceLabelMode } from '../../types';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS, PLUGIN_ID, ROUTES } from '../../constants';
 import { prefixRoute } from '../../utils/utils.routing';
+import { AlertRulesPanel } from './AlertRulesPanel';
 
 const CUSTOM_REGION_LABEL = 'Custom…';
 
@@ -450,6 +451,12 @@ export const MerakiConfigForm = ({ meta, variant = 'full' }: MerakiConfigFormPro
           )}
         </Alert>
       )}
+
+      {variant === 'full' && (
+        <div className={s.alertRulesSection}>
+          <AlertRulesPanel jsonData={jsonData} />
+        </div>
+      )}
     </div>
   );
 };
@@ -556,5 +563,9 @@ const getStyles = (theme: GrafanaTheme2) => ({
     flex-direction: column;
     gap: ${theme.spacing(0.5)};
     font-size: ${theme.typography.bodySmall.fontSize};
+  `,
+  alertRulesSection: css`
+    margin-top: ${theme.spacing(4)};
+    border-top: 1px solid ${theme.colors.border.weak};
   `,
 });

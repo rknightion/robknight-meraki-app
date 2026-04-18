@@ -16,6 +16,9 @@ UX.
   externalServiceAccounts feature-toggle state.
 - Resource endpoints for the bundled alert rules — templates registry, live
   status, reconcile, uninstall-all (§4.5.5).
+- Configuration page → "Bundled alert rules" section: per-group install
+  toggles, per-threshold editor, Reconcile + Uninstall actions, drift
+  detection (§4.5.6).
 
 ### Developer
 
