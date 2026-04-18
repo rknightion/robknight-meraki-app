@@ -182,7 +182,7 @@ export function cameraInventoryTable(): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open camera',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.Cameras}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.Cameras}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('firmware').overrideCustomFieldConfig('width', 140);

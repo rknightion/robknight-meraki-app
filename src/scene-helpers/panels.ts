@@ -464,7 +464,7 @@ export function sensorInventoryTable(): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open sensor',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.Sensors}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.Sensors}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('firmware').overrideCustomFieldConfig('width', 140);

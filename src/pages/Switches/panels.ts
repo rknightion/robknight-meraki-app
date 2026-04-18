@@ -102,7 +102,7 @@ export function switchInventoryTable(): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open switch',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.Switches}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.Switches}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('firmware').overrideCustomFieldConfig('width', 140);
@@ -203,7 +203,7 @@ export function switchPortMap(serial: string): VizPanel {
           title: 'Open port',
           url: `${PLUGIN_BASE_URL}/${ROUTES.Switches}/${encodeURIComponent(
             serial
-          )}/ports/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          )}/ports/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('status').overrideCustomFieldConfig('width', 100);

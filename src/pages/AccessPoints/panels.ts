@@ -144,7 +144,7 @@ export function apInventoryTable(): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open access point',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('firmware').overrideCustomFieldConfig('width', 140);
@@ -406,7 +406,7 @@ export function apClientsByDeviceTable(): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open access point',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('online').overrideDisplayName('Online clients');
@@ -466,7 +466,7 @@ export function wirelessEthernetStatusTable(): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open access point',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('networkName').overrideDisplayName('Network');

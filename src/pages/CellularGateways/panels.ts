@@ -136,7 +136,7 @@ export function mgInventoryTable(): VizPanel {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open gateway',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.CellularGateways}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: `${PLUGIN_BASE_URL}/${ROUTES.CellularGateways}/\${__value.raw:percentencode}\${__url.params}`,
         },
       ]);
       b.matchFieldsWithName('firmware').overrideCustomFieldConfig('width', 140);
