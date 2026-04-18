@@ -238,4 +238,39 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 			900 * time.Second,
 		},
 	},
+
+	// §3.1 — Switch ports usage history (byDevice/byInterval). 31-day max; resolutions
+	// 300/1200/14400/86400 seconds per the Meraki v1 spec (verified 2026-04-18).
+	"organizations/{organizationId}/switch/ports/usage/history/byDevice/byInterval": {
+		MaxTimespan: 31 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			300 * time.Second,
+			1200 * time.Second,
+			14400 * time.Second,
+			86400 * time.Second,
+		},
+	},
+
+	// §3.3 — Device memory usage history (byInterval). 31-day max; resolutions
+	// 300/1200/3600/14400 seconds per the Meraki v1 spec (verified 2026-04-18).
+	"organizations/{organizationId}/devices/system/memory/usage/history/byInterval": {
+		MaxTimespan: 31 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			300 * time.Second,
+			1200 * time.Second,
+			3600 * time.Second,
+			14400 * time.Second,
+		},
+	},
+
+	// §3.4 — Alerts overview historical. 31-day max; segment resolutions
+	// 1h/24h/7d per the Meraki v1 spec (verified 2026-04-18).
+	"organizations/{organizationId}/assurance/alerts/overview/historical": {
+		MaxTimespan: 31 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			1 * time.Hour,
+			24 * time.Hour,
+			7 * 24 * time.Hour,
+		},
+	},
 }

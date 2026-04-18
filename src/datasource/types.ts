@@ -94,6 +94,17 @@ export enum QueryKind {
   WirelessPacketLossByNetwork = 'wirelessPacketLossByNetwork',
   WirelessDevicesEthernetStatuses = 'wirelessDevicesEthernetStatuses',
   WirelessDevicesCpuLoadHistory = 'wirelessDevicesCpuLoadHistory',
+
+  /* §3.1 — Switch ports overview by speed + usage history. */
+  SwitchPortsOverviewBySpeed = 'switchPortsOverviewBySpeed',
+  SwitchPortsUsageHistory = 'switchPortsUsageHistory',
+
+  /* §3.3 — Device memory usage history. */
+  DeviceMemoryHistory = 'deviceMemoryHistory',
+
+  /* §3.4 — Alerts overview byNetwork + historical. */
+  AlertsOverviewByNetwork = 'alertsOverviewByNetwork',
+  AlertsOverviewHistorical = 'alertsOverviewHistorical',
 }
 
 export interface MerakiQuery extends DataQuery {

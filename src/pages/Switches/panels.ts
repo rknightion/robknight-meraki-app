@@ -1,4 +1,4 @@
-import { ThresholdsMode } from '@grafana/schema';
+import { FieldColorModeId, ThresholdsMode } from '@grafana/schema';
 import {
   PanelBuilders,
   SceneDataTransformer,
@@ -384,4 +384,65 @@ export function switchOverviewKpiRow(serial: string): VizPanel[] {
     pickFromDevices('Firmware', 'firmware'),
     clients,
   ];
+}
+
+// §3.1 — Switch ports by speed + usage history ---------------------------------
+
+/**
+ * Bar gauge showing active port counts per (media × speed) bucket, e.g.
+ * RJ45 1000 Mbps → 48 ports, SFP 10000 Mbps → 4 ports.
+ *
+ * Backed by the `SwitchPortsOverviewBySpeed` kind which calls
+ * GET /organizations/{organizationId}/switch/ports/overview and flattens
+ * the nested byMediaAndLinkSpeed response into one row per bucket.
+ */
+export function switchPortsBySpeedStatPanel(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchPortsOverviewBySpeed,
+  });
+
+  return PanelBuilders.bargauge()
+    .setTitle('Ports by speed')
+    .setDescription('Active port counts broken down by media type and link speed.')
+    .setData(runner)
+    .setNoValue('No port speed data available.')
+    .setOption('orientation', 'horizontal' as any)
+    .setOption('reduceOptions', {
+      values: true,
+      calcs: ['sum'],
+      fields: 'active',
+    } as any)
+    .setOverrides((b) => {
+      b.matchFieldsWithName('active')
+        .overrideColor({ mode: FieldColorModeId.PaletteClassic })
+        .overrideDisplayName('${__field.labels.speed} (${__field.labels.media})');
+    })
+    .build();
+}
+
+/**
+ * Stacked timeseries of per-switch total throughput (kilobytes sent + received
+ * per interval). Each series is one switch serial labelled via Grafana's
+ * native label mechanism. Backed by `SwitchPortsUsageHistory`.
+ */
+export function switchPortsUsageHistoryTimeseries(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchPortsUsageHistory,
+  });
+
+  return PanelBuilders.timeseries()
+    .setTitle('Switch ports usage history')
+    .setDescription(
+      'Aggregated traffic (upstream + downstream, kilobytes) per switch device over the selected time range.'
+    )
+    .setData(runner)
+    .setNoValue('No usage data available for the selected range.')
+    .setCustomFieldConfig('stacking', { mode: 'normal' } as any)
+    .setCustomFieldConfig('fillOpacity', 20)
+    .setCustomFieldConfig('lineWidth', 1)
+    .setOption('legend', { showLegend: true, displayMode: 'table', placement: 'bottom' } as any)
+    .setOverrides((b) => {
+      b.matchFieldsByQuery('A').overrideUnit('kbytes');
+    })
+    .build();
 }

@@ -278,3 +278,134 @@ func alertsStatusSentinel(metrics []string) string {
 	}
 	return "all"
 }
+
+// ---------------------------------------------------------------------------
+// §3.4 — Alerts overview byNetwork + historical
+// ---------------------------------------------------------------------------
+
+// handleAlertsOverviewByNetwork emits a flat table frame with one row per
+// network showing severity counts. Snapshot (no time dimension); 30s TTL.
+func handleAlertsOverviewByNetwork(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("alertsOverviewByNetwork: orgId is required")
+	}
+
+	opts := meraki.AlertsOptions{}
+	if len(q.NetworkIDs) > 0 {
+		opts.NetworkID = q.NetworkIDs[0]
+	}
+	if from := toRFCTime(tr.From); !from.IsZero() {
+		opts.TSStart = &from
+	}
+	if to := toRFCTime(tr.To); !to.IsZero() {
+		opts.TSEnd = &to
+	}
+
+	rows, err := client.GetOrganizationAssuranceAlertsOverviewByNetwork(ctx, q.OrgID, opts, alertsTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		networkIDs    []string
+		networkNames  []string
+		criticals     []int64
+		warnings      []int64
+		informationals []int64
+		totals        []int64
+	)
+	for _, r := range rows {
+		networkIDs = append(networkIDs, r.NetworkID)
+		networkNames = append(networkNames, r.NetworkName)
+		criticals = append(criticals, r.Critical)
+		warnings = append(warnings, r.Warning)
+		informationals = append(informationals, r.Informational)
+		totals = append(totals, r.Total)
+	}
+
+	return []*data.Frame{
+		data.NewFrame("alerts_overview_by_network",
+			data.NewField("networkId", nil, networkIDs),
+			data.NewField("networkName", nil, networkNames),
+			data.NewField("critical", nil, criticals),
+			data.NewField("warning", nil, warnings),
+			data.NewField("informational", nil, informationals),
+			data.NewField("total", nil, totals),
+		),
+	}, nil
+}
+
+// handleAlertsOverviewHistorical emits one frame per severity bucket
+// (critical / warning / informational) as a native timeseries so panels can
+// stack severities. Labels: {"severity": "<name>"}.
+func handleAlertsOverviewHistorical(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("alertsOverviewHistorical: orgId is required")
+	}
+
+	etr, ok := meraki.KnownEndpointRanges["organizations/{organizationId}/assurance/alerts/overview/historical"]
+	if !ok {
+		return nil, fmt.Errorf("alertsOverviewHistorical: missing KnownEndpointRanges entry")
+	}
+
+	from := toRFCTime(tr.From)
+	to := toRFCTime(tr.To)
+	w, err := etr.Resolve(from, to, tr.MaxDataPoints, nil)
+	if err != nil {
+		return nil, fmt.Errorf("alertsOverviewHistorical: resolve time range: %w", err)
+	}
+
+	opts := meraki.AlertsOverviewHistoricalOptions{
+		Window:  &w,
+		Segment: w.Resolution,
+	}
+	if len(q.NetworkIDs) > 0 {
+		opts.NetworkID = q.NetworkIDs[0]
+	}
+	if len(q.Serials) > 0 {
+		opts.Serial = q.Serials[0]
+	}
+
+	points, err := client.GetOrganizationAssuranceAlertsOverviewHistorical(ctx, q.OrgID, opts, alertsTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build one frame per severity with time + value columns.
+	severities := []string{"critical", "warning", "informational"}
+	type sevSeries struct {
+		Times  []time.Time
+		Values []int64
+	}
+	seriesMap := make(map[string]*sevSeries, len(severities))
+	for _, sev := range severities {
+		seriesMap[sev] = &sevSeries{}
+	}
+
+	for _, pt := range points {
+		for _, sev := range severities {
+			s := seriesMap[sev]
+			s.Times = append(s.Times, pt.StartTs)
+			s.Values = append(s.Values, pt.BySeverity[sev])
+		}
+	}
+
+	frames := make([]*data.Frame, 0, len(severities))
+	for _, sev := range severities {
+		s := seriesMap[sev]
+		tsField := data.NewField("ts", nil, s.Times)
+		valField := data.NewField("value", data.Labels{"severity": sev}, s.Values)
+		valField.Config = &data.FieldConfig{
+			DisplayNameFromDS: sev,
+		}
+		frames = append(frames, data.NewFrame("alerts_overview_historical", tsField, valField))
+	}
+
+	if w.Truncated && len(frames) > 0 {
+		for _, ann := range w.Annotations {
+			frames[0].AppendNotices(data.Notice{Severity: data.NoticeSeverityInfo, Text: ann})
+		}
+	}
+
+	return frames, nil
+}

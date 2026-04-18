@@ -11,6 +11,86 @@ import (
 	"github.com/robknight/grafana-meraki-plugin/pkg/meraki"
 )
 
+// ---------------------------------------------------------------------------
+// §3.3 — Device memory usage history
+// ---------------------------------------------------------------------------
+
+// deviceMemoryHistoryTTL: timeseries; 1m consistent with other history kinds.
+const deviceMemoryHistoryTTL = 1 * time.Minute
+
+// handleDeviceMemoryHistory emits one frame per serial with the
+// maximum used memory % per interval. Labels: {"serial", "metric":"usagePercent"}.
+// Scope: orgId (required) + optional networkIds / serials / productTypes.
+func handleDeviceMemoryHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("deviceMemoryHistory: orgId is required")
+	}
+
+	etr, ok := meraki.KnownEndpointRanges["organizations/{organizationId}/devices/system/memory/usage/history/byInterval"]
+	if !ok {
+		return nil, fmt.Errorf("deviceMemoryHistory: missing KnownEndpointRanges entry")
+	}
+
+	from := toRFCTime(tr.From)
+	to := toRFCTime(tr.To)
+	w, err := etr.Resolve(from, to, tr.MaxDataPoints, nil)
+	if err != nil {
+		return nil, fmt.Errorf("deviceMemoryHistory: resolve time range: %w", err)
+	}
+
+	opts := meraki.DeviceMemoryHistoryOptions{
+		NetworkIDs:   q.NetworkIDs,
+		Serials:      q.Serials,
+		ProductTypes: q.ProductTypes,
+		Window:       &w,
+		Interval:     w.Resolution,
+	}
+	points, err := client.GetOrganizationDevicesMemoryUsageHistoryByInterval(ctx, q.OrgID, opts, deviceMemoryHistoryTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build per-serial timeseries (one frame per serial with usagePercent metric).
+	type perSerial struct {
+		Times  []time.Time
+		Values []float64
+	}
+	seriesMap := make(map[string]*perSerial)
+
+	for _, pt := range points {
+		s, ok := seriesMap[pt.Serial]
+		if !ok {
+			s = &perSerial{}
+			seriesMap[pt.Serial] = s
+		}
+		s.Times = append(s.Times, pt.StartTs)
+		s.Values = append(s.Values, pt.UsagePercent)
+	}
+
+	frames := make([]*data.Frame, 0, len(seriesMap))
+	for serial, s := range seriesMap {
+		tsField := data.NewField("ts", nil, s.Times)
+		valField := data.NewField("value", data.Labels{
+			"serial": serial,
+			"metric": "usagePercent",
+		}, s.Values)
+		valField.Config = &data.FieldConfig{
+			DisplayNameFromDS: serial + " usagePercent",
+			Unit:              "percent",
+		}
+		frames = append(frames, data.NewFrame("device_memory_history", tsField, valField))
+	}
+
+	if w.Truncated && len(frames) > 0 {
+		for _, ann := range w.Annotations {
+			frames[0].AppendNotices(data.Notice{Severity: data.NoticeSeverityInfo, Text: ann})
+		}
+	}
+
+	return frames, nil
+}
+
+
 // devicesTTL: device inventory drifts slowly (adds, swaps, firmware upgrades)
 // so a 5-minute TTL is a reasonable balance between staleness and API load.
 const devicesTTL = 5 * time.Minute

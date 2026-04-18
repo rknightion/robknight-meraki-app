@@ -353,3 +353,136 @@ func vlanString(v int) string {
 	}
 	return strconv.Itoa(v)
 }
+
+// ---------------------------------------------------------------------------
+// §3.1 — Switch ports overview by speed + usage history
+// ---------------------------------------------------------------------------
+
+// switchPortsOverviewBySpeedTTL: snapshot; 1m matches other overview kinds.
+const switchPortsOverviewBySpeedTTL = 1 * time.Minute
+
+// handleSwitchPortsOverviewBySpeed emits a table frame with one row per
+// (media × speed) bucket showing the active port count at that speed.
+// Distinct from handleSwitchPortsOverview (the KPI row) — this handler is
+// for bar-chart / stat visualisations showing the speed distribution.
+func handleSwitchPortsOverviewBySpeed(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("switchPortsOverviewBySpeed: orgId is required")
+	}
+	opts := meraki.SwitchPortsOverviewOptions{
+		NetworkIDs: q.NetworkIDs,
+		Serials:    q.Serials,
+	}
+	buckets, err := client.GetOrganizationSwitchPortsOverview(ctx, q.OrgID, opts, switchPortsOverviewBySpeedTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		mediaCol  []string
+		speedCol  []string
+		activeCol []int64
+	)
+	for _, b := range buckets {
+		mediaCol = append(mediaCol, b.Media)
+		speedCol = append(speedCol, b.Speed)
+		activeCol = append(activeCol, b.Active)
+	}
+
+	return []*data.Frame{
+		data.NewFrame("switch_ports_overview_by_speed",
+			data.NewField("media", nil, mediaCol),
+			data.NewField("speed", nil, speedCol),
+			data.NewField("active", nil, activeCol),
+		),
+	}, nil
+}
+
+// switchPortsUsageHistoryTTL: timeseries; 1m is consistent with other history kinds.
+const switchPortsUsageHistoryTTL = 1 * time.Minute
+
+// handleSwitchPortsUsageHistory emits one frame per (serial, metric) with
+// labels on the value field for native timeseries rendering in Grafana.
+// Metrics emitted: "sent", "recv", "total" (kilobytes per interval).
+func handleSwitchPortsUsageHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("switchPortsUsageHistory: orgId is required")
+	}
+
+	etr, ok := meraki.KnownEndpointRanges["organizations/{organizationId}/switch/ports/usage/history/byDevice/byInterval"]
+	if !ok {
+		return nil, fmt.Errorf("switchPortsUsageHistory: missing KnownEndpointRanges entry")
+	}
+
+	from := toRFCTime(tr.From)
+	to := toRFCTime(tr.To)
+	w, err := etr.Resolve(from, to, tr.MaxDataPoints, nil)
+	if err != nil {
+		return nil, fmt.Errorf("switchPortsUsageHistory: resolve time range: %w", err)
+	}
+
+	opts := meraki.SwitchPortsUsageHistoryOptions{
+		NetworkIDs: q.NetworkIDs,
+		Serials:    q.Serials,
+		Window:     &w,
+		Interval:   w.Resolution,
+	}
+	points, err := client.GetOrganizationSwitchPortsUsageHistory(ctx, q.OrgID, opts, switchPortsUsageHistoryTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build per-(serial, metric) time series: one frame each for sent/recv/total.
+	type seriesKey struct {
+		Serial string
+		Metric string
+	}
+	type seriesData struct {
+		Times  []time.Time
+		Values []int64
+	}
+	seriesMap := make(map[seriesKey]*seriesData)
+
+	for _, pt := range points {
+		for _, pair := range []struct {
+			Metric string
+			Val    int64
+		}{
+			{"sent", pt.Sent},
+			{"recv", pt.Recv},
+			{"total", pt.Total},
+		} {
+			k := seriesKey{Serial: pt.Serial, Metric: pair.Metric}
+			s, ok := seriesMap[k]
+			if !ok {
+				s = &seriesData{}
+				seriesMap[k] = s
+			}
+			s.Times = append(s.Times, pt.StartTs)
+			s.Values = append(s.Values, pair.Val)
+		}
+	}
+
+	frames := make([]*data.Frame, 0, len(seriesMap))
+	for k, s := range seriesMap {
+		tsField := data.NewField("ts", nil, s.Times)
+		valField := data.NewField("value", data.Labels{
+			"serial": k.Serial,
+			"metric": k.Metric,
+		}, s.Values)
+		valField.Config = &data.FieldConfig{
+			DisplayNameFromDS: k.Serial + " " + k.Metric,
+			Unit:              "kbytes",
+		}
+		frames = append(frames, data.NewFrame("switch_ports_usage_history", tsField, valField))
+	}
+
+	// Attach truncation annotation if applicable.
+	if w.Truncated && len(frames) > 0 {
+		for _, ann := range w.Annotations {
+			frames[0].AppendNotices(data.Notice{Severity: data.NoticeSeverityInfo, Text: ann})
+		}
+	}
+
+	return frames, nil
+}

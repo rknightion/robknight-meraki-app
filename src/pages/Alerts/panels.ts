@@ -351,3 +351,101 @@ export function recentAlertsTile(orgId?: string): VizPanel {
     })
     .build();
 }
+
+// §3.4 — Alerts overview byNetwork + historical --------------------------------
+
+/**
+ * Sortable table of alert counts per network (critical / warning / informational / total).
+ * Backed by `AlertsOverviewByNetwork` which calls
+ * GET /organizations/{organizationId}/assurance/alerts/overview/byNetwork.
+ *
+ * Color overrides: critical column is red above 0; warning is orange above 0.
+ */
+export function alertsByNetworkTable(orgId?: string): VizPanel {
+  const runner = new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [
+      {
+        refId: 'A',
+        kind: QueryKind.AlertsOverviewByNetwork,
+        orgId: orgId ?? '$org',
+      },
+    ],
+  });
+
+  return PanelBuilders.table()
+    .setTitle('Alerts by network')
+    .setDescription('Alert severity counts per network across the selected organization.')
+    .setData(runner)
+    .setNoValue('No alerts by network data available.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('critical')
+        .overrideColor({ mode: FieldColorModeId.Thresholds })
+        .overrideThresholds({
+          mode: ThresholdsMode.Absolute,
+          steps: [
+            { value: null as unknown as number, color: 'green' },
+            { value: 1, color: 'red' },
+          ],
+        })
+        .overrideCustomFieldConfig('cellOptions', { type: 'color-text' } as any);
+      b.matchFieldsWithName('warning')
+        .overrideColor({ mode: FieldColorModeId.Thresholds })
+        .overrideThresholds({
+          mode: ThresholdsMode.Absolute,
+          steps: [
+            { value: null as unknown as number, color: 'green' },
+            { value: 1, color: 'orange' },
+          ],
+        })
+        .overrideCustomFieldConfig('cellOptions', { type: 'color-text' } as any);
+      b.matchFieldsWithName('networkId').overrideCustomFieldConfig('width', 200);
+      b.matchFieldsWithName('networkName').overrideCustomFieldConfig('width', 220);
+      b.matchFieldsWithName('critical').overrideCustomFieldConfig('width', 90);
+      b.matchFieldsWithName('warning').overrideCustomFieldConfig('width', 90);
+      b.matchFieldsWithName('informational').overrideCustomFieldConfig('width', 120);
+      b.matchFieldsWithName('total').overrideCustomFieldConfig('width', 80);
+    })
+    .build();
+}
+
+/**
+ * Stacked area timeseries of alert severity counts over time.
+ * One frame per severity (critical / warning / informational) with labels;
+ * Grafana stacks them because each series is a separate frame with labels on
+ * the value field (native timeseries shape). Backed by `AlertsOverviewHistorical`.
+ */
+export function alertsHistoricalTimeseries(orgId?: string): VizPanel {
+  const runner = new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [
+      {
+        refId: 'A',
+        kind: QueryKind.AlertsOverviewHistorical,
+        orgId: orgId ?? '$org',
+      },
+    ],
+  });
+
+  return PanelBuilders.timeseries()
+    .setTitle('Alert history by severity')
+    .setDescription(
+      'Historical alert counts bucketed by severity over the selected time range.'
+    )
+    .setData(runner)
+    .setNoValue('No historical alert data available.')
+    .setCustomFieldConfig('stacking', { mode: 'normal' } as any)
+    .setCustomFieldConfig('fillOpacity', 40)
+    .setCustomFieldConfig('lineWidth', 1)
+    .setOption('legend', {
+      showLegend: true,
+      displayMode: 'list',
+      placement: 'bottom',
+    } as any)
+    .setOverrides((b) => {
+      b.matchFieldsWithName('critical').overrideColor({ fixedColor: 'red', mode: FieldColorModeId.Fixed });
+      b.matchFieldsWithName('warning').overrideColor({ fixedColor: 'orange', mode: FieldColorModeId.Fixed });
+      b.matchFieldsWithName('informational').overrideColor({ fixedColor: 'blue', mode: FieldColorModeId.Fixed });
+    })
+    .build();
+}

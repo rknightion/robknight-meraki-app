@@ -19,6 +19,7 @@ import {
 } from '../../scene-helpers/panels';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import { recentAlertsTile } from '../Alerts/panels';
+import { deviceMemoryPressureTimeseries } from './panels';
 
 export function homeScene() {
   return new EmbeddedScene({
@@ -58,6 +59,13 @@ export function homeScene() {
         new SceneFlexItem({
           minHeight: 260,
           body: recentAlertsTile('$org'),
+        }),
+        // Device memory pressure — shows per-device memory % over time.
+        // Placed before the inventory table so operators see system health
+        // without scrolling past the full device list.
+        new SceneFlexItem({
+          minHeight: 300,
+          body: deviceMemoryPressureTimeseries(),
         }),
         new SceneFlexItem({
           minHeight: 360,
