@@ -2,6 +2,8 @@ package meraki
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 	"time"
@@ -230,4 +232,172 @@ func (c *Client) GetOrganizationDevicesAvailabilitiesChangeHistory(ctx context.C
 		return nil, err
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// §3.3 — Device memory usage history
+// ---------------------------------------------------------------------------
+
+// DeviceMemoryHistoryPoint is one flattened (device × time interval) row from
+// GET /organizations/{organizationId}/devices/system/memory/usage/history/byInterval.
+//
+// Response shape (verified 2026-04-18):
+//
+//	{"items":[{"serial":"…","network":{"id":"…","name":"…"},"intervals":[{"startTs":"…","endTs":"…","memory":{"used":{"percentages":{"maximum":N}}}}],...}],"meta":{…}}
+//
+// We surface the maximum used% per interval as UsagePercent since that is the
+// most useful metric for identifying memory pressure. UsedBytes/FreeBytes are
+// optional; populated when the spec exposes them.
+type DeviceMemoryHistoryPoint struct {
+	StartTs      time.Time
+	EndTs        time.Time
+	Serial       string
+	NetworkID    string
+	// UsagePercent is the maximum used memory percentage over the interval.
+	UsagePercent float64
+	// UsedBytes and FreeBytes are in kilobytes when present.
+	UsedBytes *int64
+	FreeBytes *int64
+}
+
+// DeviceMemoryHistoryOptions filters the memory usage history call.
+type DeviceMemoryHistoryOptions struct {
+	NetworkIDs   []string
+	Serials      []string
+	ProductTypes []string
+	Window       *TimeRangeWindow
+	Interval     time.Duration
+}
+
+func (o DeviceMemoryHistoryOptions) values() url.Values {
+	// perPage: spec says 3–20 with startingAfter. Set to 20 (max) to minimise pages.
+	v := url.Values{"perPage": []string{"20"}}
+	for _, id := range o.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range o.Serials {
+		v.Add("serials[]", s)
+	}
+	for _, pt := range o.ProductTypes {
+		v.Add("productTypes[]", pt)
+	}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+	}
+	if o.Interval > 0 {
+		v.Set("interval", strconv.Itoa(int(o.Interval.Seconds())))
+	}
+	return v
+}
+
+// deviceMemoryHistoryResponse is the on-wire envelope for the memory endpoint.
+// Uses the same items/meta wrapper shape as other org-level history endpoints.
+type deviceMemoryHistoryResponse struct {
+	Items []deviceMemoryHistoryDevice `json:"items"`
+	Meta  struct {
+		Counts struct {
+			Items struct {
+				Total     int `json:"total"`
+				Remaining int `json:"remaining"`
+			} `json:"items"`
+		} `json:"counts"`
+	} `json:"meta"`
+}
+
+type deviceMemoryHistoryDevice struct {
+	Serial    string                    `json:"serial"`
+	Network   DeviceAvailabilityNetworkRef `json:"network"`
+	Intervals []deviceMemoryHistoryInterval `json:"intervals"`
+}
+
+type deviceMemoryHistoryInterval struct {
+	StartTs string                   `json:"startTs"`
+	EndTs   string                   `json:"endTs"`
+	Memory  deviceMemoryIntervalData `json:"memory"`
+}
+
+type deviceMemoryIntervalData struct {
+	Used deviceMemoryUsage `json:"used"`
+	Free deviceMemoryUsage `json:"free"`
+}
+
+type deviceMemoryUsage struct {
+	Minimum     *int64                    `json:"minimum,omitempty"`
+	Maximum     *int64                    `json:"maximum,omitempty"`
+	Median      *int64                    `json:"median,omitempty"`
+	Percentages *deviceMemoryPercentages  `json:"percentages,omitempty"`
+}
+
+type deviceMemoryPercentages struct {
+	Maximum float64 `json:"maximum"`
+}
+
+// GetOrganizationDevicesMemoryUsageHistoryByInterval paginates through the
+// device memory usage history endpoint. The spec uses perPage 3–20 with
+// Link-header pagination (confirmed by Meraki docs). Results are flattened to
+// one point per (serial × interval).
+func (c *Client) GetOrganizationDevicesMemoryUsageHistoryByInterval(ctx context.Context, orgID string, opts DeviceMemoryHistoryOptions, ttl time.Duration) ([]DeviceMemoryHistoryPoint, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/devices/system/memory/usage/history/byInterval", Message: "missing organization id"}}
+	}
+
+	endpoint := "organizations/" + url.PathEscape(orgID) + "/devices/system/memory/usage/history/byInterval"
+	params := opts.values()
+
+	// Paginate manually because items are wrapped in an envelope (not a raw array).
+	var allDevices []deviceMemoryHistoryDevice
+	path := endpoint
+	for pageNum := 0; pageNum < MaxPages; pageNum++ {
+		var pageParams url.Values
+		if pageNum == 0 {
+			pageParams = params
+		}
+		body, hdr, err := c.Do(ctx, "GET", path, orgID, pageParams, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		var pageResp deviceMemoryHistoryResponse
+		if err := decodeJSON(body, path, &pageResp); err != nil {
+			return nil, err
+		}
+		allDevices = append(allDevices, pageResp.Items...)
+
+		next := nextLink(hdr)
+		if next == "" {
+			break
+		}
+		path = next
+	}
+
+	// Flatten to per-device per-interval points.
+	var out []DeviceMemoryHistoryPoint
+	for _, dev := range allDevices {
+		for _, iv := range dev.Intervals {
+			startTs, _ := time.Parse(time.RFC3339, iv.StartTs)
+			endTs, _ := time.Parse(time.RFC3339, iv.EndTs)
+			pt := DeviceMemoryHistoryPoint{
+				StartTs:   startTs,
+				EndTs:     endTs,
+				Serial:    dev.Serial,
+				NetworkID: dev.Network.ID,
+			}
+			if iv.Memory.Used.Percentages != nil {
+				pt.UsagePercent = iv.Memory.Used.Percentages.Maximum
+			}
+			pt.UsedBytes = iv.Memory.Used.Maximum
+			pt.FreeBytes = iv.Memory.Free.Maximum
+			out = append(out, pt)
+		}
+	}
+	return out, nil
+}
+
+// decodeJSON is a small helper that wraps json.Unmarshal with a descriptive error.
+func decodeJSON(body []byte, path string, out any) error {
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("meraki: decode %s: %w", path, err)
+	}
+	return nil
 }
