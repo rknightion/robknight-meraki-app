@@ -14,10 +14,14 @@ import {
 import { orgVariable } from '../../scene-helpers/variables';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import {
+  apClientsByDeviceTable,
   apInventoryTable,
   apStatusKpiRow,
   networkChannelUtilTimeseries,
   ssidUsageStackedTimeseries,
+  wirelessApCpuLoadTimeseries,
+  wirelessEthernetStatusTable,
+  wirelessPacketLossByNetworkTable,
 } from './panels';
 import { apVariable, networkVariableForProductTypes } from './variables';
 
@@ -74,6 +78,22 @@ export function accessPointsScene(): EmbeddedScene {
         new SceneFlexItem({
           height: 320,
           body: ssidUsageStackedTimeseries(),
+        }),
+        new SceneFlexItem({
+          minHeight: 320,
+          body: apClientsByDeviceTable(),
+        }),
+        new SceneFlexItem({
+          height: 320,
+          body: wirelessPacketLossByNetworkTable(),
+        }),
+        new SceneFlexItem({
+          height: 320,
+          body: wirelessEthernetStatusTable(),
+        }),
+        new SceneFlexItem({
+          height: 320,
+          body: wirelessApCpuLoadTimeseries(),
         }),
         new SceneFlexItem({
           minHeight: 420,

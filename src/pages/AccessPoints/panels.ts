@@ -383,3 +383,131 @@ export function apOverviewKpiRow(serial: string): VizPanel[] {
 
   return [status, pick('Model', 'model'), pick('Network', 'networkId'), pick('Firmware', 'firmware')];
 }
+
+// ---------------------------------------------------------------------------
+// §2.1 — Org-level AP client counts table
+// ---------------------------------------------------------------------------
+
+/**
+ * Org-wide table of wireless AP client counts. Uses the single-call
+ * GET /organizations/{organizationId}/wireless/clients/overview/byDevice endpoint
+ * so the overview page no longer fans out N per-AP requests.
+ *
+ * Serial column drills into the per-AP detail page.
+ */
+export function apClientsByDeviceTable(): VizPanel {
+  const runner = oneQuery({ kind: QueryKind.WirelessApClientCounts });
+  return PanelBuilders.table()
+    .setTitle('AP client counts')
+    .setDescription('Currently-associated clients per access point (org-wide snapshot).')
+    .setData(hideColumns(runner, ['networkId']))
+    .setNoValue('No AP client data available.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('serial').overrideLinks([
+        {
+          title: 'Open access point',
+          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+        },
+      ]);
+      b.matchFieldsWithName('online').overrideDisplayName('Online clients');
+      b.matchFieldsWithName('networkName').overrideDisplayName('Network');
+    })
+    .build();
+}
+
+// ---------------------------------------------------------------------------
+// §3.2 — Wireless packet loss by network table
+// ---------------------------------------------------------------------------
+
+/**
+ * Table of wireless packet-loss metrics aggregated per network. Uses
+ * GET /organizations/{organizationId}/wireless/devices/packetLoss/byNetwork.
+ * Sortable by loss percentage; useful for spotting networks with RF issues.
+ */
+export function wirelessPacketLossByNetworkTable(): VizPanel {
+  const runner = oneQuery({ kind: QueryKind.WirelessPacketLossByNetwork });
+  return PanelBuilders.table()
+    .setTitle('Wireless packet loss by network')
+    .setDescription('Downstream / upstream packet loss aggregated per network over the selected time range.')
+    .setData(hideColumns(runner, ['networkId']))
+    .setNoValue('No packet loss data available.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('networkName').overrideDisplayName('Network');
+      b.matchFieldsWithName('downstreamLossPct').overrideDisplayName('DS loss %').overrideUnit('percent');
+      b.matchFieldsWithName('upstreamLossPct').overrideDisplayName('US loss %').overrideUnit('percent');
+      b.matchFieldsWithName('totalLossPct').overrideDisplayName('Total loss %').overrideUnit('percent');
+      b.matchFieldsWithName('downstreamTotal').overrideDisplayName('DS packets');
+      b.matchFieldsWithName('downstreamLost').overrideDisplayName('DS lost');
+      b.matchFieldsWithName('upstreamTotal').overrideDisplayName('US packets');
+      b.matchFieldsWithName('upstreamLost').overrideDisplayName('US lost');
+      b.matchFieldsWithName('totalPackets').overrideDisplayName('Total packets');
+      b.matchFieldsWithName('totalLost').overrideDisplayName('Total lost');
+    })
+    .build();
+}
+
+// ---------------------------------------------------------------------------
+// §3.2 — Wireless ethernet status table
+// ---------------------------------------------------------------------------
+
+/**
+ * Table of ethernet/power status for every wireless AP. Uses
+ * GET /organizations/{organizationId}/wireless/devices/ethernet/statuses.
+ * Shows uplink speed, duplex mode, PoE status, and power source per AP.
+ */
+export function wirelessEthernetStatusTable(): VizPanel {
+  const runner = oneQuery({ kind: QueryKind.WirelessDevicesEthernetStatuses });
+  return PanelBuilders.table()
+    .setTitle('AP ethernet statuses')
+    .setDescription('Ethernet port speed, duplex, and PoE status for every access point (snapshot).')
+    .setData(hideColumns(runner, ['networkId']))
+    .setNoValue('No ethernet status data available.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('serial').overrideLinks([
+        {
+          title: 'Open access point',
+          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+        },
+      ]);
+      b.matchFieldsWithName('networkName').overrideDisplayName('Network');
+      b.matchFieldsWithName('primarySpeed').overrideDisplayName('Speed');
+      b.matchFieldsWithName('primaryDuplex').overrideDisplayName('Duplex');
+      b.matchFieldsWithName('primaryPoe').overrideDisplayName('PoE');
+      b.matchFieldsWithName('power').overrideDisplayName('Power source');
+    })
+    .build();
+}
+
+// ---------------------------------------------------------------------------
+// §3.2 — Wireless AP CPU load timeseries
+// ---------------------------------------------------------------------------
+
+/**
+ * Timeseries of per-AP CPU load (5-minute average). Uses
+ * GET /organizations/{organizationId}/wireless/devices/system/cpu/load/history.
+ * One series per AP; the DisplayNameFromDS is baked by the handler.
+ * Time window is capped to 1 day per Meraki's API limit.
+ */
+export function wirelessApCpuLoadTimeseries(): VizPanel {
+  return PanelBuilders.timeseries()
+    .setTitle('AP CPU load')
+    .setDescription('5-minute average CPU utilisation per access point. Max 1-day lookback.')
+    .setData(
+      oneQuery({
+        kind: QueryKind.WirelessDevicesCpuLoadHistory,
+        maxDataPoints: 300,
+      })
+    )
+    .setUnit('percent')
+    .setMin(0)
+    .setMax(100)
+    .setNoValue('No CPU load data in the selected range.')
+    .setColor({ mode: FieldColorModeId.PaletteClassic })
+    .setCustomFieldConfig('lineWidth', 1)
+    .setCustomFieldConfig('fillOpacity', 10)
+    .setCustomFieldConfig('spanNulls', true)
+    .setCustomFieldConfig('showPoints', 'auto' as any)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
+    .build();
+}

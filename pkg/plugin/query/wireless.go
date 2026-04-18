@@ -369,3 +369,341 @@ func handleApClients(ctx context.Context, client *meraki.Client, q MerakiQuery, 
 	)
 	return []*data.Frame{frame}, firstErr
 }
+
+// ---------------------------------------------------------------------------
+// §2.1 — Org-level AP client counts
+// ---------------------------------------------------------------------------
+
+// wirelessApClientCountsTTL: live-ish read, same as apClientsTTL.
+const wirelessApClientCountsTTL = 1 * time.Minute
+
+// handleWirelessApClientCounts emits one flat table frame with one row per
+// wireless device, showing the number of currently-associated clients.
+//
+// The endpoint GET /organizations/{organizationId}/wireless/clients/overview/byDevice
+// returns: [{"network":{"id":"N_..."}, "serial":"Q2...", "counts":{"byStatus":{"online":N}}}]
+//
+// A best-effort GetOrganizationNetworks call is used to resolve network names;
+// failures fall back to the raw network ID without failing the query.
+func handleWirelessApClientCounts(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("wirelessApClientCounts: orgId is required")
+	}
+
+	opts := meraki.WirelessApClientCountsOptions{
+		NetworkIDs: q.NetworkIDs,
+		Serials:    q.Serials,
+	}
+	counts, err := client.GetOrganizationWirelessClientsOverviewByDevice(ctx, q.OrgID, opts, wirelessApClientCountsTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Best-effort network name lookup.
+	nameByNetworkID := make(map[string]string)
+	if networks, lookupErr := client.GetOrganizationNetworks(ctx, q.OrgID, []string{"wireless"}, networksTTL); lookupErr == nil {
+		for _, n := range networks {
+			nameByNetworkID[n.ID] = n.Name
+		}
+	}
+
+	serials := make([]string, 0, len(counts))
+	networkIDs := make([]string, 0, len(counts))
+	networkNames := make([]string, 0, len(counts))
+	online := make([]int64, 0, len(counts))
+
+	for _, c := range counts {
+		serials = append(serials, c.Serial)
+		networkIDs = append(networkIDs, c.NetworkID)
+		networkNames = append(networkNames, nameByNetworkID[c.NetworkID])
+		online = append(online, c.OnlineCount)
+	}
+
+	frame := data.NewFrame("wireless_ap_client_counts",
+		data.NewField("serial", nil, serials),
+		data.NewField("networkId", nil, networkIDs),
+		data.NewField("networkName", nil, networkNames),
+		data.NewField("online", nil, online),
+	)
+	return []*data.Frame{frame}, nil
+}
+
+// ---------------------------------------------------------------------------
+// §3.2 — Wireless packet loss by network
+// ---------------------------------------------------------------------------
+
+const wirelessPacketLossTTL = 1 * time.Minute
+
+const wirelessPacketLossEndpoint = "organizations/{organizationId}/wireless/devices/packetLoss/byNetwork"
+
+// handleWirelessPacketLossByNetwork emits one flat table frame with one row per
+// network, showing downstream/upstream/total packet-loss percentages.
+//
+// The endpoint GET /organizations/{organizationId}/wireless/devices/packetLoss/byNetwork
+// supports a t0/t1 window with a 90-day MaxTimespan; no resolution parameter.
+// A best-effort GetOrganizationNetworks call is used to resolve network names.
+func handleWirelessPacketLossByNetwork(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("wirelessPacketLossByNetwork: orgId is required")
+	}
+
+	from := toRFCTime(tr.From)
+	to := toRFCTime(tr.To)
+
+	var window *meraki.TimeRangeWindow
+	if !from.IsZero() && !to.IsZero() {
+		spec, ok := meraki.KnownEndpointRanges[wirelessPacketLossEndpoint]
+		if !ok {
+			return nil, fmt.Errorf("wirelessPacketLossByNetwork: missing endpoint spec")
+		}
+		w, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
+		if err != nil {
+			return nil, fmt.Errorf("wirelessPacketLossByNetwork: resolve window: %w", err)
+		}
+		window = &w
+	}
+
+	opts := meraki.WirelessPacketLossOptions{
+		NetworkIDs: q.NetworkIDs,
+		Serials:    q.Serials,
+		Window:     window,
+	}
+	rows, err := client.GetOrganizationWirelessPacketLossByNetwork(ctx, q.OrgID, opts, wirelessPacketLossTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Best-effort network name lookup.
+	nameByNetworkID := make(map[string]string)
+	if networks, lookupErr := client.GetOrganizationNetworks(ctx, q.OrgID, []string{"wireless"}, networksTTL); lookupErr == nil {
+		for _, n := range networks {
+			nameByNetworkID[n.ID] = n.Name
+		}
+	}
+
+	networkIDs := make([]string, 0, len(rows))
+	networkNames := make([]string, 0, len(rows))
+	dsTotal := make([]int64, 0, len(rows))
+	dsLost := make([]int64, 0, len(rows))
+	dsLossPct := make([]float64, 0, len(rows))
+	usTotal := make([]int64, 0, len(rows))
+	usLost := make([]int64, 0, len(rows))
+	usLossPct := make([]float64, 0, len(rows))
+	totTotal := make([]int64, 0, len(rows))
+	totLost := make([]int64, 0, len(rows))
+	totLossPct := make([]float64, 0, len(rows))
+
+	for _, r := range rows {
+		networkIDs = append(networkIDs, r.NetworkID)
+		networkNames = append(networkNames, nameByNetworkID[r.NetworkID])
+		if r.Downstream != nil {
+			dsTotal = append(dsTotal, r.Downstream.TotalPackets)
+			dsLost = append(dsLost, r.Downstream.LostPackets)
+			dsLossPct = append(dsLossPct, r.Downstream.LossPercent)
+		} else {
+			dsTotal = append(dsTotal, 0)
+			dsLost = append(dsLost, 0)
+			dsLossPct = append(dsLossPct, 0)
+		}
+		if r.Upstream != nil {
+			usTotal = append(usTotal, r.Upstream.TotalPackets)
+			usLost = append(usLost, r.Upstream.LostPackets)
+			usLossPct = append(usLossPct, r.Upstream.LossPercent)
+		} else {
+			usTotal = append(usTotal, 0)
+			usLost = append(usLost, 0)
+			usLossPct = append(usLossPct, 0)
+		}
+		if r.Total != nil {
+			totTotal = append(totTotal, r.Total.TotalPackets)
+			totLost = append(totLost, r.Total.LostPackets)
+			totLossPct = append(totLossPct, r.Total.LossPercent)
+		} else {
+			totTotal = append(totTotal, 0)
+			totLost = append(totLost, 0)
+			totLossPct = append(totLossPct, 0)
+		}
+	}
+
+	frame := data.NewFrame("wireless_packet_loss_by_network",
+		data.NewField("networkId", nil, networkIDs),
+		data.NewField("networkName", nil, networkNames),
+		data.NewField("downstreamTotal", nil, dsTotal),
+		data.NewField("downstreamLost", nil, dsLost),
+		data.NewField("downstreamLossPct", nil, dsLossPct),
+		data.NewField("upstreamTotal", nil, usTotal),
+		data.NewField("upstreamLost", nil, usLost),
+		data.NewField("upstreamLossPct", nil, usLossPct),
+		data.NewField("totalPackets", nil, totTotal),
+		data.NewField("totalLost", nil, totLost),
+		data.NewField("totalLossPct", nil, totLossPct),
+	)
+	return []*data.Frame{frame}, nil
+}
+
+// ---------------------------------------------------------------------------
+// §3.2 — Wireless ethernet statuses
+// ---------------------------------------------------------------------------
+
+const wirelessEthernetStatusesTTL = 1 * time.Minute
+
+// handleWirelessDevicesEthernetStatuses emits one flat table frame with one
+// row per wireless device, showing ethernet port speed/duplex/PoE status and
+// power source (ac | poe | unknown).
+//
+// The endpoint GET /organizations/{organizationId}/wireless/devices/ethernet/statuses
+// is a snapshot (no time parameters). A best-effort device-name lookup is
+// performed to populate a human-readable "name" column.
+func handleWirelessDevicesEthernetStatuses(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("wirelessDevicesEthernetStatuses: orgId is required")
+	}
+
+	opts := meraki.WirelessDeviceEthernetOptions{
+		NetworkIDs: q.NetworkIDs,
+		Serials:    q.Serials,
+	}
+	rows, err := client.GetOrganizationWirelessDevicesEthernetStatuses(ctx, q.OrgID, opts, wirelessEthernetStatusesTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	serials := make([]string, 0, len(rows))
+	names := make([]string, 0, len(rows))
+	networkIDs := make([]string, 0, len(rows))
+	models := make([]string, 0, len(rows))
+	powers := make([]string, 0, len(rows))
+	primarySpeed := make([]string, 0, len(rows))
+	primaryDuplex := make([]string, 0, len(rows))
+	primaryPoe := make([]bool, 0, len(rows))
+
+	for _, r := range rows {
+		serials = append(serials, r.Serial)
+		names = append(names, r.Name)
+		networkIDs = append(networkIDs, r.NetworkID)
+		models = append(models, r.Model)
+		powers = append(powers, r.Power)
+		primarySpeed = append(primarySpeed, r.Primary.Speed)
+		primaryDuplex = append(primaryDuplex, r.Primary.Duplex)
+		primaryPoe = append(primaryPoe, r.Primary.PoeEnabled)
+	}
+
+	frame := data.NewFrame("wireless_ethernet_statuses",
+		data.NewField("serial", nil, serials),
+		data.NewField("name", nil, names),
+		data.NewField("networkId", nil, networkIDs),
+		data.NewField("model", nil, models),
+		data.NewField("power", nil, powers),
+		data.NewField("primarySpeed", nil, primarySpeed),
+		data.NewField("primaryDuplex", nil, primaryDuplex),
+		data.NewField("primaryPoe", nil, primaryPoe),
+	)
+	return []*data.Frame{frame}, nil
+}
+
+// ---------------------------------------------------------------------------
+// §3.2 — Wireless AP CPU load history
+// ---------------------------------------------------------------------------
+
+const wirelessCpuLoadTTL = 1 * time.Minute
+
+const wirelessCpuLoadEndpoint = "organizations/{organizationId}/wireless/devices/system/cpu/load/history"
+
+// handleWirelessDevicesCpuLoadHistory emits one timeseries frame per AP serial.
+// Each frame has a `ts` time field and a `value` float64 field with labels
+// {"serial": ...} and a baked DisplayNameFromDS so the legend shows the AP name
+// (or serial when the name is unavailable).
+//
+// The endpoint GET /organizations/{organizationId}/wireless/devices/system/cpu/load/history
+// caps the time window to 1 day; allowed intervals are 60, 300, and 900 seconds.
+func handleWirelessDevicesCpuLoadHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("wirelessDevicesCpuLoadHistory: orgId is required")
+	}
+
+	from := toRFCTime(tr.From)
+	to := toRFCTime(tr.To)
+	if from.IsZero() || to.IsZero() {
+		return nil, fmt.Errorf("wirelessDevicesCpuLoadHistory: time range is required")
+	}
+
+	spec, ok := meraki.KnownEndpointRanges[wirelessCpuLoadEndpoint]
+	if !ok {
+		return nil, fmt.Errorf("wirelessDevicesCpuLoadHistory: missing endpoint spec")
+	}
+	window, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
+	if err != nil {
+		return nil, fmt.Errorf("wirelessDevicesCpuLoadHistory: resolve window: %w", err)
+	}
+
+	reqOpts := meraki.WirelessCpuLoadOptions{
+		NetworkIDs: q.NetworkIDs,
+		Serials:    q.Serials,
+		Window:     &window,
+	}
+	points, err := client.GetOrganizationWirelessDevicesCpuLoadHistory(ctx, q.OrgID, reqOpts, wirelessCpuLoadTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Best-effort name lookup for legend labels.
+	var nameBySerial map[string]string
+	if opts.LabelMode == "name" {
+		if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "wireless"); lookupErr == nil {
+			nameBySerial = names
+		}
+	}
+
+	// Group points by serial.
+	type seriesBuf struct {
+		ts     []time.Time
+		values []float64
+	}
+	groups := make(map[string]*seriesBuf)
+	seriesOrder := make([]string, 0)
+	for _, p := range points {
+		if _, exists := groups[p.Serial]; !exists {
+			groups[p.Serial] = &seriesBuf{}
+			seriesOrder = append(seriesOrder, p.Serial)
+		}
+		buf := groups[p.Serial]
+		buf.ts = append(buf.ts, p.StartTs.UTC())
+		buf.values = append(buf.values, p.CpuLoad5)
+	}
+
+	if len(groups) == 0 {
+		empty := data.NewFrame("wireless_cpu_load_history",
+			data.NewField("ts", nil, []time.Time{}),
+			data.NewField("value", nil, []float64{}),
+		)
+		return []*data.Frame{empty}, nil
+	}
+
+	sort.Strings(seriesOrder)
+
+	frames := make([]*data.Frame, 0, len(seriesOrder))
+	for _, serial := range seriesOrder {
+		buf := groups[serial]
+		sortByTime(buf.ts, buf.values)
+
+		labels := data.Labels{"serial": serial}
+		valueField := data.NewField("value", labels, buf.values)
+
+		displayName := serial
+		if nameBySerial != nil {
+			if name := nameBySerial[serial]; name != "" {
+				displayName = name
+			}
+		}
+		valueField.Config = &data.FieldConfig{
+			DisplayNameFromDS: displayName,
+			Unit:              "percent",
+		}
+
+		frames = append(frames, data.NewFrame("wireless_cpu_load_history",
+			data.NewField("ts", nil, buf.ts),
+			valueField,
+		))
+	}
+	return frames, nil
+}

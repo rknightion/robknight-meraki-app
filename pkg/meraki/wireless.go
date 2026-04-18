@@ -269,3 +269,408 @@ func (c *Client) GetDeviceWirelessClients(ctx context.Context, serial string, ti
 	}
 	return out, nil
 }
+
+// ---------------------------------------------------------------------------
+// §2.1 — Org-level AP client counts
+// ---------------------------------------------------------------------------
+
+// WirelessApClientCounts holds the per-device online client count from
+// GET /organizations/{organizationId}/wireless/clients/overview/byDevice.
+//
+// Wire shape (per item):
+//   {"network":{"id":"N_..."}, "serial":"Q2...", "counts":{"byStatus":{"online":N}}}
+type WirelessApClientCounts struct {
+	Serial      string
+	NetworkID   string
+	OnlineCount int64
+}
+
+// WirelessApClientCountsOptions filters the byDevice client-count call.
+type WirelessApClientCountsOptions struct {
+	NetworkIDs []string
+	Serials    []string
+}
+
+// rawApClientCountEntry matches the wire JSON for a single device item.
+type rawApClientCountEntry struct {
+	Serial  string `json:"serial"`
+	Network struct {
+		ID string `json:"id"`
+	} `json:"network"`
+	Counts struct {
+		ByStatus struct {
+			Online int64 `json:"online"`
+		} `json:"byStatus"`
+	} `json:"counts"`
+}
+
+// GetOrganizationWirelessClientsOverviewByDevice returns per-AP online client
+// counts for the organization. Paginated via Link header; perPage 1000.
+func (c *Client) GetOrganizationWirelessClientsOverviewByDevice(ctx context.Context, orgID string, opts WirelessApClientCountsOptions, ttl time.Duration) ([]WirelessApClientCounts, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{
+			Endpoint: "organizations/{organizationId}/wireless/clients/overview/byDevice",
+			Message:  "missing organization id",
+		}}
+	}
+	v := url.Values{"perPage": []string{"1000"}}
+	for _, id := range opts.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range opts.Serials {
+		v.Add("serials[]", s)
+	}
+	var raw []rawApClientCountEntry
+	if _, err := c.GetAll(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/wireless/clients/overview/byDevice",
+		orgID, v, ttl, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]WirelessApClientCounts, 0, len(raw))
+	for _, e := range raw {
+		out = append(out, WirelessApClientCounts{
+			Serial:      e.Serial,
+			NetworkID:   e.Network.ID,
+			OnlineCount: e.Counts.ByStatus.Online,
+		})
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// §3.2 — Wireless packet loss, ethernet statuses, CPU load history
+// ---------------------------------------------------------------------------
+
+// WirelessPacketLossByNetwork holds aggregate packet-loss metrics per network from
+// GET /organizations/{organizationId}/wireless/devices/packetLoss/byNetwork.
+//
+// Wire shape (per item):
+//
+//	{
+//	  "network": {"id": "N_..."},
+//	  "downstream": {"total": N, "lost": N, "lossPercentage": F},
+//	  "upstream":   {"total": N, "lost": N, "lossPercentage": F},
+//	  "total":      {"total": N, "lost": N, "lossPercentage": F}
+//	}
+type WirelessPacketLossByNetwork struct {
+	NetworkID  string
+	Downstream *WirelessPacketLossSample
+	Upstream   *WirelessPacketLossSample
+	Total      *WirelessPacketLossSample
+}
+
+// WirelessPacketLossSample is a single directional packet-loss aggregate.
+type WirelessPacketLossSample struct {
+	TotalPackets int64
+	LostPackets  int64
+	LossPercent  float64
+}
+
+// WirelessPacketLossOptions filters the packet-loss byNetwork call.
+type WirelessPacketLossOptions struct {
+	NetworkIDs []string
+	Serials    []string
+	Bands      []string
+	Window     *TimeRangeWindow
+}
+
+type rawPacketLossSample struct {
+	Total          int64   `json:"total"`
+	Lost           int64   `json:"lost"`
+	LossPercentage float64 `json:"lossPercentage"`
+}
+
+type rawPacketLossEntry struct {
+	Network struct {
+		ID string `json:"id"`
+	} `json:"network"`
+	Downstream *rawPacketLossSample `json:"downstream"`
+	Upstream   *rawPacketLossSample `json:"upstream"`
+	Total      *rawPacketLossSample `json:"total"`
+}
+
+// GetOrganizationWirelessPacketLossByNetwork returns per-network wireless
+// packet-loss aggregates. Paginated via Link header; perPage 1000.
+// MaxTimespan 90 days; no resolution parameter.
+func (c *Client) GetOrganizationWirelessPacketLossByNetwork(ctx context.Context, orgID string, opts WirelessPacketLossOptions, ttl time.Duration) ([]WirelessPacketLossByNetwork, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{
+			Endpoint: "organizations/{organizationId}/wireless/devices/packetLoss/byNetwork",
+			Message:  "missing organization id",
+		}}
+	}
+	v := url.Values{"perPage": []string{"1000"}}
+	if opts.Window != nil {
+		v.Set("t0", opts.Window.T0.UTC().Format("2006-01-02T15:04:05Z"))
+		v.Set("t1", opts.Window.T1.UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	for _, id := range opts.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range opts.Serials {
+		v.Add("serials[]", s)
+	}
+	for _, b := range opts.Bands {
+		v.Add("bands[]", b)
+	}
+	var raw []rawPacketLossEntry
+	if _, err := c.GetAll(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/wireless/devices/packetLoss/byNetwork",
+		orgID, v, ttl, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]WirelessPacketLossByNetwork, 0, len(raw))
+	for _, e := range raw {
+		row := WirelessPacketLossByNetwork{NetworkID: e.Network.ID}
+		if e.Downstream != nil {
+			row.Downstream = &WirelessPacketLossSample{
+				TotalPackets: e.Downstream.Total,
+				LostPackets:  e.Downstream.Lost,
+				LossPercent:  e.Downstream.LossPercentage,
+			}
+		}
+		if e.Upstream != nil {
+			row.Upstream = &WirelessPacketLossSample{
+				TotalPackets: e.Upstream.Total,
+				LostPackets:  e.Upstream.Lost,
+				LossPercent:  e.Upstream.LossPercentage,
+			}
+		}
+		if e.Total != nil {
+			row.Total = &WirelessPacketLossSample{
+				TotalPackets: e.Total.Total,
+				LostPackets:  e.Total.Lost,
+				LossPercent:  e.Total.LossPercentage,
+			}
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// WirelessDeviceEthernetStatus holds the ethernet/power status for one AP from
+// GET /organizations/{organizationId}/wireless/devices/ethernet/statuses.
+//
+// Wire shape (per item):
+//
+//	{
+//	  "serial": "Q2...",
+//	  "name": "...",
+//	  "network": {"id": "N_..."},
+//	  "model": "MR...",
+//	  "power": {"ac": {"isConnected": bool}, "poe": {"isConnected": bool, "maximum": F}},
+//	  "ports": [{"name": "LAN", "linkNegotiationCapability": [...], "poe": {"isConnected": bool}, "linkNeg": {...}, "speed": "1000Mbps", "duplex": "full", "enabled": bool}]
+//	}
+//
+// We simplify to primary/secondary ports (first two LAN ports by index).
+type WirelessDeviceEthernetStatus struct {
+	Serial    string
+	Name      string
+	NetworkID string
+	Model     string
+	Power     string // "ac" | "poe" | "unknown"
+	Primary   WirelessEthernetPort
+	Secondary *WirelessEthernetPort
+}
+
+// WirelessEthernetPort describes one physical ethernet port on an AP.
+type WirelessEthernetPort struct {
+	Name   string
+	Speed  string // e.g. "1000Mbps", "10Gbps"
+	Duplex string // "full" | "half" | ""
+	PoeEnabled bool
+}
+
+// WirelessDeviceEthernetOptions filters the ethernet-statuses call.
+type WirelessDeviceEthernetOptions struct {
+	NetworkIDs []string
+	Serials    []string
+}
+
+type rawEthernetPort struct {
+	Name   string `json:"name"`
+	Speed  string `json:"speed,omitempty"`
+	Duplex string `json:"duplex,omitempty"`
+	Poe    struct {
+		IsConnected bool `json:"isConnected"`
+	} `json:"poe"`
+}
+
+type rawEthernetEntry struct {
+	Serial  string `json:"serial"`
+	Name    string `json:"name,omitempty"`
+	Network struct {
+		ID string `json:"id"`
+	} `json:"network"`
+	Model string `json:"model,omitempty"`
+	Power struct {
+		Ac struct {
+			IsConnected bool `json:"isConnected"`
+		} `json:"ac"`
+		Poe struct {
+			IsConnected bool    `json:"isConnected"`
+			Maximum     float64 `json:"maximum,omitempty"`
+		} `json:"poe"`
+	} `json:"power"`
+	Ports []rawEthernetPort `json:"ports"`
+}
+
+// GetOrganizationWirelessDevicesEthernetStatuses returns the ethernet/power
+// snapshot for every wireless device in the org. Paginated via Link header;
+// perPage 1000. Snapshot endpoint — no time parameters.
+func (c *Client) GetOrganizationWirelessDevicesEthernetStatuses(ctx context.Context, orgID string, opts WirelessDeviceEthernetOptions, ttl time.Duration) ([]WirelessDeviceEthernetStatus, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{
+			Endpoint: "organizations/{organizationId}/wireless/devices/ethernet/statuses",
+			Message:  "missing organization id",
+		}}
+	}
+	v := url.Values{"perPage": []string{"1000"}}
+	for _, id := range opts.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range opts.Serials {
+		v.Add("serials[]", s)
+	}
+	var raw []rawEthernetEntry
+	if _, err := c.GetAll(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/wireless/devices/ethernet/statuses",
+		orgID, v, ttl, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]WirelessDeviceEthernetStatus, 0, len(raw))
+	for _, e := range raw {
+		row := WirelessDeviceEthernetStatus{
+			Serial:    e.Serial,
+			Name:      e.Name,
+			NetworkID: e.Network.ID,
+			Model:     e.Model,
+		}
+		// Determine power source: prefer AC, then PoE.
+		switch {
+		case e.Power.Ac.IsConnected:
+			row.Power = "ac"
+		case e.Power.Poe.IsConnected:
+			row.Power = "poe"
+		default:
+			row.Power = "unknown"
+		}
+		// Map ports: first port → Primary, second → Secondary.
+		if len(e.Ports) > 0 {
+			p := e.Ports[0]
+			row.Primary = WirelessEthernetPort{
+				Name:       p.Name,
+				Speed:      p.Speed,
+				Duplex:     p.Duplex,
+				PoeEnabled: p.Poe.IsConnected,
+			}
+		}
+		if len(e.Ports) > 1 {
+			p := e.Ports[1]
+			secondary := WirelessEthernetPort{
+				Name:       p.Name,
+				Speed:      p.Speed,
+				Duplex:     p.Duplex,
+				PoeEnabled: p.Poe.IsConnected,
+			}
+			row.Secondary = &secondary
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// WirelessCpuLoadPoint is one interval sample from
+// GET /organizations/{organizationId}/wireless/devices/system/cpu/load/history.
+//
+// Wire shape (per item):
+//
+//	{
+//	  "serial": "Q2...",
+//	  "network": {"id": "N_..."},
+//	  "history": [{"startTs": "...", "endTs": "...", "util": {"average": {"percentage": F}}}]
+//	}
+//
+// Flattened to one row per (serial, interval).
+type WirelessCpuLoadPoint struct {
+	StartTs   time.Time
+	EndTs     time.Time
+	Serial    string
+	NetworkID string
+	CpuLoad5  float64 // 5-min average CPU load % (util.average.percentage)
+}
+
+// WirelessCpuLoadOptions filters the CPU-load history call.
+type WirelessCpuLoadOptions struct {
+	NetworkIDs []string
+	Serials    []string
+	Window     *TimeRangeWindow
+	Interval   time.Duration
+}
+
+type rawCpuInterval struct {
+	StartTs time.Time `json:"startTs"`
+	EndTs   time.Time `json:"endTs"`
+	Util    struct {
+		Average struct {
+			Percentage float64 `json:"percentage"`
+		} `json:"average"`
+	} `json:"util"`
+}
+
+type rawCpuLoadEntry struct {
+	Serial  string `json:"serial"`
+	Network struct {
+		ID string `json:"id"`
+	} `json:"network"`
+	History []rawCpuInterval `json:"history"`
+}
+
+// GetOrganizationWirelessDevicesCpuLoadHistory returns per-device CPU-load
+// history samples flattened to one (serial, interval) per row.
+// Paginated via Link header; perPage 1000. MaxTimespan 1 day per docs.
+func (c *Client) GetOrganizationWirelessDevicesCpuLoadHistory(ctx context.Context, orgID string, opts WirelessCpuLoadOptions, ttl time.Duration) ([]WirelessCpuLoadPoint, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{
+			Endpoint: "organizations/{organizationId}/wireless/devices/system/cpu/load/history",
+			Message:  "missing organization id",
+		}}
+	}
+	v := url.Values{"perPage": []string{"1000"}}
+	if opts.Window != nil {
+		v.Set("t0", opts.Window.T0.UTC().Format("2006-01-02T15:04:05Z"))
+		v.Set("t1", opts.Window.T1.UTC().Format("2006-01-02T15:04:05Z"))
+		if opts.Interval > 0 {
+			v.Set("interval", strconv.Itoa(int(opts.Interval.Seconds())))
+		} else if opts.Window.Resolution > 0 {
+			v.Set("interval", strconv.Itoa(int(opts.Window.Resolution.Seconds())))
+		}
+	} else if opts.Interval > 0 {
+		v.Set("interval", strconv.Itoa(int(opts.Interval.Seconds())))
+	}
+	for _, id := range opts.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range opts.Serials {
+		v.Add("serials[]", s)
+	}
+	var raw []rawCpuLoadEntry
+	if _, err := c.GetAll(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/wireless/devices/system/cpu/load/history",
+		orgID, v, ttl, &raw); err != nil {
+		return nil, err
+	}
+	var out []WirelessCpuLoadPoint
+	for _, e := range raw {
+		for _, h := range e.History {
+			out = append(out, WirelessCpuLoadPoint{
+				StartTs:   h.StartTs,
+				EndTs:     h.EndTs,
+				Serial:    e.Serial,
+				NetworkID: e.Network.ID,
+				CpuLoad5:  h.Util.Average.Percentage,
+			})
+		}
+	}
+	return out, nil
+}

@@ -62,6 +62,13 @@ const (
 	KindAppliancePortForwarding  QueryKind = "appliancePortForwarding"
 	KindApplianceSettings        QueryKind = "applianceSettings"
 
+	// §2.2 — per-device uplink loss/latency history (31-day window).
+	KindDeviceUplinksLossLatencyHistory QueryKind = "deviceUplinksLossLatencyHistory"
+
+	// §3.5 — MX uplinks usage history + org-wide usage by network.
+	KindApplianceUplinksUsageHistory    QueryKind = "applianceUplinksUsageHistory"
+	KindApplianceUplinksUsageByNetwork  QueryKind = "applianceUplinksUsageByNetwork"
+
 	// Insights (licensing / API usage / clients) — phase 9.
 	KindLicensesOverview      QueryKind = "licensesOverview"
 	KindLicensesList          QueryKind = "licensesList"
@@ -97,6 +104,14 @@ const (
 	// API optimisation — §7.3 (phase 12).
 	KindConfigurationChanges        QueryKind = "configurationChanges"
 	KindDeviceAvailabilityChanges   QueryKind = "deviceAvailabilityChanges"
+
+	// §2.1 — org-level AP client counts (replaces N per-AP fan-out on the overview page).
+	KindWirelessApClientCounts QueryKind = "wirelessApClientCounts"
+
+	// §3.2 — additional wireless kinds: packet loss, ethernet statuses, CPU load history.
+	KindWirelessPacketLossByNetwork     QueryKind = "wirelessPacketLossByNetwork"
+	KindWirelessDevicesEthernetStatuses QueryKind = "wirelessDevicesEthernetStatuses"
+	KindWirelessDevicesCpuLoadHistory   QueryKind = "wirelessDevicesCpuLoadHistory"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -214,6 +229,10 @@ var handlers = map[QueryKind]handlerFn{
 	KindAppliancePortForwarding:  handleAppliancePortForwarding,
 	KindApplianceSettings:        handleApplianceSettings,
 
+	KindDeviceUplinksLossLatencyHistory: handleDeviceUplinksLossLatencyHistory,
+	KindApplianceUplinksUsageHistory:    handleApplianceUplinksUsageHistory,
+	KindApplianceUplinksUsageByNetwork:  handleApplianceUplinksUsageByNetwork,
+
 	KindLicensesOverview:      handleLicensesOverview,
 	KindLicensesList:          handleLicensesList,
 	KindApiRequestsOverview:   handleApiRequestsOverview,
@@ -242,6 +261,11 @@ var handlers = map[QueryKind]handlerFn{
 
 	KindConfigurationChanges:      handleConfigurationChanges,
 	KindDeviceAvailabilityChanges: handleDeviceAvailabilitiesChangeHistory,
+
+	KindWirelessApClientCounts:          handleWirelessApClientCounts,
+	KindWirelessPacketLossByNetwork:     handleWirelessPacketLossByNetwork,
+	KindWirelessDevicesEthernetStatuses: handleWirelessDevicesEthernetStatuses,
+	KindWirelessDevicesCpuLoadHistory:   handleWirelessDevicesCpuLoadHistory,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

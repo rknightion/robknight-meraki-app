@@ -199,4 +199,43 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 	"organizations/{organizationId}/devices/availabilities/changeHistory": {
 		MaxTimespan: 31 * 24 * time.Hour,
 	},
+
+	// §2.2 — per-device uplink loss/latency history (31-day window, four resolutions).
+	"devices/{serial}/uplinks/lossAndLatencyHistory": {
+		MaxTimespan: 31 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			60 * time.Second,
+			600 * time.Second,
+			3600 * time.Second,
+			86400 * time.Second,
+		},
+	},
+
+	// §3.5 — per-network appliance uplinks usage history (31-day window, four resolutions).
+	"networks/{networkId}/appliance/uplinks/usageHistory": {
+		MaxTimespan: 31 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			60 * time.Second,
+			600 * time.Second,
+			3600 * time.Second,
+			86400 * time.Second,
+		},
+	},
+
+	// §3.2 — Wireless packet loss byNetwork: Meraki docs allow up to 90 days; no
+	// resolution parameter (returns a single aggregate per network over the window).
+	"organizations/{organizationId}/wireless/devices/packetLoss/byNetwork": {
+		MaxTimespan: 90 * 24 * time.Hour,
+	},
+
+	// §3.2 — Wireless AP CPU load history: Meraki docs cap to 1 day; allowed intervals
+	// are 60, 300, and 900 seconds.
+	"organizations/{organizationId}/wireless/devices/system/cpu/load/history": {
+		MaxTimespan: 1 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			60 * time.Second,
+			300 * time.Second,
+			900 * time.Second,
+		},
+	},
 }

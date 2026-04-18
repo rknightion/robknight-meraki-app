@@ -79,6 +79,21 @@ export enum QueryKind {
   /* API optimisation — §7.3 (phase 12). */
   ConfigurationChanges = 'configurationChanges',
   DeviceAvailabilityChanges = 'deviceAvailabilityChanges',
+
+  /* §2.2 — per-device uplink loss/latency history (31-day window). */
+  DeviceUplinksLossLatencyHistory = 'deviceUplinksLossLatencyHistory',
+
+  /* §3.5 — MX uplinks usage history + org-wide usage by network. */
+  ApplianceUplinksUsageHistory = 'applianceUplinksUsageHistory',
+  ApplianceUplinksUsageByNetwork = 'applianceUplinksUsageByNetwork',
+
+  /* §2.1 — org-level AP client counts (replaces N per-AP fan-out on overview). */
+  WirelessApClientCounts = 'wirelessApClientCounts',
+
+  /* §3.2 — additional wireless kinds. */
+  WirelessPacketLossByNetwork = 'wirelessPacketLossByNetwork',
+  WirelessDevicesEthernetStatuses = 'wirelessDevicesEthernetStatuses',
+  WirelessDevicesCpuLoadHistory = 'wirelessDevicesCpuLoadHistory',
 }
 
 export interface MerakiQuery extends DataQuery {
