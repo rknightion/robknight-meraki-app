@@ -21,6 +21,8 @@ import {
   applianceUplinkStatusTable,
   applianceUplinksOverviewRow,
   mxStatusKpiRow,
+  mxUplinksUsageByNetworkTable,
+  mxUplinksUsageHistoryTimeseries,
 } from './panels';
 import { mxVariable } from './variables';
 
@@ -91,6 +93,16 @@ export function appliancesScene(): EmbeddedScene {
         new SceneFlexItem({
           minHeight: 420,
           body: applianceInventoryTable(),
+        }),
+        // §3.5 — MX uplinks usage history (per selected network) and
+        // org-wide usage by network table.
+        new SceneFlexItem({
+          minHeight: 320,
+          body: mxUplinksUsageHistoryTimeseries(),
+        }),
+        new SceneFlexItem({
+          minHeight: 320,
+          body: mxUplinksUsageByNetworkTable(),
         }),
       ],
     }),
