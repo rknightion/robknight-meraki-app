@@ -168,6 +168,14 @@ const (
 	// fixed 24h lookback; panel time range is ignored so the Home tile is
 	// stable regardless of dashboard picker.
 	KindOrgChangeFeed QueryKind = "orgChangeFeed"
+
+	// §4.4.4-D — Topology / Network Map page. networkGeo aggregates per-
+	// network centroid lat/lng (derived from device coordinates because the
+	// Meraki networks endpoint does not carry geo). deviceLldpCdp emits the
+	// two-frame Grafana Node Graph contract (nodes + edges) for the per-
+	// network device link graph; org-wide fan-out is intentionally disabled.
+	KindNetworkGeo    QueryKind = "networkGeo"
+	KindDeviceLldpCdp QueryKind = "deviceLldpCdp"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -358,6 +366,10 @@ var handlers = map[QueryKind]handlerFn{
 
 	// §4.4.3-1f — Home "what just changed" tile.
 	KindOrgChangeFeed: handleOrgChangeFeed,
+
+	// §4.4.4-D — Topology page.
+	KindNetworkGeo:    handleNetworkGeo,
+	KindDeviceLldpCdp: handleDeviceLldpCdp,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and
