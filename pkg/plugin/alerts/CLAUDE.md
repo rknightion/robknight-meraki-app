@@ -122,3 +122,31 @@ before it reaches Grafana.
   here so we avoid a circular import.
 - **Phase 3 — resource endpoints + frontend**: `pkg/plugin/resources.go`
   grows `/alerts/bundled/*` routes that the Alerts scene page consumes.
+
+## Reconcile-summary persistence (§4.5.5)
+
+The `/alerts/reconcile` and `/alerts/uninstall-all` resource endpoints
+persist their `ReconcileResult` summary — specifically `{created, updated,
+deleted, failed}` counts + an ISO timestamp — to a plugin-local JSON file
+so `/alerts/status` can surface the last-run state after a plugin restart.
+
+**Why a file and not a `PUT /api/plugins/<id>/settings` round-trip?** Both
+approaches were considered. The Grafana API path survives process restarts
+just as well but requires:
+
+1. An extra HTTP call on every reconcile (which can already issue hundreds
+   of PUTs to Grafana).
+2. The plugin to hold its AppURL + client secret at reconcile time — doable
+   via `backend.GrafanaConfigFromContext(ctx)` but makes every test that
+   exercises the reconcile handler need a cfg fixture.
+3. Tolerance for a race where Grafana overwrites jsonData between the
+   reconcile returning and the persistence PUT landing.
+
+The file path (`$GF_PATHS_DATA/plugins/<pluginID>/alerts-state.json`)
+avoids all three. It's a single best-effort atomic rename per reconcile,
+works in tests with zero plumbing, and keeps the persisted surface narrow
+(just the summary — NOT the full desired-state). User toggles + threshold
+overrides still live in jsonData; they're authored by the AppConfig UI and
+propagated via the normal Grafana settings-save flow.
+
+See `pkg/plugin/alerts_store.go` for the implementation.
