@@ -149,3 +149,44 @@ GRAFANA_IMAGE=grafana-dev GRAFANA_VERSION=<latest-dev-tag> npm run server
 # terminal 2
 npm run e2e
 ```
+
+## Bundled alert rules: `tests/alerts.spec.ts` (v0.6 §4.5.8)
+
+The alerts spec has two tiers of mocking because the reconcile path needs
+to touch Grafana's alerting API and we deliberately do not spoof that from
+Playwright:
+
+1. **`page.route()` (hermetic, default).** Tests that assert on the
+   AlertRulesPanel render output + feature-toggle banner intercept
+   `/resources/alerts/templates` and `/resources/alerts/status` with
+   canned responses via the `mockAlertsEndpoints` fixture helper. No
+   env var required — these tests work against any Grafana image.
+
+2. **`E2E_MOCK_GRAFANA=1` (Go-level stub, opt-in).** Reconcile + uninstall
+   tests need the real Go reconciler to run its diff algorithm against a
+   predictable backend. Set the env var on the Grafana container before
+   running the spec:
+
+   ```bash
+   # terminal 1
+   E2E_MOCK_GRAFANA=1 npm run server
+
+   # terminal 2
+   npm run e2e -- tests/alerts.spec.ts
+   ```
+
+   When the flag is set, `pkg/plugin/app.go` swaps the GrafanaAPI factory
+   to an in-memory stub (see `pkg/plugin/alerts/e2e_mock.go` and the
+   "E2E mock" section of `pkg/plugin/alerts/CLAUDE.md`) AND substitutes a
+   fixed two-org Meraki adapter so reconcile succeeds without a live
+   API key. `Configured()` returns true so the handler's 412 precondition
+   passes.
+
+   Reconcile + uninstall specs are annotated with
+   `test.skip(process.env.E2E_MOCK_GRAFANA !== '1', '…')` so CI / dev
+   runs without the flag stay green — only the hermetic render/banner
+   assertions run in the default configuration.
+
+The flag is OFF by default in `.config/docker-compose-base.yaml` because
+turning it on unconditionally would mask regressions against real
+Grafana's alerting API in the dev lab.
