@@ -2,8 +2,10 @@ import { FieldColorModeId, ThresholdsMode } from '@grafana/schema';
 import {
   PanelBuilders,
   SceneDataTransformer,
+  SceneDataLayerSet,
   SceneQueryRunner,
   VizPanel,
+  dataLayers,
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from './datasource';
 import { ALL_SENSOR_METRICS, SENSOR_METRIC_BY_ID, SensorMetricMeta } from './sensorMetrics';
@@ -815,3 +817,61 @@ export function sensorFloorPlanHeatmap(): VizPanel {
 
 /** Re-export for scenes that want to iterate over every metric. */
 export { ALL_SENSOR_METRICS, SENSOR_METRIC_BY_ID };
+
+// §4.4.3-1f — configuration-change annotation data layer ----------------------
+
+/**
+ * Build a `SceneDataLayerSet` containing one `AnnotationsDataLayer` that
+ * overlays admin-initiated config changes (from the existing
+ * `configurationChangesAnnotation` query kind) on every timeseries panel in
+ * the scene.
+ *
+ * The underlying Go handler emits a frame with exactly the columns Grafana
+ * expects for annotations (`time`, `title`, `text`, `tags`), so no mapping
+ * config is needed on the layer — Grafana picks them up by name.
+ *
+ * Scope:
+ *   - `orgId` (required) — interpolated against the scene's `$org` by default.
+ *   - `networkIds` (optional) — narrows annotations to a specific network.
+ *     The backend only supports a single network filter; pass the first
+ *     entry of the array.
+ *
+ * Usage — pair with `new SceneDataLayerControls()` in the `controls` array
+ * so users can toggle the overlay on and off:
+ *
+ *   controls: [new VariableValueSelectors({}), new SceneDataLayerControls(), ...]
+ *   $data: configChangesAnnotationLayer({ orgId: '$org' }),
+ */
+export function configChangesAnnotationLayer(params: {
+  name?: string;
+  orgId?: string;
+  networkIds?: string[];
+}): SceneDataLayerSet {
+  const { name = 'Config changes', orgId = '$org', networkIds } = params;
+
+  const query: Record<string, unknown> & { refId: string } = {
+    refId: 'CfgAnn',
+    kind: QueryKind.ConfigurationChangesAnnotation,
+    orgId,
+  };
+  if (networkIds && networkIds.length > 0) {
+    query.networkIds = networkIds;
+  }
+
+  const layer = new dataLayers.AnnotationsDataLayer({
+    name,
+    isEnabled: true,
+    query: {
+      name,
+      enable: true,
+      iconColor: 'orange',
+      datasource: MERAKI_DS_REF,
+      // `target` is the datasource-specific query body. Our Meraki DS proxies
+      // this as a standard `MerakiQuery`, so the nested datasource's
+      // `query()` is invoked with the same payload used for regular panels.
+      target: query,
+    } as any,
+  });
+
+  return new SceneDataLayerSet({ name, layers: [layer] });
+}

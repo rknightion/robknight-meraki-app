@@ -1,6 +1,7 @@
 import {
   EmbeddedScene,
   SceneControlsSpacer,
+  SceneDataLayerControls,
   SceneFlexItem,
   SceneFlexLayout,
   SceneRefreshPicker,
@@ -9,6 +10,7 @@ import {
   SceneVariableSet,
   VariableValueSelectors,
 } from '@grafana/scenes';
+import { configChangesAnnotationLayer } from '../../scene-helpers/panels';
 import { orgVariable } from '../../scene-helpers/variables';
 import {
   applianceFailoverEventsTable,
@@ -37,8 +39,13 @@ export function applianceUplinksScene(serial: string): EmbeddedScene {
         mxVariable(),
       ],
     }),
+    // §4.4.3-1f — overlay admin-initiated config changes on every timeseries
+    // panel in the scene so operators correlate uplink flaps with ACL/firewall
+    // edits. Toggleable via the SceneDataLayerControls entry below.
+    $data: configChangesAnnotationLayer({ orgId: '$org' }),
     controls: [
       new VariableValueSelectors({}),
+      new SceneDataLayerControls(),
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),
       new SceneRefreshPicker({ intervals: ['30s', '1m', '5m'], isOnCanvas: true }),

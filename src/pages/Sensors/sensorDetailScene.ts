@@ -2,6 +2,7 @@ import React from 'react';
 import {
   EmbeddedScene,
   SceneControlsSpacer,
+  SceneDataLayerControls,
   SceneFlexItem,
   SceneFlexLayout,
   SceneReactObject,
@@ -11,6 +12,7 @@ import {
 } from '@grafana/scenes';
 import {
   ALL_SENSOR_METRICS,
+  configChangesAnnotationLayer,
   sensorDetailLatestReadings,
   sensorDetailMetricPanel,
 } from '../../scene-helpers/panels';
@@ -36,7 +38,12 @@ export function sensorDetailScene(serial: string) {
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-24h', to: 'now' }),
     $variables: orgOnlyVariables(),
+    // §4.4.3-1f — overlay config-change annotations on per-sensor timeseries
+    // so operators can spot whether a reading jump lines up with an admin
+    // edit. Toggleable via the SceneDataLayerControls entry below.
+    $data: configChangesAnnotationLayer({ orgId: '$org' }),
     controls: [
+      new SceneDataLayerControls(),
       new SceneControlsSpacer(),
       new SceneTimePicker({ isOnCanvas: true }),
       new SceneRefreshPicker({ intervals: ['30s', '1m', '5m'], isOnCanvas: true }),
