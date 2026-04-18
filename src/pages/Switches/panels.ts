@@ -446,3 +446,163 @@ export function switchPortsUsageHistoryTimeseries(): VizPanel {
     })
     .build();
 }
+
+// §4.4.3-1b — MS panels: PoE, STP, MAC table, VLAN donut, port errors --------
+
+/**
+ * Per-switch PoE budget stat — sums `poeWatts` across every port on the given
+ * switch. Backed by the `switchPoe` kind which flattens the org-level
+ * statuses/bySwitch feed into one row per port (serial + portId + poeWatts).
+ * The panel reduces with `sum` so the stat shows total draw in watts.
+ */
+export function switchPoeBudgetStat(serial: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchPoe,
+    serials: [serial],
+  });
+  return PanelBuilders.stat()
+    .setTitle('PoE draw')
+    .setDescription('Total Power-over-Ethernet draw (watts) across every port on this switch.')
+    .setData(
+      new SceneDataTransformer({
+        $data: runner,
+        transformations: [
+          { id: 'filterFieldsByName', options: { include: { names: ['poeWatts'] } } },
+        ],
+      })
+    )
+    .setUnit('watt')
+    .setNoValue('0')
+    .setOption('reduceOptions', { values: false, calcs: ['sum'], fields: '' } as any)
+    .setOption('colorMode', 'value' as any)
+    .build();
+}
+
+/**
+ * Port-error timeseries snapshot — reshapes the existing
+ * `switchPortPacketCounters` kind (which emits one row per counter bucket per
+ * port) into a focused view of the error-family counters: CRC align errors,
+ * Collisions, Fragments, Jabbers. We filter client-side via `filterByValue`
+ * on `desc`. Snapshot not a timeseries — the Meraki endpoint is a cumulative
+ * snapshot over the timespan, not a historical series. Title wording says
+ * "snapshot" so operators don't mistake it for a derivative.
+ */
+export function switchPortErrorsSnapshot(serial: string, portId: string): VizPanel {
+  const runner = new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [
+      {
+        refId: 'A',
+        kind: QueryKind.SwitchPortPacketCounters,
+        orgId: '$org',
+        serials: [serial],
+        metrics: [portId],
+      },
+    ],
+  });
+  const filtered = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'filterByValue',
+        options: {
+          filters: [
+            {
+              fieldName: 'desc',
+              config: {
+                id: 'regex',
+                options: { value: 'CRC|Collision|Fragment|Jabber|error|Error' },
+              },
+            },
+          ],
+          type: 'include',
+          match: 'any',
+        },
+      },
+    ],
+  });
+  return PanelBuilders.table()
+    .setTitle('Port errors (snapshot)')
+    .setDescription(
+      'Error and discard counter buckets for this port over the selected timespan. Snapshot from the Meraki packets endpoint — not a derivative.'
+    )
+    .setData(filtered)
+    .setNoValue('No error counters reported for this port.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('desc').overrideCustomFieldConfig('width', 220);
+      b.matchFieldsWithName('total').overrideUnit('short');
+      b.matchFieldsWithName('sent').overrideUnit('short');
+      b.matchFieldsWithName('recv').overrideUnit('short');
+    })
+    .build();
+}
+
+/**
+ * STP topology table — shows one row per switch or stack with its configured
+ * bridge priority and the network-level `rstpEnabled` flag. Sourced from the
+ * `switchStp` kind (network-scoped). The per-switch detail page passes the
+ * switch's own networkId; the overview page can pass `$network`.
+ */
+export function switchStpTopologyTable(networkId: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchStp,
+    networkIds: [networkId],
+  });
+  return PanelBuilders.table()
+    .setTitle('STP topology')
+    .setDescription('RSTP/STP bridge priorities for this network (lower priority = preferred root).')
+    .setData(runner)
+    .setNoValue('No STP settings configured for this network.')
+    .build();
+}
+
+/**
+ * MAC-address table for a single switch — one row per client with IP, VLAN,
+ * connected port, last-seen, and usage in kb. Backed by the `switchMacTable`
+ * kind which hits `/devices/{serial}/clients` (default 24h window).
+ */
+export function switchMacAddressTable(serial: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchMacTable,
+    serials: [serial],
+  });
+  return PanelBuilders.table()
+    .setTitle('MAC address table')
+    .setDescription('Clients currently/recently connected to this switch, with their port, VLAN, and usage over the last 24 hours.')
+    .setData(runner)
+    .setNoValue('No clients reported for this switch in the last 24 hours.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('sentKb').overrideUnit('kbytes');
+      b.matchFieldsWithName('recvKb').overrideUnit('kbytes');
+      b.matchFieldsWithName('mac').overrideCustomFieldConfig('width', 160);
+      b.matchFieldsWithName('ip').overrideCustomFieldConfig('width', 140);
+      b.matchFieldsWithName('vlan').overrideCustomFieldConfig('width', 80);
+      b.matchFieldsWithName('switchPort').overrideCustomFieldConfig('width', 100);
+    })
+    .build();
+}
+
+/**
+ * VLAN distribution donut — shows port count per VLAN across the
+ * switches/networks currently in scope. Backed by the `switchVlansSummary`
+ * kind which aggregates configured ports per (serial, vlan) from the config
+ * feed. We reduce with `sum` across matching rows so the donut slice is the
+ * total port count for that VLAN regardless of how many switches carry it.
+ */
+export function switchVlanDistributionDonut(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchVlansSummary,
+  });
+  return PanelBuilders.piechart()
+    .setTitle('VLAN distribution')
+    .setDescription('Configured port counts per VLAN across the switches in scope.')
+    .setData(runner)
+    .setNoValue('No VLANs reported across the switches in scope.')
+    .setOption('pieType', 'donut' as any)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'right' } as any)
+    .setOption('reduceOptions', { values: true, calcs: ['sum'], fields: 'portCount' } as any)
+    .setOverrides((b) => {
+      b.matchFieldsWithName('portCount').overrideDisplayName('${__data.fields.vlan}');
+    })
+    .build();
+}

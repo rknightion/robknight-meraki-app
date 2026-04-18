@@ -8,12 +8,23 @@ import {
   SceneTimeRange,
 } from '@grafana/scenes';
 import { orgOnlyVariables } from '../../scene-helpers/variables';
-import { switchPortMap } from './panels';
+import {
+  switchMacAddressTable,
+  switchPortMap,
+  switchStpTopologyTable,
+} from './panels';
 
 /**
- * Ports tab for a single switch — the port map table in a tall flex item.
- * The port-ID column drilldowns into the per-port detail page (packet
- * counters + config summary) via the wildcard route on `switchDetailPage`.
+ * Ports tab for a single switch — the port map table, MAC-address table,
+ * and a per-network STP topology snapshot. The port-ID column on the port
+ * map drilldowns into the per-port detail page (packet counters + config
+ * summary + port-error snapshot) via the wildcard route on
+ * `switchDetailPage`.
+ *
+ * STP is network-scoped; we pass `$network` so callers must have the
+ * network variable in scope (via `orgOnlyVariables()` today the panel will
+ * render empty — see panel `setNoValue` copy). Additive in §4.4.3-1b; the
+ * port map remains the primary panel.
  */
 export function switchPortsScene(serial: string): EmbeddedScene {
   return new EmbeddedScene({
@@ -31,8 +42,16 @@ export function switchPortsScene(serial: string): EmbeddedScene {
       direction: 'column',
       children: [
         new SceneFlexItem({
-          minHeight: 640,
+          minHeight: 480,
           body: switchPortMap(serial),
+        }),
+        new SceneFlexItem({
+          minHeight: 280,
+          body: switchMacAddressTable(serial),
+        }),
+        new SceneFlexItem({
+          minHeight: 200,
+          body: switchStpTopologyTable('$network'),
         }),
       ],
     }),

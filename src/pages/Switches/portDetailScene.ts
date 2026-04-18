@@ -8,7 +8,11 @@ import {
   SceneTimeRange,
 } from '@grafana/scenes';
 import { orgOnlyVariables } from '../../scene-helpers/variables';
-import { switchPortConfigPanel, switchPortPacketCountersPanel } from './panels';
+import {
+  switchPortConfigPanel,
+  switchPortErrorsSnapshot,
+  switchPortPacketCountersPanel,
+} from './panels';
 
 /**
  * Per-port detail — a snapshot of packet counters (rx/tx + derived rates)
@@ -35,6 +39,13 @@ export function portDetailScene(serial: string, portId: string): EmbeddedScene {
         new SceneFlexItem({
           minHeight: 220,
           body: switchPortConfigPanel(serial, portId),
+        }),
+        // §4.4.3-1b panel #7 — port-error snapshot. Reshapes the existing
+        // packet-counters frame via a filterByValue on `desc` to show only
+        // the error-family buckets (CRC align errors, Collisions, etc.).
+        new SceneFlexItem({
+          minHeight: 220,
+          body: switchPortErrorsSnapshot(serial, portId),
         }),
       ],
     }),
