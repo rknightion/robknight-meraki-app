@@ -116,6 +116,73 @@ API & Webhooks → API requests** — filter the `userAgent` column for
 `GrafanaMerakiPlugin` to attribute requests back to this integration.
 See Cisco's [User-Agent guide](https://developer.cisco.com/meraki/api-v1/user-agents-overview/).
 
+## Bundled alert rules
+
+The plugin ships a curated set of Grafana-managed alert rules. Enable
+them per-group from the Configuration page's "Bundled alert rules"
+section. Rules are installed into the "Meraki (bundled)" folder; contact
+points and notification policies remain your responsibility.
+
+<!-- TODO(docs): screenshot of Configuration → Bundled alert rules section -->
+
+### What gets installed
+
+| Group        | Rules | What they watch                                               |
+|--------------|-------|---------------------------------------------------------------|
+| availability | 2     | Any device offline; Meraki assurance critical-severity count  |
+| wan          | 3     | Appliance uplink down; uplink loss/latency; VPN peer down     |
+| sensors      | 3     | MT readings out of range; binary-state change; battery low    |
+| wireless     | 2     | AP channel utilisation high; failed-connection rate high      |
+| cameras      | 1     | Camera offline                                                |
+| lifecycle    | 3     | License expiring (info/warning/critical at 90/30/7 days)      |
+
+**Total: 13 rule templates across 6 groups**, fanned out per Meraki
+organisation your API key has access to.
+
+### Label schema
+
+Every installed rule carries the following labels — route them in your
+notification policies:
+
+- `severity` (`info` | `warning` | `critical`)
+- `meraki_group` (`availability` | `wan` | `wireless` | `sensors` | `cameras` | `lifecycle`)
+- `meraki_product` (`appliance` | `switch` | `wireless` | `camera` | `sensor` | empty)
+- `meraki_org` (Meraki organisation ID)
+- `meraki_rule` (stable template slug)
+- `managed_by: meraki-plugin`
+
+Example Grafana notification-policy matcher for critical Meraki alerts:
+
+```yaml
+matchers:
+  - managed_by = meraki-plugin
+  - severity = critical
+```
+
+### Source of truth
+
+The plugin UI is authoritative. Thresholds edited directly in Grafana's
+Alerting UI will be reverted on the next Reconcile. The Configuration
+page surfaces a drift banner when it detects this mismatch.
+
+### Install / uninstall
+
+- **Install a group**: toggle it on in Configuration → Bundled alert
+  rules, edit thresholds as desired, click Reconcile.
+- **Uninstall everything**: click Uninstall all. Only rules matching
+  both `uid` prefix `meraki-` AND label `managed_by=meraki-plugin`
+  are removed — user-authored rules are never touched.
+- **Per-rule uninstall**: untick the rule, click Reconcile.
+
+### Feature-toggle prerequisite
+
+The install UX calls Grafana's alert provisioning API via a plugin
+service account. This requires the `externalServiceAccounts` feature
+toggle. It is enabled by default on Grafana Cloud. On self-hosted
+Grafana 12.x you may need to enable it in `grafana.ini` or via
+`GF_FEATURE_TOGGLES_ENABLE=externalServiceAccounts`. The Configuration
+page surfaces a warning banner when the toggle is missing.
+
 ## Repository layout
 
 ```

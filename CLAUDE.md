@@ -46,6 +46,15 @@ go vet ./pkg/...
 - **Cache:** in-memory TTL LRU, per plugin instance. No Redis, no cross-replica cache.
 - **Query-kind contract is shared between frontend and backend** — see `src/CLAUDE.md` and `pkg/plugin/query/CLAUDE.md`.
 
+## §1.13 Alert-bundle UID + label invariants (v0.6)
+
+The v0.6 alert bundle (§4.5) installs Grafana-managed alert rules into the folder `Meraki (bundled)`. UID scheme, label schema, and deletion safety are load-bearing — changes break idempotent reconcile.
+
+- **UID**: `meraki-<groupId>-<templateId>-<orgId>`. Stable across plugin rename (Q.7) — no plugin-ID substring.
+- **Delete gate**: reconciler deletes only rules matching BOTH the `meraki-` UID prefix AND label `managed_by=meraki-plugin`. Prevents clobbering user-authored rules that share the prefix.
+- **Template delimiters**: `<% ... %>` in template YAMLs (NOT `{{ }}` — avoids collision with YAML flow-mapping syntax).
+- **Full invariants**: see `pkg/plugin/alerts/CLAUDE.md`.
+
 ## Repo layout
 
 ```

@@ -48,3 +48,7 @@ links.ts               urlFor...() helpers for drilldown links (bookmarkable dee
 ## Gotcha — empty-chart trap
 
 When rendering native timeseries, the backend must emit **one frame per series with labels on the value field**. If you see an empty timeseries viz but the data is there in the frame inspector, the frame shape is wrong (long-format instead of labelled per-series). Fix in the Go handler, not with a client-side transform. Canonical shapes: `pkg/plugin/query/sensor_readings.go:handleSensorReadingsHistory` and `pkg/plugin/query/wireless.go:handleWirelessChannelUtil`.
+
+## Alert-bundle UI
+
+Alert-bundle config UI lives in `src/components/AppConfig/AlertRulesPanel.tsx` — see also `pkg/plugin/alerts/CLAUDE.md` for the backend invariants (UID scheme, reconciler idempotency, managed_by delete gate).

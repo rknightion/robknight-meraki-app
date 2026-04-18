@@ -2,37 +2,61 @@
 
 ## 0.6.0 (Unreleased)
 
-Bundled alert-rules roadmap — todos.txt §4.5. Phase 0 wires the plugin IAM
-plumbing so Grafana issues an externalServiceAccounts token on install;
-subsequent phases add the rule-template registry, reconciler, and install
-UX.
+**Bundled alert rules** — todos.txt §4.5. A curated set of 13
+Grafana-managed alert rules, installable per-group from the plugin's
+Configuration page. Rules are reconciled idempotently against Grafana's
+alert-provisioning API via a plugin service-account token, and land in
+the `Meraki (bundled)` folder with stable `meraki-<group>-<template>-<orgId>`
+UIDs that survive plugin rename.
 
 ### Added
 
-- Plugin IAM block granting alert.provisioning read/write + folders
-  create/write/read, enabling the v0.6 bundled alert rules install UX
-  (§4.5.2).
-- CheckHealth now probes Grafana's alert provisioning API and reports the
-  externalServiceAccounts feature-toggle state.
-- Resource endpoints for the bundled alert rules — templates registry, live
-  status, reconcile, uninstall-all (§4.5.5).
-- Configuration page → "Bundled alert rules" section: per-group install
-  toggles, per-threshold editor, Reconcile + Uninstall actions, drift
-  detection (§4.5.6).
-- Alert templates (v0.6 §4.5.7):
-  - 5a availability: meraki-critical (+ existing device-offline).
-  - 5b wan: uplink-down, uplink-loss-latency, vpn-peer-down.
-  - 5c sensors: readings-out-of-range, binary-state, battery-low.
-  - 5d wireless: ap-channel-util, failed-connections.
-  - 5f cameras: offline.
-  - 5g lifecycle: license-expiring (info/warn/crit fan-out at 90/30/7 days).
-- 5e cellular (mg-data-cap) DROPPED — depended on v0.5 §4.4.3-1d
-  cellularDataUsage kind that was itself dropped (no Meraki v1 endpoint).
+- **Plugin IAM block** granting `alert.provisioning` read/write +
+  `folders` create/write/read. Grafana 10.3+ injects a plugin
+  service-account token automatically when the `iam` section is
+  present, so the install UX needs no user-provided token (§4.5.2).
+- **Resource endpoints for the alert bundle** — `/alerts/templates`,
+  `/alerts/status`, `/alerts/reconcile`, `/alerts/uninstall-all`.
+  Reconcile summary persisted to
+  `$GF_PATHS_DATA/plugins/<id>/alerts-state.json` so the UI's
+  last-run panel survives a process restart (§4.5.3–§4.5.5).
+- **Configuration page → "Bundled alert rules"** — per-group install
+  toggles, per-threshold editor, Reconcile + Uninstall actions,
+  drift detection banner, feature-toggle banner when
+  `externalServiceAccounts` is missing (§4.5.6).
+- **13 rule templates across 6 groups** (§4.5.7):
+  - `availability` (2): device-offline, meraki-critical.
+  - `wan` (3): appliance uplink down, uplink loss/latency, VPN peer down.
+  - `sensors` (3): MT readings out of range, binary-state change,
+    battery low.
+  - `wireless` (2): AP channel utilisation high, failed-connection rate.
+  - `cameras` (1): camera offline.
+  - `lifecycle` (3): license expiring info/warning/critical at
+    90/30/7 days — severity fan-out implemented as three separate
+    YAML templates so each gets its own UID and can be toggled /
+    muted independently.
+- **Deletion safety** — reconciler only removes rules matching BOTH
+  the `meraki-` UID prefix AND label `managed_by=meraki-plugin`.
+  User-authored rules sharing the prefix are never touched (§4.5.1-g).
+- **E2E testing harness** — Go-level `InMemoryGrafana` stub gated by
+  the `E2E_MOCK_GRAFANA` env var, plus Playwright spec covering
+  render + reconcile + uninstall flows (§4.5.8).
+- **5e cellular (mg-data-cap) DROPPED** — depended on v0.5 §4.4.3-1d
+  `cellularDataUsage` kind that was itself dropped (no Meraki v1
+  endpoint). Bundle count 14 → 13 templates, 7 → 6 groups.
+
+### Changed
+
+- **CheckHealth** now also probes Grafana's alert provisioning API and
+  surfaces the `externalServiceAccounts` feature-toggle state via
+  `CheckHealthResult.JSONDetails` (alongside the v0.4-era Meraki
+  identity probe). The message returned to the "Test connection"
+  button includes the alerts-bundle readiness result.
 
 ### Developer
 
-- docker-compose-base.yaml enables externalServiceAccounts feature toggle
-  for local dev.
+- `docker-compose-base.yaml` enables `externalServiceAccounts` feature
+  toggle for local dev.
 
 ## 0.5.0 (Unreleased)
 

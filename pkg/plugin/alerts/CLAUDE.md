@@ -1,8 +1,22 @@
 # Bundled alert rules (`pkg/plugin/alerts/`)
 
-Registry + renderer for the alert-rule templates the plugin provisions into
-Grafana on behalf of the operator. See `todos.txt` §4.5 for the full phase
-roadmap; this package is the Phase 1 foundation.
+Registry + renderer + reconciler for the curated alert-rule bundle the
+plugin provisions into Grafana on behalf of the operator. The package:
+
+1. Embeds the canonical YAML templates under `templates/` (one YAML per
+   rule, grouped by folder).
+2. Renders each template into a concrete `AlertRule` per Meraki org,
+   with user-supplied threshold overrides merged over baked defaults.
+3. Diffs desired vs. current state and issues idempotent create / update /
+   delete calls against Grafana's alert-provisioning API via the
+   `GrafanaAPI` interface defined here (kept in-package to avoid a
+   circular import on `pkg/plugin`).
+
+v0.6 ships **13 rule templates across 6 groups** — `availability` (2),
+`wan` (3), `sensors` (3), `wireless` (2), `cameras` (1), `lifecycle` (3).
+Cellular (5e `mg-data-cap`) was dropped because Meraki v1 has no
+monthly-data-cap endpoint (see `todos.txt` §4.5.7-1d). Full phase
+roadmap + surprises in `todos.txt` §4.5 and §C.
 
 ## Files
 
@@ -82,6 +96,51 @@ rule:
 Unknown YAML keys are rejected (`KnownFields(true)`). Missing template keys
 are a hard error (`missingkey=error`).
 
+### Severity fan-out
+
+`Template.Render()` always returns exactly **one** `AlertRule`. A single
+template produces a single UID. If a logical alert needs to fire at
+multiple severities (e.g. license expiring at 90 / 30 / 7 days), emit
+**one template YAML per severity** — do NOT try to fan out inside a
+single Render call. The canonical exemplar is `lifecycle/`:
+
+- `license-expiring-info.yaml`    (severity=info,    threshold=90 d)
+- `license-expiring-warning.yaml` (severity=warning, threshold=30 d)
+- `license-expiring-critical.yaml`(severity=critical,threshold=7 d)
+
+Each ends up with its own UID (`meraki-lifecycle-license-expiring-{info,
+warning,critical}-<orgID>`) and can be toggled / muted independently in
+the UI. Grouping happens at the group level (`lifecycle`), not the
+template level.
+
+## Reconciler idempotency contract
+
+`reconciler.go` GETs every rule in the `Meraki (bundled)` folder,
+filters to `managed_by=meraki-plugin`, and computes a **ruleSignature**
+for both the existing rule and the desired rule. Two rules with the
+same signature are considered equal and skipped (no PUT).
+
+The signature is deliberately **narrow**: it covers only fields the
+plugin owns — title, condition, data/queries, labels, annotations,
+`for`, `noDataState`, `execErrState`. It explicitly **ignores**
+Grafana-added fields like `updated`, `provenance`, `version`,
+`is_paused`, and any organisation-scoped fields Grafana may enrich on
+GET. This matters because:
+
+- Grafana rewrites fields on write (e.g. rearranges `relativeTimeRange`
+  values); naive deep-equal would cause a PUT every reconcile.
+- Operators may pause a rule in Grafana's UI — reconciler leaves
+  `is_paused` alone across a no-op reconcile. (A threshold edit still
+  overwrites the whole body, including `is_paused`; that's intentional.)
+- User-managed alerts sharing the `meraki-` UID prefix but **lacking**
+  the `managed_by=meraki-plugin` label are NEVER touched — the filter
+  runs before signature comparison. This is the safety gate described
+  in `todos.txt` §4.5.1-g.
+
+If you change the signature, you must either bump every fixture
+(`-update`) or provide a migration path — otherwise the next reconcile
+on an existing install will stage spurious updates for every rule.
+
 ## Golden-fixture workflow
 
 Every template gets one fixture at `testdata/<group>-<id>-987654.golden.json`.
@@ -114,14 +173,17 @@ before it reaches Grafana.
 6. Update the frontend registry mirror (Phase 3, `src/pages/Alerts/`) so
    operators can actually surface it in the UI.
 
-## Phase pointers (future files)
+## Surface map (all v0.6 phases shipped)
 
-- **Phase 2 — `reconciler.go`** (this package): GETs existing rules by
-  `managed_by=meraki-plugin` label, diffs against desired state, issues
-  create/update/delete calls through a `GrafanaClient` interface defined
-  here so we avoid a circular import.
-- **Phase 3 — resource endpoints + frontend**: `pkg/plugin/resources.go`
-  grows `/alerts/bundled/*` routes that the Alerts scene page consumes.
+- `reconciler.go` — idempotent diff/apply over `GrafanaAPI`.
+- `grafana_client.go` (in `pkg/plugin/`) — concrete `GrafanaAPI`
+  implementation hitting Grafana's `/api/v1/provisioning/*` surface
+  using the plugin service-account token.
+- `pkg/plugin/resources.go` → `/alerts/{templates,status,reconcile,
+  uninstall-all}` resource routes consumed by the AppConfig UI.
+- `src/components/AppConfig/AlertRulesPanel.tsx` — the operator-facing
+  install/uninstall UI (per-group toggles + per-threshold editors +
+  Reconcile / Uninstall buttons + drift banner).
 
 ## Reconcile-summary persistence (§4.5.5)
 

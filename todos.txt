@@ -272,6 +272,17 @@ HOW TO READ THIS FILE
      - Every scene page with drilldowns or tabs uses `routePath: 'path/*'`
        with a trailing `*`. Deep links must be bookmarkable.
 
+1.13 Alert-bundle UID + label invariants (v0.6)
+     - UID scheme: `meraki-<group>-<template>-<orgId>`. Stable across
+       plugin rename (Q.7) — no plugin-ID substring.
+     - Delete gate: reconciler deletes only rules matching BOTH the
+       `meraki-` UID prefix AND label `managed_by=meraki-plugin`.
+     - Template delimiters: `<% ... %>` (NOT `{{ }}`) — avoids YAML
+       flow-mapping collisions.
+     - Full invariants live in pkg/plugin/alerts/CLAUDE.md + root
+       CLAUDE.md §1.13. Changing any of these breaks idempotent
+       reconcile on existing installs — provide a migration path.
+
 1.12 Cross-family drilldown via server-computed drilldownUrl column
      - Handlers that emit device rows (devices, deviceAvailabilities,
        cameraOnboarding, mgUplinks, topDevices, topSwitchesByEnergy,
@@ -1677,7 +1688,7 @@ Scope EXCLUDES:
 
 --------------------------------------------------------------------------------
 4.5  V0.6 ROADMAP — BUNDLED ALERT RULES + INSTALL/UNINSTALL INFRASTRUCTURE
-     [PLANNED — brainstormed 2026-04-18; supersedes §4.2 Q.6]
+     [DONE — v0.6 2026-04-18; see §C below for shipped-state summary]
 --------------------------------------------------------------------------------
 
 Goal: ship 13 Grafana-managed alert rule templates with an in-plugin
@@ -3581,6 +3592,109 @@ Outstanding follow-ups (intentional):
     gotcha flagged in every Phase-2 agent's commit message.
   - §4.5 (v0.6 bundled alert rules) is the next milestone. §4.5.7 5e
     (mg-data-cap alert template) was dropped alongside §4.4.3-1d.
+
+================================================================================
+§C. V0.6 BUNDLED ALERT RULES — ALL PHASES SHIPPED              [2026-04-18]
+================================================================================
+
+§4.5 is feature-complete on `main`. 13 rule templates across 6 groups are
+rendered, reconciled, and installable via the Configuration page's
+"Bundled alert rules" section. The alert-bundle resource endpoints
+(/alerts/templates, /alerts/status, /alerts/reconcile,
+/alerts/uninstall-all) are wired; Grafana picks up the plugin
+service-account token automatically via the plugin.json `iam` block.
+
+Per-phase status + commits:
+
+  §4.5.2  Phase 0 — IAM + GrafanaClient + CheckHealth probe     SHIPPED
+          1d31f22 / f4fc4e0 (merge f7ea12a). iam.permissions block in
+          src/plugin.json; GrafanaClient wrapper stub; CheckHealth now
+          probes Grafana's alert provisioning API and surfaces the
+          externalServiceAccounts feature-toggle state alongside the
+          existing Meraki identity probe.
+
+  §4.5.3  Phase 1 — rule-template registry + device-offline seed SHIPPED
+          87ae64a / d925693 (merge a086f13). registry.go, grafana_rule.go,
+          the <% ... %> YAML renderer, first template (device-offline)
+          + its golden fixture, package CLAUDE.md seeded.
+
+  §4.5.4  Phase 2 — reconciler + idempotent diff/apply            SHIPPED
+          b6c584e / 3b800c5. GrafanaAPI folder+rule CRUD; reconciler
+          with ruleSignature-based no-op detection and the
+          managed_by=meraki-plugin delete-safety gate.
+
+  §4.5.5  Phase 3 — alerts resource endpoints + persistence       SHIPPED
+          c204acc / daf9bd4 (merge cccaf9c). /alerts/{templates,status,
+          reconcile,uninstall-all} routes; summary state persisted to
+          $GF_PATHS_DATA/plugins/<id>/alerts-state.json so the UI's
+          last-run panel survives a process restart.
+
+  §4.5.6  Phase 4 — AlertRulesPanel config UI                     SHIPPED
+          8520ecb / 3c83da1 (merge 2600ffa). Group cards + per-threshold
+          editors + Reconcile / Uninstall buttons + drift banner.
+
+  §4.5.7  Phase 5 — template bundle                               SHIPPED
+          5a availability (4d58bce) — meraki-critical on top of the
+                          §4.5.3 device-offline seed.
+          5b wan (c5305ba) — uplink-down, uplink-loss-latency,
+                          vpn-peer-down.
+          5c sensors (a9b76d5) — readings-out-of-range, binary-state,
+                          battery-low.
+          5d wireless (f34945b) — ap-channel-util, failed-connections.
+          5e cellular                                              DROPPED
+                          Depended on v0.5 §4.4.3-1d cellularDataUsage
+                          which was itself dropped (no Meraki v1
+                          endpoint). Bundle count 14 → 13, group
+                          count 7 → 6.
+          5f cameras (554ea1b) — offline.
+          5g lifecycle (26bc7da) — license-expiring info/warning/
+                          critical at 90/30/7 days. DEVIATION:
+                          severity fan-out implemented as THREE
+                          separate YAML templates (one per severity)
+                          rather than a single-Render-multi-rule path,
+                          so each severity gets its own UID and
+                          operators can toggle/mute independently.
+                          Documented in pkg/plugin/alerts/CLAUDE.md
+                          "Severity fan-out".
+          Merge: 05664e4. CHANGELOG: ed72fac.
+
+  §4.5.8  Phase 6 — E2E testing harness                           SHIPPED
+          5b41157 / bc410e7. Go-level InMemoryGrafana stub captures
+          every CRUD call in-memory; gated by E2E_MOCK_GRAFANA=1 so
+          the dev lab keeps exercising a real Grafana by default.
+          Playwright alerts.spec.ts covers render + reconcile + uninstall
+          flows with both client-side page.route() fixtures (for shape
+          assertions) and the Go stub (for reconciler diff exercise).
+          DEVIATION: opt-in env-var activation rather than default-on;
+          see pkg/plugin/alerts/CLAUDE.md "E2E mock" and
+          .config/AGENTS/e2e-testing.md.
+
+  §4.5.9  Phase 7 — docs + changelog finalisation                 SHIPPED
+          this commit. README "Bundled alert rules" section, root
+          CLAUDE.md §1.13 cross-ref, this §C appendix, src/pages/
+          CLAUDE.md pointer, CHANGELOG v0.6 block polish.
+
+Aggregate deltas:
+  - 13 rule templates shipped (6 groups; cellular group dropped entirely).
+  - 2 new backend packages: pkg/plugin/alerts/ (registry + reconciler +
+    e2e stub) and the GrafanaAPI wrapper in pkg/plugin/.
+  - 4 new resource endpoints: /alerts/{templates,status,reconcile,
+    uninstall-all}.
+  - AppConfig grew a new AlertRulesPanel section (~700 LOC React +
+    hooks + drift banner).
+  - Golden-fixture files: 13 (one per template at orgID 987654);
+    TestGolden pins rendering.
+  - CheckHealth now reports alerts-bundle feature-toggle state as a
+    JSONDetails field alongside the §4.4-era Meraki identity string.
+
+Outstanding follow-ups (intentional):
+  - v0.6.0 tag is a USER decision per §9 acceptance criteria — NOT
+    auto-tagged by Phase 7.
+  - Screenshot in README "Bundled alert rules" section is a TODO
+    placeholder; capture from a lab Grafana once v0.6.0 ships.
+  - Visual smoke against a live Grafana 12.x with the
+    externalServiceAccounts toggle OFF — verify the drift banner
+    copy lands cleanly.
 
 ================================================================================
 END OF FILE
