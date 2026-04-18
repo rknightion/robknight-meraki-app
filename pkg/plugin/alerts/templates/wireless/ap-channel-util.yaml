@@ -1,0 +1,59 @@
+kind: alert_rule_template
+id: ap-channel-util
+group: wireless
+display_name: AP channel utilisation high
+severity: warning
+thresholds:
+  - key: pct_gt
+    type: int
+    default: 70
+    label: Channel utilisation threshold (%)
+    help: Fire when average channel utilisation exceeds this percentage.
+  - key: for_duration
+    type: duration
+    default: 10m
+    label: Grace period before alerting
+    help: Channel utilisation must remain above threshold for this duration before firing.
+rule:
+  title: "Meraki AP channel utilisation high — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: wirelessChannelUtil
+    params:
+      orgId: "<% .OrgID %>"
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 900, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: wirelessChannelUtil
+        orgId: "<% .OrgID %>"
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: mean
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [<% .Thresholds.pct_gt %>] }
+        expression: B
+  annotations:
+    summary: "AP channel utilisation high in Meraki org <% .OrgID %>"
+    description: "One or more APs are reporting average channel utilisation above the configured threshold. Consider RF tuning or adding capacity."
+  labels:
+    severity: warning
+    meraki_group: wireless
+    meraki_product: wireless
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: ap-channel-util
+    managed_by: meraki-plugin

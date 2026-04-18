@@ -1,0 +1,68 @@
+kind: alert_rule_template
+id: binary-state
+group: sensors
+display_name: MT binary sensor triggered
+severity: warning
+thresholds:
+  - key: metric
+    type: list
+    default: [water]
+    label: Binary metrics to evaluate
+    help: Only evaluate MT readings whose metric matches one of these values.
+    options: [door, water, noise, button]
+  - key: trigger_on
+    type: list
+    default: [true]
+    label: Trigger on state
+    help: Fire when the latest reading matches one of these boolean states.
+    options: [true, false]
+  - key: for_duration
+    type: duration
+    default: 1m
+    label: Grace period before alerting
+    help: Binary state must hold for this duration before firing.
+rule:
+  title: "Meraki MT binary sensor triggered — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: sensorReadingsLatest
+    params:
+      orgId: "<% .OrgID %>"
+      metrics: <% yamlList .Thresholds.metric %>
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: sensorReadingsLatest
+        orgId: "<% .OrgID %>"
+        metrics: <% yamlList .Thresholds.metric %>
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [0] }
+        expression: B
+  annotations:
+    summary: "MT binary sensor triggered in Meraki org <% .OrgID %>"
+    description: "One or more MT binary sensors (door, water, noise, button) are reporting the trigger state. Open the Sensors scene for per-sensor detail."
+  labels:
+    severity: warning
+    meraki_group: sensors
+    meraki_product: sensor
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: binary-state
+    managed_by: meraki-plugin

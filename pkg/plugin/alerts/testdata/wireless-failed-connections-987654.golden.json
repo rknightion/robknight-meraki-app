@@ -1,0 +1,75 @@
+{
+  "uid": "meraki-wireless-failed-connections-987654",
+  "title": "Meraki wireless failed connections elevated — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "wirelessFailedConnections",
+        "orgId": "987654",
+        "refId": "A",
+        "timespanSeconds": "5"
+      },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "count",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                20
+              ],
+              "type": "gt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "5m",
+  "annotations": {
+    "description": "Failed wireless connections over the configured window exceed the threshold. Review the Wireless scene for per-SSID/AP detail.",
+    "summary": "Wireless failed connections elevated in Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wireless",
+    "meraki_org": "987654",
+    "meraki_product": "wireless",
+    "meraki_rule": "failed-connections",
+    "severity": "warning"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "wireless"
+}

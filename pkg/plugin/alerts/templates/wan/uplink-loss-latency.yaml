@@ -1,0 +1,64 @@
+kind: alert_rule_template
+id: uplink-loss-latency
+group: wan
+display_name: MX uplink loss / latency degraded
+severity: warning
+thresholds:
+  - key: loss_pct_gt
+    type: float
+    default: 2.0
+    label: Packet loss threshold (%)
+    help: Fire when average per-uplink loss percentage exceeds this value.
+  - key: latency_ms_gt
+    type: int
+    default: 200
+    label: Latency threshold (ms)
+    help: Fire when average per-uplink latency exceeds this value.
+  - key: for_duration
+    type: duration
+    default: 5m
+    label: Grace period before alerting
+    help: Uplink must exceed loss/latency thresholds for this duration before firing.
+rule:
+  title: "Meraki MX uplink loss/latency degraded — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: deviceUplinksLossLatency
+    params:
+      orgId: "<% .OrgID %>"
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: deviceUplinksLossLatency
+        orgId: "<% .OrgID %>"
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: mean
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [<% .Thresholds.loss_pct_gt %>] }
+        expression: B
+  annotations:
+    summary: "MX uplink loss/latency degraded in Meraki org <% .OrgID %>"
+    description: "One or more MX uplinks are reporting elevated loss or latency. Drill into the Uplinks scene for per-interface history."
+  labels:
+    severity: warning
+    meraki_group: wan
+    meraki_product: appliance
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: uplink-loss-latency
+    managed_by: meraki-plugin

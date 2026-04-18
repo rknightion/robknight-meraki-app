@@ -1,0 +1,59 @@
+kind: alert_rule_template
+id: uplink-down
+group: wan
+display_name: MX uplink down
+severity: critical
+thresholds:
+  - key: for_duration
+    type: duration
+    default: 2m
+    label: Grace period before alerting
+    help: Uplink must be reported non-active for this duration before the rule fires.
+  - key: count_gt
+    type: int
+    default: 0
+    label: Non-active uplink count threshold
+    help: Fire when more than this many uplinks report a non-active status.
+rule:
+  title: "Meraki MX uplink down — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: applianceUplinkStatuses
+    params:
+      orgId: "<% .OrgID %>"
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: applianceUplinkStatuses
+        orgId: "<% .OrgID %>"
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [<% .Thresholds.count_gt %>] }
+        expression: B
+  annotations:
+    summary: "One or more MX uplinks are not active in Meraki org <% .OrgID %>"
+    description: "At least one MX appliance uplink is reporting a non-active status. Open the plugin Uplinks page for per-network detail."
+  labels:
+    severity: critical
+    meraki_group: wan
+    meraki_product: appliance
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: uplink-down
+    managed_by: meraki-plugin

@@ -1,0 +1,77 @@
+{
+  "uid": "meraki-sensors-battery-low-987654",
+  "title": "Meraki MT sensor battery low — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "sensorReadingsLatest",
+        "metrics": [
+          "battery"
+        ],
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "last",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                20
+              ],
+              "type": "lt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "5m",
+  "annotations": {
+    "description": "One or more MT sensors report battery below the configured threshold. Replace batteries soon to avoid offline sensors.",
+    "summary": "MT sensor battery low in Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "sensors",
+    "meraki_org": "987654",
+    "meraki_product": "sensor",
+    "meraki_rule": "battery-low",
+    "severity": "warning"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "sensors"
+}

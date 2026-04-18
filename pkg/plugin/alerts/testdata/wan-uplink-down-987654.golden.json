@@ -1,0 +1,74 @@
+{
+  "uid": "meraki-wan-uplink-down-987654",
+  "title": "Meraki MX uplink down — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "applianceUplinkStatuses",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "last",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0
+              ],
+              "type": "gt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "2m",
+  "annotations": {
+    "description": "At least one MX appliance uplink is reporting a non-active status. Open the plugin Uplinks page for per-network detail.",
+    "summary": "One or more MX uplinks are not active in Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wan",
+    "meraki_org": "987654",
+    "meraki_product": "appliance",
+    "meraki_rule": "uplink-down",
+    "severity": "critical"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "wan"
+}

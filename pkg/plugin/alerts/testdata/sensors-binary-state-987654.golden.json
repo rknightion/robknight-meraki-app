@@ -1,0 +1,77 @@
+{
+  "uid": "meraki-sensors-binary-state-987654",
+  "title": "Meraki MT binary sensor triggered — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "sensorReadingsLatest",
+        "metrics": [
+          "water"
+        ],
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "last",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0
+              ],
+              "type": "gt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "1m",
+  "annotations": {
+    "description": "One or more MT binary sensors (door, water, noise, button) are reporting the trigger state. Open the Sensors scene for per-sensor detail.",
+    "summary": "MT binary sensor triggered in Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "sensors",
+    "meraki_org": "987654",
+    "meraki_product": "sensor",
+    "meraki_rule": "binary-state",
+    "severity": "warning"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "sensors"
+}

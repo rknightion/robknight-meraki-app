@@ -1,0 +1,74 @@
+{
+  "uid": "meraki-lifecycle-license-expiring-info-987654",
+  "title": "Meraki license expiring within 90 days — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "licensesList",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 3600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "min",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                90
+              ],
+              "type": "lt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "10m",
+  "annotations": {
+    "description": "One or more Meraki licenses will expire within the configured info-horizon window. Open the Licenses scene for detail.",
+    "summary": "Meraki licenses approaching expiry (info) in org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "lifecycle",
+    "meraki_org": "987654",
+    "meraki_product": "",
+    "meraki_rule": "license-expiring-info",
+    "severity": "info"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "lifecycle"
+}

@@ -1,0 +1,56 @@
+kind: alert_rule_template
+id: offline
+group: cameras
+display_name: MV camera offline
+severity: critical
+thresholds:
+  - key: for_duration
+    type: duration
+    default: 2m
+    label: Grace period before alerting
+    help: Camera must be reported offline for at least this duration before firing.
+rule:
+  title: "Meraki MV camera offline — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: deviceAvailabilities
+    params:
+      orgId: "<% .OrgID %>"
+      productTypes: ["camera"]
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: deviceAvailabilities
+        orgId: "<% .OrgID %>"
+        productTypes: ["camera"]
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [0] }
+        expression: B
+  annotations:
+    summary: "MV camera offline in Meraki org <% .OrgID %>"
+    description: "One or more MV cameras are reporting offline status. Open the Cameras scene for per-camera detail."
+  labels:
+    severity: critical
+    meraki_group: cameras
+    meraki_product: camera
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: offline
+    managed_by: meraki-plugin

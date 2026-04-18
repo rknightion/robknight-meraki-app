@@ -1,0 +1,56 @@
+kind: alert_rule_template
+id: battery-low
+group: sensors
+display_name: MT sensor battery low
+severity: warning
+thresholds:
+  - key: pct_lt
+    type: int
+    default: 20
+    label: Battery percentage threshold
+    help: Fire when a sensor's battery percentage drops below this value.
+rule:
+  title: "Meraki MT sensor battery low — <% .OrgID %>"
+  for: "5m"
+  query:
+    kind: sensorReadingsLatest
+    params:
+      orgId: "<% .OrgID %>"
+      metrics: ["battery"]
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: sensorReadingsLatest
+        orgId: "<% .OrgID %>"
+        metrics: ["battery"]
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: lt, params: [<% .Thresholds.pct_lt %>] }
+        expression: B
+  annotations:
+    summary: "MT sensor battery low in Meraki org <% .OrgID %>"
+    description: "One or more MT sensors report battery below the configured threshold. Replace batteries soon to avoid offline sensors."
+  labels:
+    severity: warning
+    meraki_group: sensors
+    meraki_product: sensor
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: battery-low
+    managed_by: meraki-plugin

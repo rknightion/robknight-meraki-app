@@ -1,0 +1,74 @@
+{
+  "uid": "meraki-wan-vpn-peer-down-987654",
+  "title": "Meraki site-to-site VPN peer unreachable — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "applianceVpnStatuses",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "last",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0
+              ],
+              "type": "gt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "3m",
+  "annotations": {
+    "description": "One or more site-to-site VPN peers are reporting a non-reachable status. Open the plugin VPN scene for peer-by-peer detail.",
+    "summary": "Site-to-site VPN peer(s) unreachable in Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wan",
+    "meraki_org": "987654",
+    "meraki_product": "appliance",
+    "meraki_rule": "vpn-peer-down",
+    "severity": "critical"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "wan"
+}
