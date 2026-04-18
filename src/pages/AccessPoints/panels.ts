@@ -511,3 +511,156 @@ export function wirelessApCpuLoadTimeseries(): VizPanel {
     .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
     .build();
 }
+
+// ---------------------------------------------------------------------------
+// §4.4.3-1a — v0.5 MR panels
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-network client-count timeseries. One frame per network (see
+ * handleWirelessClientCountHistory for shape). Stacked so operators can
+ * eyeball the aggregate at a glance.
+ *
+ * When a specific SSID is passed (via `ssid`), it's smuggled through
+ * `metrics[0]` — the handler reads that as an optional SSID filter.
+ */
+export function perSsidClientCountTimeseries(ssid?: string): VizPanel {
+  return PanelBuilders.timeseries()
+    .setTitle(ssid ? `Client count — SSID ${ssid}` : 'Client count')
+    .setDescription(
+      'Associated-client count per network over the selected time range. 7-day max lookback.'
+    )
+    .setData(
+      oneQuery({
+        kind: QueryKind.WirelessClientCountHistory,
+        networkIds: ['$network'],
+        metrics: ssid ? ([ssid] as unknown as SensorMetric[]) : undefined,
+        maxDataPoints: 500,
+      })
+    )
+    .setUnit('short')
+    .setMin(0)
+    .setNoValue('No client-count data in the selected range.')
+    .setColor({ mode: FieldColorModeId.PaletteClassic })
+    .setCustomFieldConfig('lineWidth', 1)
+    .setCustomFieldConfig('fillOpacity', 20)
+    .setCustomFieldConfig('spanNulls', true)
+    .setCustomFieldConfig('stacking', { mode: 'normal', group: 'A' } as any)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
+    .build();
+}
+
+/**
+ * Band-split donut — reshape of the existing WirelessUsage kind. Uses the
+ * stat viz in donut mode because Scenes' PanelBuilders exposes `piechart`
+ * via the generic builder. The dedicated MR-band breakdown is approximated
+ * via SSID usage history sliced by network; a future refinement may split
+ * by band once Meraki exposes per-band usage directly.
+ */
+export function bandUsageSplitDonut(): VizPanel {
+  return PanelBuilders.piechart()
+    .setTitle('Wireless usage by network')
+    .setDescription(
+      'Network share of wireless throughput over the selected range. Reshape of the existing wirelessUsage kind — no new transport.'
+    )
+    .setData(
+      oneQuery({
+        kind: QueryKind.WirelessUsage,
+        networkIds: ['$network'],
+        maxDataPoints: 200,
+      })
+    )
+    .setUnit('Kbits')
+    .setNoValue('No usage data in the selected range.')
+    .setOption('reduceOptions', {
+      values: false,
+      calcs: ['sum'],
+      fields: '',
+    } as any)
+    .setOption('pieType', 'donut' as any)
+    .setOption('displayLabels', ['name', 'percent'] as any)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'right' } as any)
+    .build();
+}
+
+/**
+ * Org-wide AP radio/band status table. One row per AP with band2_4 / band5 /
+ * band6 booleans derived from the `ssids/statuses/byDevice` response.
+ */
+export function perApRadioStatusTable(): VizPanel {
+  const runner = oneQuery({ kind: QueryKind.DeviceRadioStatus });
+  return PanelBuilders.table()
+    .setTitle('AP radio status')
+    .setDescription('Which radio bands (2.4 / 5 / 6 GHz) are currently broadcasting on each AP.')
+    .setData(runner)
+    .setNoValue('No radio-status data available.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('serial').overrideLinks([
+        {
+          title: 'Open access point',
+          url: `${PLUGIN_BASE_URL}/${ROUTES.AccessPoints}/\${__value.raw:percentencode}\${__url.params}`,
+        },
+      ]);
+      b.matchFieldsWithName('band2_4').overrideDisplayName('2.4 GHz');
+      b.matchFieldsWithName('band5').overrideDisplayName('5 GHz');
+      b.matchFieldsWithName('band6').overrideDisplayName('6 GHz');
+      b.matchFieldsWithName('enabled').overrideDisplayName('SSIDs enabled');
+      b.matchFieldsWithName('name').overrideDisplayName('Name');
+    })
+    .build();
+}
+
+/**
+ * Failed-connection aggregation table. The backend emits
+ * (serial, ssid, type, count) rows grouped server-side.
+ */
+export function failedConnectionRateTimeseries(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.WirelessFailedConnections,
+    networkIds: ['$network'],
+  });
+  return PanelBuilders.table()
+    .setTitle('Failed connections')
+    .setDescription(
+      'Aggregated client-connection failures in the selected range (grouped by AP / SSID / failure type).'
+    )
+    .setData(runner)
+    .setNoValue('No failed-connection events in the selected range.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('serial').overrideDisplayName('AP');
+      b.matchFieldsWithName('ssid').overrideDisplayName('SSID #');
+      b.matchFieldsWithName('type').overrideDisplayName('Failure type');
+      b.matchFieldsWithName('count').overrideDisplayName('Count');
+    })
+    .build();
+}
+
+/**
+ * Per-network wireless-latency timeseries. The handler emits one frame per
+ * (network, category) with an `ms` unit already configured.
+ */
+export function clientLatencyStatsTimeseries(): VizPanel {
+  return PanelBuilders.timeseries()
+    .setTitle('Wireless latency')
+    .setDescription(
+      'Average wireless latency per network, broken out by traffic access category when available. 7-day max lookback.'
+    )
+    .setData(
+      oneQuery({
+        kind: QueryKind.WirelessLatencyStats,
+        networkIds: ['$network'],
+        maxDataPoints: 500,
+      })
+    )
+    .setUnit('ms')
+    .setMin(0)
+    .setNoValue('No latency samples in the selected range.')
+    .setColor({ mode: FieldColorModeId.PaletteClassic })
+    .setCustomFieldConfig('lineWidth', 1)
+    .setCustomFieldConfig('fillOpacity', 10)
+    .setCustomFieldConfig('spanNulls', true)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
+    .build();
+}
