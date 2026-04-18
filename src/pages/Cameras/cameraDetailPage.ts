@@ -1,18 +1,18 @@
 import { SceneAppPage } from '@grafana/scenes';
 import { cameraAnalyticsScene } from './cameraAnalyticsScene';
 import { cameraOverviewScene } from './cameraOverviewScene';
-import { cameraZonesScene } from './cameraZonesScene';
+import { cameraBoundariesScene } from './cameraBoundariesScene';
 
 /**
  * Per-camera detail page — a tabbed `SceneAppPage` with three children:
  *   - Overview: top-line device KPIs + onboarding status.
- *   - Analytics: entrances + live occupancy + per-zone history.
- *   - Zones: flat list of every analytics zone configured on the camera.
+ *   - Analytics: boundary detection counts (in/out per object type).
+ *   - Boundaries: flat list of every area + line boundary configured on the
+ *     camera.
  *
- * Factory-shaped so the parent drilldown can pass the matched serial plus
- * the parent URL prefix. Mirrors {@link accessPointDetailPage} precisely;
- * Scenes uses the first tab as the default landing page when the user hits
- * the bare detail URL.
+ * The boundaries model replaced the deprecated `analytics/zones` endpoints in
+ * 2024; the Boundaries tab is this detail page's one-stop reference for what
+ * the camera is watching.
  */
 export function cameraDetailPage(serial: string, parentUrl: string): SceneAppPage {
   const encodedSerial = encodeURIComponent(serial);
@@ -20,7 +20,7 @@ export function cameraDetailPage(serial: string, parentUrl: string): SceneAppPag
 
   return new SceneAppPage({
     title: serial,
-    subTitle: 'Camera detail — onboarding status, analytics, and zones.',
+    subTitle: 'Camera detail — onboarding status, boundary detections, and configured boundaries.',
     titleIcon: 'camera',
     url: baseUrl,
     routePath: `${encodedSerial}/*`,
@@ -38,10 +38,10 @@ export function cameraDetailPage(serial: string, parentUrl: string): SceneAppPag
         getScene: () => cameraAnalyticsScene(serial),
       }),
       new SceneAppPage({
-        title: 'Zones',
-        url: `${baseUrl}/zones`,
-        routePath: 'zones',
-        getScene: () => cameraZonesScene(serial),
+        title: 'Boundaries',
+        url: `${baseUrl}/boundaries`,
+        routePath: 'boundaries',
+        getScene: () => cameraBoundariesScene(serial),
       }),
     ],
   });

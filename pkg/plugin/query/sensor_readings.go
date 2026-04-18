@@ -309,6 +309,29 @@ func sortByTime(ts []time.Time, values []float64) {
 	copy(values, sortedVals)
 }
 
+// sortByTimeInt64 is the int64-valued sibling of sortByTime. Kept as a
+// separate function rather than a generic to match the surrounding style —
+// the rest of the handlers work with explicitly-typed series.
+func sortByTimeInt64(ts []time.Time, values []int64) {
+	if len(ts) != len(values) {
+		return
+	}
+	idx := make([]int, len(ts))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(i, j int) bool { return ts[idx[i]].Before(ts[idx[j]]) })
+
+	sortedTs := make([]time.Time, len(ts))
+	sortedVals := make([]int64, len(values))
+	for dst, src := range idx {
+		sortedTs[dst] = ts[src]
+		sortedVals[dst] = values[src]
+	}
+	copy(ts, sortedTs)
+	copy(values, sortedVals)
+}
+
 // sensorValue resolves the union-shape SensorReading into a single float64.
 // Returns (value, true) when the metric matches a populated field, or
 // (0, false) when no corresponding payload is present (upstream bug or

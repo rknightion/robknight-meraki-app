@@ -34,7 +34,7 @@ type Settings struct {
 }
 ```
 
-`LabelMode` is threaded through `query.Options` so every per-device timeseries handler — `handleSensorReadingsHistory`, `handleWirelessChannelUtil`, `handleDeviceUplinksLossLatency`, `handleCameraAnalyticsOverview`, `handleCameraAnalyticsZoneHistory` — can switch legend labels between raw serial and human-friendly device name. In `serial` mode the handlers skip the `/devices` lookup entirely.
+`LabelMode` is threaded through `query.Options` so every per-device timeseries handler — `handleSensorReadingsHistory`, `handleWirelessChannelUtil`, `handleDeviceUplinksLossLatency` — can switch legend labels between raw serial and human-friendly device name. In `serial` mode the handlers skip the `/devices` lookup entirely. The camera detection handlers don't use LabelMode because boundary identifiers are their primary legend keys.
 
 ## Resource endpoints
 

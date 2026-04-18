@@ -8,15 +8,15 @@ import {
   SceneTimeRange,
 } from '@grafana/scenes';
 import { orgOnlyVariables } from '../../scene-helpers/variables';
-import { cameraZonesTable } from './panels';
+import { cameraBoundariesTable } from './panels';
 
 /**
- * Per-camera Zones tab — one table listing every analytics zone configured
- * on this camera (zoneId / type / label). Intentionally minimal; the zone
- * history timeseries lives on the Analytics tab so this stays focused on
- * "what zones does this camera have?".
+ * Per-camera Boundaries tab — one table listing every area + line boundary
+ * configured on this camera (boundaryId / name / kind / type). Intentionally
+ * minimal; the per-boundary detection timeseries lives on the Analytics tab
+ * so this stays focused on "what boundaries does this camera have?".
  */
-export function cameraZonesScene(serial: string): EmbeddedScene {
+export function cameraBoundariesScene(serial: string): EmbeddedScene {
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
     $variables: orgOnlyVariables(),
@@ -30,7 +30,7 @@ export function cameraZonesScene(serial: string): EmbeddedScene {
       children: [
         new SceneFlexItem({
           minHeight: 520,
-          body: cameraZonesTable(serial),
+          body: cameraBoundariesTable(serial),
         }),
       ],
     }),

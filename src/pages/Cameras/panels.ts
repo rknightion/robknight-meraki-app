@@ -15,8 +15,7 @@ import type { MerakiProductType } from '../../types';
 //
 // Local copy of the `oneQuery` helper used across per-area panels.ts files so
 // the Cameras area doesn't depend on an internal helper in the shared panels
-// module (which is being mutated in parallel during Wave 3). Mirrors the
-// Access Points / Switches copies precisely.
+// module.
 
 interface QueryParams {
   refId?: string;
@@ -128,9 +127,6 @@ export function cameraStatusKpiRow(): VizPanel[] {
  * `serial` column uses the backend-emitted `drilldownUrl` column so rows
  * route to the per-camera detail page. The backend always sets productType
  * to "camera" for this kind, so the URL is always `/cameras/<serial>`.
- *
- * Status column has a value-mapping that colours the rows green for a
- * complete/connected onboard, orange for incomplete, red for unboxed gear.
  */
 export function cameraOnboardingTable(): VizPanel {
   const runner = oneQuery({
@@ -170,9 +166,7 @@ export function cameraOnboardingTable(): VizPanel {
 /**
  * Table of every MV device in the selected org. Serial column drills into
  * the per-camera detail scene; mac/lat/lng columns are hidden because
- * they're rarely useful in a dense inventory view. Uses the Devices-emitted
- * `drilldownUrl` column so future product-type renames only touch the
- * backend.
+ * they're rarely useful in a dense inventory view.
  */
 export function cameraInventoryTable(): VizPanel {
   const runner = oneQuery({
@@ -197,113 +191,107 @@ export function cameraInventoryTable(): VizPanel {
     .build();
 }
 
-// Per-camera analytics panels ------------------------------------------------
+// Per-camera boundaries panels ----------------------------------------------
 
 /**
- * Entrances-over-time timeseries for a single camera, aggregated across every
- * zone by default. The `$objectType` variable threads through `q.Metrics[0]`
- * so users can flip between person and vehicle counts without re-editing the
- * panel. One frame per `(serial, zoneId)` — `DisplayNameFromDS` is already
- * baked by the backend so the legend is clean.
+ * Per-camera boundaries table — one row per configured area boundary plus
+ * one row per configured line boundary for the given serial. Uses the two
+ * dedicated `CameraBoundary{Areas,Lines}` kinds and merges the frames with
+ * a `merge` transform so the resulting table renders both kinds with a
+ * `kind` column that callers can colour on.
  */
-export function cameraEntrancesTimeseries(serial: string): VizPanel {
-  return PanelBuilders.timeseries()
-    .setTitle('Zone entrances')
-    .setDescription('Per-zone entrance counts for this camera, in the selected object-type.')
-    .setData(
-      oneQuery({
-        kind: QueryKind.CameraAnalyticsOverview,
-        serials: [serial],
-        metrics: ['$objectType'],
-        maxDataPoints: 500,
-      })
-    )
-    .setNoValue('No analytics data in the selected range.')
-    .setColor({ mode: FieldColorModeId.PaletteClassic })
-    .setCustomFieldConfig('lineWidth', 1)
-    .setCustomFieldConfig('fillOpacity', 15)
-    .setCustomFieldConfig('spanNulls', true)
-    .setCustomFieldConfig('showPoints', 'auto' as any)
-    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
-    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
-    .build();
-}
-
-/**
- * Live occupancy table — a wide snapshot of the current per-zone person /
- * vehicle counts for one camera. Column order matches the backend frame
- * shape (`serial, ts, zone_id, person, vehicle`).
- */
-export function cameraLiveOccupancyTable(serial: string): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.CameraAnalyticsLive,
+export function cameraBoundariesTable(serial: string): VizPanel {
+  const areasRunner = oneQuery({
+    refId: 'A',
+    kind: QueryKind.CameraBoundaryAreas,
     serials: [serial],
   });
+  const linesRunner = oneQuery({
+    refId: 'B',
+    kind: QueryKind.CameraBoundaryLines,
+    serials: [serial],
+  });
+  // Nest both runners so Scenes can merge their frames. We wrap one runner
+  // inside a second that references both query-refs via `$data` — Grafana's
+  // `merge` transform concatenates frames with a shared schema, which the
+  // backend guarantees here (same column set for areas + lines).
+  const merged = new SceneDataTransformer({
+    $data: new SceneQueryRunner({
+      datasource: MERAKI_DS_REF,
+      queries: [
+        ...(areasRunner.state.queries as any[]),
+        ...(linesRunner.state.queries as any[]),
+      ],
+    }),
+    transformations: [
+      { id: 'merge', options: {} },
+      {
+        id: 'organize',
+        options: {
+          excludeByName: { directionVertex_x: true, directionVertex_y: true },
+          renameByName: {},
+        },
+      },
+    ],
+  });
   return PanelBuilders.table()
-    .setTitle('Live occupancy')
-    .setDescription('Current person / vehicle counts per zone, refreshed near-live.')
-    .setData(runner)
-    .setNoValue('No live occupancy data reported by this camera.')
+    .setTitle('Boundaries')
+    .setDescription('Area and line boundaries configured on this camera. In/out detection counts appear on the Analytics tab.')
+    .setData(merged)
+    .setNoValue('No boundaries configured for this camera. Add area or line crossings in the Meraki Dashboard to populate detections.')
     .setOverrides((b) => {
-      b.matchFieldsWithName('ts').overrideCustomFieldConfig('width', 200);
-      b.matchFieldsWithName('zone_id').overrideCustomFieldConfig('width', 120);
-      b.matchFieldsWithName('person').overrideUnit('short');
-      b.matchFieldsWithName('vehicle').overrideUnit('short');
+      b.matchFieldsWithName('kind').overrideMappings([
+        {
+          type: 'value' as any,
+          options: {
+            area: { color: 'blue', index: 0, text: 'Area' },
+            line: { color: 'purple', index: 1, text: 'Line' },
+          },
+        },
+      ]);
+      b.matchFieldsWithName('kind').overrideCustomFieldConfig('cellOptions', {
+        type: 'color-background',
+      } as any);
+      b.matchFieldsWithName('kind').overrideCustomFieldConfig('width', 80);
+      b.matchFieldsWithName('name').overrideCustomFieldConfig('width', 200);
+      b.matchFieldsWithName('boundaryId').overrideCustomFieldConfig('width', 180);
     })
     .build();
 }
 
 /**
- * Per-camera zones table — one row per configured zone with its type and
- * display label. Primarily used on the Zones tab; the `$zone` variable is
- * hydrated from the same backend kind via metricFind.
+ * Detection-count timeseries scoped to one camera. The backend resolves the
+ * camera's boundaries (both areas and lines) from the serial, then calls the
+ * org-level `/camera/detections/history/byBoundary/byInterval` endpoint
+ * exactly once. Output is one frame per (boundaryId × objectType ×
+ * direction), stacked naturally by the timeseries viz when the user picks
+ * stacking.
+ *
+ * `$objectType` (person / vehicle) is threaded via `metrics[1]` so the same
+ * panel can flip between object types without re-querying the boundary list.
  */
-export function cameraZonesTable(serial: string): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.CameraAnalyticsZones,
-    serials: [serial],
-  });
-  return PanelBuilders.table()
-    .setTitle('Zones')
-    .setDescription('Analytics zones configured on this camera.')
-    .setData(runner)
-    .setNoValue('No analytics zones configured on this camera.')
-    .setOverrides((b) => {
-      b.matchFieldsWithName('zoneId').overrideCustomFieldConfig('width', 120);
-      b.matchFieldsWithName('type').overrideCustomFieldConfig('width', 140);
-    })
-    .build();
-}
-
-/**
- * Entrances-over-time timeseries for one (serial, zone) pair. The zone id
- * rides through `q.Metrics[0]` (backend contract) and object-type overrides
- * via `q.Metrics[1]`. Rendered as a single-series chart — the backend emits
- * exactly one frame per request.
- */
-export function cameraZoneHistoryTimeseries(serial: string): VizPanel {
+export function cameraDetectionsTimeseries(serial: string): VizPanel {
   return PanelBuilders.timeseries()
-    .setTitle('Zone history')
-    .setDescription('Entrance counts for the selected zone and object type.')
+    .setTitle('Boundary detections')
+    .setDescription('In/out detection counts per configured boundary for the selected object type.')
     .setData(
       oneQuery({
-        kind: QueryKind.CameraAnalyticsZoneHistory,
+        kind: QueryKind.CameraDetectionsHistory,
         serials: [serial],
-        // Backend overloads: metrics[0] = zoneId, metrics[1] = objectType. See
-        // `pkg/plugin/query/camera.go::handleCameraAnalyticsZoneHistory` for
-        // the contract.
-        metrics: ['$zone', '$objectType'],
+        // metrics[0] left blank so the backend resolves boundaries from the
+        // serial; metrics[1] selects the object type.
+        metrics: ['', '$objectType'],
         maxDataPoints: 500,
       })
     )
-    .setNoValue('No zone-history data in the selected range.')
+    .setNoValue('No detection data in the selected range. Ensure boundaries are configured for this camera.')
     .setColor({ mode: FieldColorModeId.PaletteClassic })
     .setCustomFieldConfig('lineWidth', 2)
     .setCustomFieldConfig('fillOpacity', 15)
     .setCustomFieldConfig('spanNulls', true)
     .setCustomFieldConfig('showPoints', 'auto' as any)
     .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
-    .setOption('tooltip', { mode: 'single' } as any)
+    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
     .build();
 }
 
@@ -334,11 +322,7 @@ export function cameraRetentionProfilesPanel(): VizPanel {
 
 /**
  * KPI tiles for one camera — status, model, firmware, network. Mirrors the
- * AP detail KPI row exactly: each tile is a stat panel that filters the
- * single-row Devices frame (or the availability frame) down to one column
- * via a `filterFieldsByName` transform so the stat viz picks up exactly one
- * value. Status has a background colour-mapping keyed on the availability
- * bucket.
+ * AP detail KPI row exactly.
  */
 export function cameraOverviewKpiRow(serial: string): VizPanel[] {
   const deviceRunner = oneQuery({
@@ -365,8 +349,6 @@ export function cameraOverviewKpiRow(serial: string): VizPanel[] {
       .setOption('reduceOptions', {
         values: false,
         calcs: ['lastNotNull'],
-        // String fields need the wildcard regex — `fields: ''` means numeric
-        // only, which silently hides model/firmware/networkId strings.
         fields: '/.*/',
       } as any)
       .setOption('colorMode', 'none' as any)

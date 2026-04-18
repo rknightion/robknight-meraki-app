@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/grafana/grafana-plugin-sdk-go/data"
@@ -13,20 +14,16 @@ import (
 
 // Phase 10 (MV cameras) handlers. Cache TTLs are a balance between API load
 // and dashboard freshness — onboarding state changes on human timescales so
-// 5 minutes is plenty; live snapshots are near-real-time so 30s keeps the
-// panel responsive without hammering the API during auto-refresh bursts.
+// 5 minutes is plenty; boundary configuration changes even more rarely;
+// detection counts refresh every few minutes on Meraki's side so 1m is a
+// good balance between freshness and API budget.
 const (
-	cameraOnboardingTTL           = 5 * time.Minute
-	cameraAnalyticsOverviewTTL    = 1 * time.Minute
-	cameraAnalyticsLiveTTL        = 30 * time.Second
-	cameraAnalyticsZonesTTL       = 5 * time.Minute
-	cameraAnalyticsZoneHistoryTTL = 1 * time.Minute
-	cameraRetentionTTL            = 15 * time.Minute
-
-	// cameraAnalyticsEndpoint keys the endpoint time-range spec shared between
-	// the overview + zone-history handlers. The 7-day cap comes from Meraki's
-	// v1 spec (MaxTimespan=7d) — longer windows 400 upstream.
-	cameraAnalyticsEndpoint = "devices/{serial}/camera/analytics/overview"
+	cameraOnboardingTTL      = 5 * time.Minute
+	cameraBoundariesTTL      = 15 * time.Minute
+	cameraDetectionsTTL      = 1 * time.Minute
+	cameraRetentionTTL       = 15 * time.Minute
+	cameraDetectionsPerPage  = 1000
+	cameraDetectionsMinDwell = 60 * time.Second
 )
 
 // handleCameraOnboarding emits one table-shaped frame with one row per
@@ -78,327 +75,239 @@ func handleCameraOnboarding(ctx context.Context, client *meraki.Client, q Meraki
 	}, nil
 }
 
-// cameraAnalyticsKey groups per-interval points into one timeseries per
-// (serial, zoneId) pair.
-type cameraAnalyticsKey struct {
-	serial string
-	zoneID string
+// handleCameraBoundaryAreas emits one table-shaped frame listing every
+// configured area boundary, optionally filtered to one or more serials via
+// `q.Serials`. The wrapper flattens the nested `{serial, networkId, boundaries}`
+// response into one row per (serial, boundaryId) before reaching this handler.
+func handleCameraBoundaryAreas(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("cameraBoundaryAreas: orgId is required")
+	}
+	rows, err := client.GetOrganizationCameraBoundariesAreasByDevice(ctx, q.OrgID,
+		meraki.CameraBoundariesOptions{Serials: q.Serials}, cameraBoundariesTTL)
+	if err != nil {
+		return nil, err
+	}
+	return []*data.Frame{boundariesFrame("camera_boundary_areas", rows)}, nil
 }
 
-// handleCameraAnalyticsOverview emits one frame per (serial, zoneId) pair,
-// each a timeseries of entrance counts. The overview endpoint is per-device,
-// so multiple serials trigger a fan-out of requests. objectType defaults to
-// "person" but may be overridden via q.Metrics[0] ∈ {"person","vehicle"} —
-// this is the same pattern the alerts handler uses to smuggle a scalar filter
-// through the generic MerakiQuery shape (§G.18).
-//
-// LabelMode: when opts.LabelMode == "name", DisplayNameFromDS resolves to
-// "<camera name> / zone <zoneId>" via the cached /devices feed; otherwise we
-// use the raw serial and skip the /devices fetch entirely.
-func handleCameraAnalyticsOverview(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
-	if len(q.Serials) == 0 {
-		return nil, fmt.Errorf("cameraAnalyticsOverview: at least one serial is required")
+// handleCameraBoundaryLines mirrors handleCameraBoundaryAreas against the
+// /lines/byDevice feed. Each boundary may carry a `directionVertex` that the
+// handler preserves in the `directionVertex_x / _y` columns for panels that
+// want to render crossing direction.
+func handleCameraBoundaryLines(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("cameraBoundaryLines: orgId is required")
 	}
-
-	from := toRFCTime(tr.From)
-	to := toRFCTime(tr.To)
-	if from.IsZero() || to.IsZero() {
-		return nil, fmt.Errorf("cameraAnalyticsOverview: time range is required")
-	}
-
-	spec, ok := meraki.KnownEndpointRanges[cameraAnalyticsEndpoint]
-	if !ok {
-		return nil, fmt.Errorf("cameraAnalyticsOverview: missing endpoint spec")
-	}
-	window, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
+	rows, err := client.GetOrganizationCameraBoundariesLinesByDevice(ctx, q.OrgID,
+		meraki.CameraBoundariesOptions{Serials: q.Serials}, cameraBoundariesTTL)
 	if err != nil {
-		return nil, fmt.Errorf("cameraAnalyticsOverview: resolve window: %w", err)
+		return nil, err
+	}
+	return []*data.Frame{boundariesFrame("camera_boundary_lines", rows)}, nil
+}
+
+// boundariesFrame is the shared table-shaped frame builder for both the
+// /areas and /lines endpoints. `directionVertex_x/y` are nullable — they stay
+// at nil for area boundaries where Meraki doesn't populate the field.
+func boundariesFrame(name string, rows []meraki.CameraBoundary) *data.Frame {
+	serials := make([]string, 0, len(rows))
+	networkIDs := make([]string, 0, len(rows))
+	boundaryIDs := make([]string, 0, len(rows))
+	names := make([]string, 0, len(rows))
+	types := make([]string, 0, len(rows))
+	kinds := make([]string, 0, len(rows))
+	dvX := make([]*float64, 0, len(rows))
+	dvY := make([]*float64, 0, len(rows))
+	for _, r := range rows {
+		serials = append(serials, r.Serial)
+		networkIDs = append(networkIDs, r.NetworkID)
+		boundaryIDs = append(boundaryIDs, r.BoundaryID)
+		names = append(names, r.Name)
+		types = append(types, r.Type)
+		kinds = append(kinds, r.Kind)
+		if r.DirectionVertex != nil {
+			x, y := r.DirectionVertex.X, r.DirectionVertex.Y
+			dvX = append(dvX, &x)
+			dvY = append(dvY, &y)
+		} else {
+			dvX = append(dvX, nil)
+			dvY = append(dvY, nil)
+		}
+	}
+	return data.NewFrame(name,
+		data.NewField("serial", nil, serials),
+		data.NewField("networkId", nil, networkIDs),
+		data.NewField("boundaryId", nil, boundaryIDs),
+		data.NewField("name", nil, names),
+		data.NewField("type", nil, types),
+		data.NewField("kind", nil, kinds),
+		data.NewField("directionVertex_x", nil, dvX),
+		data.NewField("directionVertex_y", nil, dvY),
+	)
+}
+
+// detectionsKey groups samples for one chart series by
+// (boundaryId, boundaryType, objectType, direction).
+type detectionsKey struct {
+	boundaryID   string
+	boundaryKind string
+	objectType   string
+	direction    string // "in" | "out"
+}
+
+// handleCameraDetectionsHistory fetches detection counts per boundary per
+// objectType and emits one timeseries frame per (boundaryId, boundaryType,
+// objectType, direction) tuple with Prometheus-style labels on the value
+// field — the standard shape for Grafana timeseries panels (§G.18).
+//
+// Input conventions:
+//   - `q.Serials[0]` (optional) narrows to one camera; when set, the handler
+//     resolves areas+lines for that serial first and passes the resulting
+//     boundary IDs to the history call.
+//   - `q.Metrics[0]` (optional) lets callers pass explicit boundary IDs as
+//     a comma-joined list, bypassing the serial→boundaries resolution.
+//   - `q.Metrics[1]` (optional) filters objectType to "person" or "vehicle";
+//     when unset, both are requested so stacked charts render in one call.
+//
+// The handler emits an info-notice empty frame when no boundary IDs are
+// resolvable — this is the common case for cameras with no boundaries
+// configured, and keeps panels from flashing an error banner.
+func handleCameraDetectionsHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
+	if q.OrgID == "" {
+		return nil, fmt.Errorf("cameraDetectionsHistory: orgId is required")
 	}
 
-	objectType := "person"
+	var boundaryIDs []string
 	if len(q.Metrics) > 0 && q.Metrics[0] != "" {
-		objectType = q.Metrics[0]
+		for _, id := range strings.Split(q.Metrics[0], ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				boundaryIDs = append(boundaryIDs, id)
+			}
+		}
+	} else if len(q.Serials) > 0 && q.Serials[0] != "" {
+		serialOpts := meraki.CameraBoundariesOptions{Serials: []string{q.Serials[0]}}
+		if areas, err := client.GetOrganizationCameraBoundariesAreasByDevice(ctx, q.OrgID, serialOpts, cameraBoundariesTTL); err == nil {
+			for _, a := range areas {
+				boundaryIDs = append(boundaryIDs, a.BoundaryID)
+			}
+		}
+		if lines, err := client.GetOrganizationCameraBoundariesLinesByDevice(ctx, q.OrgID, serialOpts, cameraBoundariesTTL); err == nil {
+			for _, l := range lines {
+				boundaryIDs = append(boundaryIDs, l.BoundaryID)
+			}
+		}
+	}
+	if len(boundaryIDs) == 0 {
+		empty := data.NewFrame("camera_detections_history",
+			data.NewField("ts", nil, []time.Time{}),
+			data.NewField("value", nil, []int64{}),
+		)
+		empty.AppendNotices(data.Notice{
+			Severity: data.NoticeSeverityInfo,
+			Text:     "No boundaries configured for the selected camera. Configure area or line crossings in the Meraki Dashboard to populate this panel.",
+		})
+		return []*data.Frame{empty}, nil
 	}
 
-	// Name lookup is gated on LabelMode so users who prefer raw serials don't
-	// pay the /devices round-trip. A failed /devices call falls back to using
-	// raw serials in the display name.
-	var nameBySerial map[string]string
-	if opts.LabelMode == "name" && q.OrgID != "" {
-		if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "camera"); lookupErr == nil {
-			nameBySerial = names
+	var objectTypes []string
+	if len(q.Metrics) > 1 && q.Metrics[1] != "" {
+		objectTypes = []string{q.Metrics[1]}
+	} else {
+		objectTypes = []string{"person", "vehicle"}
+	}
+
+	reqOpts := meraki.CameraDetectionsHistoryOptions{
+		BoundaryIDs:   boundaryIDs,
+		BoundaryTypes: objectTypes,
+		Duration:      cameraDetectionsMinDwell,
+		PerPage:       cameraDetectionsPerPage,
+	}
+	if from := toRFCTime(tr.From); !from.IsZero() {
+		if to := toRFCTime(tr.To); !to.IsZero() {
+			reqOpts.Window = &meraki.TimeRangeWindow{T0: from.UTC(), T1: to.UTC()}
 		}
 	}
 
-	serials := make([]string, len(q.Serials))
-	copy(serials, q.Serials)
-	sort.Strings(serials)
+	samples, err := client.GetOrganizationCameraDetectionsHistoryByBoundaryByInterval(ctx, q.OrgID, reqOpts, cameraDetectionsTTL)
+	if err != nil {
+		return nil, err
+	}
 
 	type seriesBuf struct {
 		ts     []time.Time
-		values []float64
+		values []int64
 	}
-	groups := make(map[cameraAnalyticsKey]*seriesBuf)
-	var firstErr error
-	for _, serial := range serials {
-		reqOpts := meraki.CameraAnalyticsOptions{
-			Window:     &window,
-			ObjectType: objectType,
+	groups := make(map[detectionsKey]*seriesBuf)
+	for _, s := range samples {
+		startTs := s.StartTime.UTC()
+		if startTs.IsZero() {
+			startTs = s.EndTime.UTC()
 		}
-		points, perr := client.GetDeviceCameraAnalyticsOverview(ctx, serial, reqOpts, cameraAnalyticsOverviewTTL)
-		if perr != nil {
-			if firstErr == nil {
-				firstErr = perr
+		for _, direction := range []string{"in", "out"} {
+			k := detectionsKey{
+				boundaryID:   s.BoundaryID,
+				boundaryKind: s.BoundaryType,
+				objectType:   s.ObjectType,
+				direction:    direction,
 			}
-			continue
-		}
-		for _, p := range points {
-			k := cameraAnalyticsKey{serial: serial, zoneID: p.ZoneID}
-			buf, exists := groups[k]
-			if !exists {
+			buf, ok := groups[k]
+			if !ok {
 				buf = &seriesBuf{}
 				groups[k] = buf
 			}
-			buf.ts = append(buf.ts, p.StartTs.UTC())
-			buf.values = append(buf.values, float64(p.Entrances))
+			buf.ts = append(buf.ts, startTs)
+			if direction == "in" {
+				buf.values = append(buf.values, s.In)
+			} else {
+				buf.values = append(buf.values, s.Out)
+			}
 		}
 	}
 
 	if len(groups) == 0 {
-		empty := data.NewFrame("camera_analytics_overview",
+		empty := data.NewFrame("camera_detections_history",
 			data.NewField("ts", nil, []time.Time{}),
-			data.NewField("value", nil, []float64{}),
+			data.NewField("value", nil, []int64{}),
 		)
-		if firstErr != nil {
-			return []*data.Frame{empty}, firstErr
-		}
 		return []*data.Frame{empty}, nil
 	}
 
-	keys := make([]cameraAnalyticsKey, 0, len(groups))
+	keys := make([]detectionsKey, 0, len(groups))
 	for k := range groups {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].serial != keys[j].serial {
-			return keys[i].serial < keys[j].serial
+		if keys[i].boundaryID != keys[j].boundaryID {
+			return keys[i].boundaryID < keys[j].boundaryID
 		}
-		return keys[i].zoneID < keys[j].zoneID
+		if keys[i].objectType != keys[j].objectType {
+			return keys[i].objectType < keys[j].objectType
+		}
+		return keys[i].direction < keys[j].direction
 	})
 
 	frames := make([]*data.Frame, 0, len(keys))
 	for _, k := range keys {
 		buf := groups[k]
-		sortByTime(buf.ts, buf.values)
+		sortByTimeInt64(buf.ts, buf.values)
 
 		labels := data.Labels{
-			"serial":      k.serial,
-			"zone_id":     k.zoneID,
-			"object_type": objectType,
+			"boundary_id":   k.boundaryID,
+			"boundary_type": k.boundaryKind,
+			"object_type":   k.objectType,
+			"direction":     k.direction,
 		}
-		displayName := k.serial
-		if nameBySerial != nil {
-			if name := nameBySerial[k.serial]; name != "" {
-				displayName = name
-			}
-		}
-		displayName = fmt.Sprintf("%s / zone %s", displayName, k.zoneID)
-
+		display := fmt.Sprintf("%s / %s / %s", k.boundaryID, k.objectType, k.direction)
 		valueField := data.NewField("value", labels, buf.values)
-		valueField.Config = &data.FieldConfig{
-			DisplayNameFromDS: displayName,
-		}
-		frames = append(frames, data.NewFrame("camera_analytics_overview",
+		valueField.Config = &data.FieldConfig{DisplayNameFromDS: display}
+		frames = append(frames, data.NewFrame("camera_detections_history",
 			data.NewField("ts", nil, buf.ts),
 			valueField,
 		))
 	}
-	return frames, firstErr
-}
-
-// handleCameraAnalyticsLive emits one wide frame with rows per
-// (serial, zoneId). Columns: serial, ts, zone_id, person, vehicle. The
-// endpoint is a per-device snapshot so multiple serials trigger fan-out.
-func handleCameraAnalyticsLive(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
-	if len(q.Serials) == 0 {
-		return nil, fmt.Errorf("cameraAnalyticsLive: at least one serial is required")
-	}
-
-	serials := make([]string, len(q.Serials))
-	copy(serials, q.Serials)
-	sort.Strings(serials)
-
-	var (
-		serialCol []string
-		tsCol     []time.Time
-		zoneCol   []string
-		personCol []int64
-		vehCol    []int64
-		firstErr  error
-	)
-	for _, serial := range serials {
-		snap, err := client.GetDeviceCameraAnalyticsLive(ctx, serial, cameraAnalyticsLiveTTL)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		if snap == nil {
-			continue
-		}
-		// Sort zone ids so frame rows are deterministic across refreshes.
-		zoneIDs := make([]string, 0, len(snap.Zones))
-		for zoneID := range snap.Zones {
-			zoneIDs = append(zoneIDs, zoneID)
-		}
-		sort.Strings(zoneIDs)
-		for _, zoneID := range zoneIDs {
-			z := snap.Zones[zoneID]
-			serialCol = append(serialCol, serial)
-			tsCol = append(tsCol, snap.Ts.UTC())
-			zoneCol = append(zoneCol, zoneID)
-			personCol = append(personCol, z.Person)
-			vehCol = append(vehCol, z.Vehicle)
-		}
-	}
-
-	return []*data.Frame{
-		data.NewFrame("camera_analytics_live",
-			data.NewField("serial", nil, serialCol),
-			data.NewField("ts", nil, tsCol),
-			data.NewField("zone_id", nil, zoneCol),
-			data.NewField("person", nil, personCol),
-			data.NewField("vehicle", nil, vehCol),
-		),
-	}, firstErr
-}
-
-// handleCameraAnalyticsZones emits one flat table frame with one row per
-// (serial, zoneId). Used to populate the zone-picker variable and surface
-// label/type metadata on zone drill-downs.
-func handleCameraAnalyticsZones(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
-	if len(q.Serials) == 0 {
-		return nil, fmt.Errorf("cameraAnalyticsZones: at least one serial is required")
-	}
-
-	serials := make([]string, len(q.Serials))
-	copy(serials, q.Serials)
-	sort.Strings(serials)
-
-	var (
-		serialCol []string
-		zoneIDCol []string
-		typeCol   []string
-		labelCol  []string
-		firstErr  error
-	)
-	for _, serial := range serials {
-		zones, err := client.GetDeviceCameraAnalyticsZones(ctx, serial, cameraAnalyticsZonesTTL)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		for _, z := range zones {
-			serialCol = append(serialCol, serial)
-			zoneIDCol = append(zoneIDCol, z.ZoneID)
-			typeCol = append(typeCol, z.Type)
-			labelCol = append(labelCol, z.Label)
-		}
-	}
-
-	return []*data.Frame{
-		data.NewFrame("camera_zones",
-			data.NewField("serial", nil, serialCol),
-			data.NewField("zoneId", nil, zoneIDCol),
-			data.NewField("type", nil, typeCol),
-			data.NewField("label", nil, labelCol),
-		),
-	}, firstErr
-}
-
-// handleCameraAnalyticsZoneHistory emits a single timeseries frame for one
-// (serial, zoneId). The zoneId is smuggled via q.Metrics[0] (same pattern
-// as switchPortPacketCounters); objectType defaults to "person" but may
-// be overridden via q.Metrics[1].
-func handleCameraAnalyticsZoneHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
-	if len(q.Serials) == 0 || q.Serials[0] == "" {
-		return nil, fmt.Errorf("cameraAnalyticsZoneHistory: serial is required (serials[0])")
-	}
-	if len(q.Metrics) == 0 || q.Metrics[0] == "" {
-		return nil, fmt.Errorf("cameraAnalyticsZoneHistory: zoneId is required (metrics[0])")
-	}
-	serial := q.Serials[0]
-	zoneID := q.Metrics[0]
-
-	from := toRFCTime(tr.From)
-	to := toRFCTime(tr.To)
-	if from.IsZero() || to.IsZero() {
-		return nil, fmt.Errorf("cameraAnalyticsZoneHistory: time range is required")
-	}
-
-	spec, ok := meraki.KnownEndpointRanges[cameraAnalyticsEndpoint]
-	if !ok {
-		return nil, fmt.Errorf("cameraAnalyticsZoneHistory: missing endpoint spec")
-	}
-	window, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
-	if err != nil {
-		return nil, fmt.Errorf("cameraAnalyticsZoneHistory: resolve window: %w", err)
-	}
-
-	objectType := "person"
-	if len(q.Metrics) > 1 && q.Metrics[1] != "" {
-		objectType = q.Metrics[1]
-	}
-
-	reqOpts := meraki.CameraAnalyticsOptions{
-		Window:     &window,
-		ObjectType: objectType,
-	}
-	points, err := client.GetDeviceCameraAnalyticsZoneHistory(ctx, serial, zoneID, reqOpts, cameraAnalyticsZoneHistoryTTL)
-	if err != nil {
-		return nil, err
-	}
-
-	ts := make([]time.Time, 0, len(points))
-	values := make([]float64, 0, len(points))
-	for _, p := range points {
-		ts = append(ts, p.StartTs.UTC())
-		values = append(values, float64(p.Entrances))
-	}
-	sortByTime(ts, values)
-
-	// Optional name lookup for the legend, gated on LabelMode so users who
-	// prefer raw serials don't pay the /devices round-trip. Failure is
-	// non-fatal — we fall back to the raw serial.
-	displayName := serial
-	if opts.LabelMode == "name" && q.OrgID != "" {
-		if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "camera"); lookupErr == nil {
-			if name := names[serial]; name != "" {
-				displayName = name
-			}
-		}
-	}
-	displayName = fmt.Sprintf("%s / zone %s", displayName, zoneID)
-
-	labels := data.Labels{
-		"serial":      serial,
-		"zone_id":     zoneID,
-		"object_type": objectType,
-	}
-	valueField := data.NewField("value", labels, values)
-	valueField.Config = &data.FieldConfig{
-		DisplayNameFromDS: displayName,
-	}
-
-	return []*data.Frame{
-		data.NewFrame("camera_zone_history",
-			data.NewField("ts", nil, ts),
-			valueField,
-		),
-	}, nil
+	return frames, nil
 }
 
 // handleCameraRetentionProfiles emits one table-shaped frame with one row per

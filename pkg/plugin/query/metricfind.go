@@ -68,34 +68,36 @@ func runMetricFind(ctx context.Context, client *meraki.Client, q MerakiQuery) (*
 		}
 		return &MetricFindResponse{Values: values}, nil
 
-	case KindCameraAnalyticsZones:
-		// Zone enumeration is per-camera (the /zones endpoint is device-scoped),
-		// so the caller must supply a serial. We return one {text, value} per
-		// configured zone where the text is "<type>: <label>" — the Meraki
-		// zone object carries both — and the value is the raw zone id used in
-		// subsequent /zones/{zoneId}/history calls.
-		if len(q.Serials) == 0 || q.Serials[0] == "" {
-			return nil, fmt.Errorf("metricFind cameraAnalyticsZones: serial is required")
+	case KindCameraBoundaryAreas, KindCameraBoundaryLines:
+		// Boundary enumeration is per-org with an optional serial filter. We
+		// return one {text, value} per configured boundary where the text is
+		// "<name> (<kind>)" (falling back to the raw boundaryId when name is
+		// blank) and the value is the raw boundaryId used in subsequent
+		// /detections/history calls.
+		if q.OrgID == "" {
+			return nil, fmt.Errorf("metricFind camera boundaries: orgId is required")
 		}
-		zones, err := client.GetDeviceCameraAnalyticsZones(ctx, q.Serials[0], cameraAnalyticsZonesTTL)
+		boundariesOpts := meraki.CameraBoundariesOptions{Serials: q.Serials}
+		var boundaries []meraki.CameraBoundary
+		var err error
+		if q.Kind == KindCameraBoundaryAreas {
+			boundaries, err = client.GetOrganizationCameraBoundariesAreasByDevice(ctx, q.OrgID, boundariesOpts, cameraBoundariesTTL)
+		} else {
+			boundaries, err = client.GetOrganizationCameraBoundariesLinesByDevice(ctx, q.OrgID, boundariesOpts, cameraBoundariesTTL)
+		}
 		if err != nil {
 			return nil, err
 		}
-		values := make([]MetricFindValue, 0, len(zones))
-		for _, z := range zones {
-			// Compose a human-friendly label. When either `type` or `label`
-			// is blank we still want a non-empty text entry so the variable
-			// picker isn't a list of colons — fall back to the zoneId.
-			text := z.Type
-			if text != "" && z.Label != "" {
-				text = text + ": " + z.Label
-			} else if text == "" {
-				text = z.Label
-			}
+		values := make([]MetricFindValue, 0, len(boundaries))
+		for _, b := range boundaries {
+			text := b.Name
 			if text == "" {
-				text = z.ZoneID
+				text = b.BoundaryID
 			}
-			values = append(values, MetricFindValue{Text: text, Value: z.ZoneID})
+			if b.Kind != "" {
+				text = text + " (" + b.Kind + ")"
+			}
+			values = append(values, MetricFindValue{Text: text, Value: b.BoundaryID})
 		}
 		return &MetricFindResponse{Values: values}, nil
 

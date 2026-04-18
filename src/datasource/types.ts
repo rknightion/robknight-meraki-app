@@ -58,12 +58,12 @@ export enum QueryKind {
   TopSwitchesByEnergy = 'topSwitchesByEnergy',
   TopNetworksByStatus = 'topNetworksByStatus',
 
-  /* Camera (MV) — phase 10. */
+  /* Camera (MV) — phase 10. The legacy `analytics/*` endpoints were
+   * deprecated by Meraki in March 2024; the boundaries model replaces them. */
   CameraOnboarding = 'cameraOnboarding',
-  CameraAnalyticsOverview = 'cameraAnalyticsOverview',
-  CameraAnalyticsLive = 'cameraAnalyticsLive',
-  CameraAnalyticsZones = 'cameraAnalyticsZones',
-  CameraAnalyticsZoneHistory = 'cameraAnalyticsZoneHistory',
+  CameraBoundaryAreas = 'cameraBoundaryAreas',
+  CameraBoundaryLines = 'cameraBoundaryLines',
+  CameraDetectionsHistory = 'cameraDetectionsHistory',
   CameraRetentionProfiles = 'cameraRetentionProfiles',
 
   /* Cellular Gateway (MG) — phase 10. */

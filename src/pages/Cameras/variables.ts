@@ -6,21 +6,17 @@ import { QueryKind } from '../../datasource/types';
 
 /**
  * `$camera` — single-select MV camera picker hydrated from the Meraki Devices
- * metricFind handler filtered to `productTypes=['camera']`. Backed by the
- * shared {@link deviceVariable} factory so the cascade semantics match the
- * MR/MS/MX/MG pickers: cascades from `$org`, single-select (per-device
- * endpoints accept one serial), default to the "All" sentinel.
+ * metricFind handler filtered to `productTypes=['camera']`.
  */
 export function cameraVariable(): QueryVariable {
   return deviceVariable({ name: 'camera', label: 'Camera', productType: 'camera' });
 }
 
 /**
- * `$objectType` — static object-type filter for camera analytics queries.
- * The Meraki MV analytics endpoints accept `person` or `vehicle` and return
- * per-object-type entrance counts. We keep the vocabulary local (no API
- * roundtrip) because the set is hard-coded upstream; the default of `person`
- * matches the Meraki API's default and is the more common use case.
+ * `$objectType` — static object-type filter for camera detections queries.
+ * The Meraki MV detections endpoints accept `person` or `vehicle` and return
+ * per-object-type in/out counts. Defaults to `person` to match Meraki's
+ * server-side default.
  */
 export function cameraObjectTypeVariable(): CustomVariable {
   return new CustomVariable({
@@ -35,26 +31,27 @@ export function cameraObjectTypeVariable(): CustomVariable {
 }
 
 /**
- * `$zone` — per-camera zone picker hydrated from the `CameraAnalyticsZones`
- * metricFind kind. Depends on `$camera`: when the user changes camera, the
- * zone list re-hydrates because `serials: ['$camera']` carries through the
- * variable query. Single-select with an `All : ''` sentinel so panels can
- * fall back to an unfiltered view.
+ * `$boundary` — per-camera boundary picker hydrated from the
+ * `CameraBoundaryAreas` metricFind kind. Depends on `$camera` (or an explicit
+ * `serial` parameter passed by the detail page), so the boundary list
+ * re-hydrates when the camera changes.
  *
- * The backend emits `{text: "<type>: <label>", value: "<zoneId>"}` tuples —
- * see `pkg/plugin/query/metricfind.go::runMetricFind` under the
- * `KindCameraAnalyticsZones` branch.
+ * The backend emits `{text: "<name> (<kind>)", value: "<boundaryId>"}` tuples
+ * — see `pkg/plugin/query/metricfind.go::runMetricFind` under the
+ * `KindCameraBoundaryAreas` / `KindCameraBoundaryLines` branches. We bind
+ * only to area boundaries here for simplicity; panels that need line
+ * boundaries can pass an explicit boundaryId through `metrics[0]`.
  */
-export function cameraZoneVariable(): QueryVariable {
+export function cameraBoundaryVariable(serial?: string): QueryVariable {
   return new QueryVariable({
-    name: 'zone',
-    label: 'Zone',
+    name: 'boundary',
+    label: 'Boundary',
     datasource: MERAKI_DS_REF,
     query: {
-      kind: QueryKind.CameraAnalyticsZones,
-      refId: 'zones',
+      kind: QueryKind.CameraBoundaryAreas,
+      refId: 'boundaries',
       orgId: '$org',
-      serials: ['$camera'],
+      serials: serial ? [serial] : ['$camera'],
     },
     includeAll: true,
     defaultToAll: true,

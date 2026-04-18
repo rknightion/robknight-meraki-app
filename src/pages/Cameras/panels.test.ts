@@ -1,14 +1,12 @@
 import { SceneQueryRunner, VizPanel } from '@grafana/scenes';
 import {
-  cameraEntrancesTimeseries,
+  cameraBoundariesTable,
+  cameraDetectionsTimeseries,
   cameraInventoryTable,
-  cameraLiveOccupancyTable,
   cameraOnboardingTable,
   cameraOverviewKpiRow,
   cameraRetentionProfilesPanel,
   cameraStatusKpiRow,
-  cameraZoneHistoryTimeseries,
-  cameraZonesTable,
 } from './panels';
 import { QueryKind } from '../../datasource/types';
 
@@ -23,17 +21,24 @@ type AnyQuery = {
 };
 
 function firstQuery(panel: VizPanel): AnyQuery {
-  // setData may produce either a raw runner or a transformer wrapping one;
-  // normalise via the $data chain.
   const data = panel.state.$data as { state: { $data?: unknown; queries?: unknown } } | undefined;
   if (!data) {
     throw new Error('panel has no $data');
   }
-  // If it's a transformer, unwrap to the runner.
   const inner = (data as any).state.$data ?? data;
   const runner = inner as SceneQueryRunner;
   const queries = runner.state.queries as AnyQuery[];
   return queries[0];
+}
+
+function allQueries(panel: VizPanel): AnyQuery[] {
+  const data = panel.state.$data as { state: { $data?: unknown; queries?: unknown } } | undefined;
+  if (!data) {
+    throw new Error('panel has no $data');
+  }
+  const inner = (data as any).state.$data ?? data;
+  const runner = inner as SceneQueryRunner;
+  return runner.state.queries as AnyQuery[];
 }
 
 describe('Cameras panels', () => {
@@ -63,35 +68,24 @@ describe('Cameras panels', () => {
     expect(q.productTypes).toEqual(['camera']);
   });
 
-  it('cameraEntrancesTimeseries threads the $objectType variable via metrics[0]', () => {
-    const panel = cameraEntrancesTimeseries('Q2MV-AAAA-BBBB');
+  it('cameraDetectionsTimeseries threads the $objectType variable via metrics[1]', () => {
+    const panel = cameraDetectionsTimeseries('Q2MV-AAAA-BBBB');
     expect(panel.state.pluginId).toBe('timeseries');
     const q = firstQuery(panel);
-    expect(q.kind).toBe(QueryKind.CameraAnalyticsOverview);
+    expect(q.kind).toBe(QueryKind.CameraDetectionsHistory);
     expect(q.serials).toEqual(['Q2MV-AAAA-BBBB']);
-    expect(q.metrics).toEqual(['$objectType']);
+    expect(q.metrics).toEqual(['', '$objectType']);
   });
 
-  it('cameraLiveOccupancyTable queries the live analytics kind for one serial', () => {
-    const panel = cameraLiveOccupancyTable('Q2MV-AAAA-BBBB');
-    const q = firstQuery(panel);
-    expect(q.kind).toBe(QueryKind.CameraAnalyticsLive);
-    expect(q.serials).toEqual(['Q2MV-AAAA-BBBB']);
-  });
-
-  it('cameraZonesTable queries the zones kind for one serial', () => {
-    const panel = cameraZonesTable('Q2MV-AAAA-BBBB');
-    const q = firstQuery(panel);
-    expect(q.kind).toBe(QueryKind.CameraAnalyticsZones);
-    expect(q.serials).toEqual(['Q2MV-AAAA-BBBB']);
-  });
-
-  it('cameraZoneHistoryTimeseries uses metrics[0]=$zone, metrics[1]=$objectType', () => {
-    const panel = cameraZoneHistoryTimeseries('Q2MV-AAAA-BBBB');
-    const q = firstQuery(panel);
-    expect(q.kind).toBe(QueryKind.CameraAnalyticsZoneHistory);
-    expect(q.serials).toEqual(['Q2MV-AAAA-BBBB']);
-    expect(q.metrics).toEqual(['$zone', '$objectType']);
+  it('cameraBoundariesTable runs both area + line queries so the merged frame carries both kinds', () => {
+    const panel = cameraBoundariesTable('Q2MV-AAAA-BBBB');
+    const queries = allQueries(panel);
+    expect(queries).toHaveLength(2);
+    const kinds = queries.map((q) => q.kind).sort();
+    expect(kinds).toEqual([QueryKind.CameraBoundaryAreas, QueryKind.CameraBoundaryLines].sort());
+    queries.forEach((q) => {
+      expect(q.serials).toEqual(['Q2MV-AAAA-BBBB']);
+    });
   });
 
   it('cameraRetentionProfilesPanel binds to the $network variable', () => {
