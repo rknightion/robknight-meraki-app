@@ -2,8 +2,8 @@
 
 TypeScript + React + `@grafana/scenes`. Two plugins live here:
 
-- **App plugin** (`module.tsx`, `plugin.json` id `rknightion-meraki-app`) — the top-level entry. Mounts a `SceneApp` with the Home/Organizations/AccessPoints/Switches/Sensors/Alerts/Configuration pages.
-- **Nested data source** (`datasource/` id `rknightion-meraki-datasource`) — frontend-only. Proxies every `query()` and `metricFindQuery()` to the app's resource endpoints via `getBackendSrv().fetch`.
+- **App plugin** (`module.tsx`, `plugin.json` id `robknight-meraki-app`) — the top-level entry. Mounts a `SceneApp` with the Home/Organizations/AccessPoints/Switches/Sensors/Alerts/Configuration pages.
+- **Nested data source** (`datasource/` id `robknight-meraki-datasource`) — frontend-only. Proxies every `query()` and `metricFindQuery()` to the app's resource endpoints via `getBackendSrv().fetch`.
 
 ## Layout
 

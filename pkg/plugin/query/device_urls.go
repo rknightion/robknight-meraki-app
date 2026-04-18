@@ -29,7 +29,7 @@ func productTypeRoute(productType string) string {
 // deviceDrilldownURL composes the full `/a/<plugin>/<family-route>/<serial>`
 // URL for a device of the given productType. prefix is the full plugin base
 // path (threaded through Options.PluginPathPrefix by the dispatcher) — e.g.
-// `/a/rknightion-meraki-app`. Returns "" when prefix is empty so handlers can
+// `/a/robknight-meraki-app`. Returns "" when prefix is empty so handlers can
 // safely elide the column when the dispatcher hasn't set it.
 func deviceDrilldownURL(prefix, productType, serial string) string {
 	if prefix == "" || serial == "" {

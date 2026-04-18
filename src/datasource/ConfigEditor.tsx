@@ -3,7 +3,7 @@ import { DataSourcePluginOptionsEditorProps } from '@grafana/data';
 import { Alert, LinkButton } from '@grafana/ui';
 import { MerakiDSOptions } from './types';
 
-const APP_PLUGIN_ID = 'rknightion-meraki-app';
+const APP_PLUGIN_ID = 'robknight-meraki-app';
 
 export type ConfigEditorProps = DataSourcePluginOptionsEditorProps<MerakiDSOptions>;
 

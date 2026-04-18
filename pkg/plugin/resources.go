@@ -9,9 +9,8 @@ import (
 
 // pluginID is the app plugin's manifest id. Duplicated from plugin.json / main.go
 // because backend code doesn't have easy access to the manifest at request
-// time. Update here when the signed-release rename to `robknight-meraki-app`
-// happens (todos.txt Q.7).
-const pluginID = "rknightion-meraki-app"
+// time. Keep in sync with the id field in src/plugin.json.
+const pluginID = "robknight-meraki-app"
 
 // pluginPathPrefix is the full Grafana route prefix for this plugin's app
 // shell. Threaded into `query.Options.PluginPathPrefix` so handlers that emit

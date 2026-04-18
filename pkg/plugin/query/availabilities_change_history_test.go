@@ -64,7 +64,7 @@ func TestHandle_DeviceAvailabilitiesChangeHistory_EmitsTableFrame(t *testing.T) 
 	frames, err := handleDeviceAvailabilitiesChangeHistory(context.Background(), client, q, TimeRange{
 		From: ts.Add(-time.Hour).UnixMilli(),
 		To:   ts.Add(time.Hour).UnixMilli(),
-	}, Options{PluginPathPrefix: "/a/rknightion-meraki-app"})
+	}, Options{PluginPathPrefix: "/a/robknight-meraki-app"})
 	if err != nil {
 		t.Fatalf("handler returned %v", err)
 	}

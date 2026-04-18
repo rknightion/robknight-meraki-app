@@ -11,8 +11,8 @@ package meraki
 // forward slash is the reserved version separator; the space is the
 // application/vendor separator. Application and vendor names must omit
 // spaces, hyphens, and special characters, which is why we use
-// "GrafanaMerakiPlugin" (not "Grafana-Meraki-Plugin") and "rknightion"
-// (not "rknightion-meraki").
+// "GrafanaMerakiPlugin" (not "Grafana-Meraki-Plugin") and "robknight"
+// (not "robknight-meraki").
 const ClientVersion = "0.4.0"
 
 // UserAgentApplication is the ApplicationName half of the User-Agent pair.
@@ -22,12 +22,12 @@ const ClientVersion = "0.4.0"
 const UserAgentApplication = "GrafanaMerakiPlugin"
 
 // UserAgentVendor is the VendorName half of the User-Agent pair. Matches the
-// current plugin-ID namespace; flip to "robknight" when the Q.7 rename lands.
-const UserAgentVendor = "rknightion"
+// Grafana org namespace (robknight-*) used by the signed plugin IDs.
+const UserAgentVendor = "robknight"
 
 // BuildUserAgent assembles the spec-compliant User-Agent string:
 //
-//	"GrafanaMerakiPlugin/<ClientVersion> rknightion"
+//	"GrafanaMerakiPlugin/<ClientVersion> robknight"
 //
 // Callers should prefer this helper over string-concatenating the constants
 // inline, so any future format tweak (vendor rename, sub-component tag) lands

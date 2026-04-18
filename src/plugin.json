@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/grafana/grafana/main/docs/sources/developers/plugins/plugin.schema.json",
   "type": "app",
   "name": "Cisco Meraki",
-  "id": "rknightion-meraki-app",
+  "id": "robknight-meraki-app",
   "backend": true,
   "executable": "gpx_meraki",
   "info": {
@@ -115,7 +115,7 @@
     "plugins": [
       {
         "type": "datasource",
-        "id": "rknightion-meraki-datasource",
+        "id": "robknight-meraki-datasource",
         "name": "Cisco Meraki"
       }
     ]

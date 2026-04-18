@@ -44,7 +44,7 @@ multi-panel dashboards and multi-replica Grafana.
   unchanged, so persisted settings load without migration. TypeScript type
   renamed `SensorLabelMode` → `DeviceLabelMode`.
 - **User-Agent** bumped from `Grafana-Meraki-App` (non-compliant — hyphens)
-  to `GrafanaMerakiPlugin/<version> rknightion`, matching Meraki's
+  to `GrafanaMerakiPlugin/<version> robknight`, matching Meraki's
   [User-Agent specification](https://developer.cisco.com/meraki/api-v1/user-agents-overview/).
   Traffic from this plugin now attributes correctly in the Meraki API
   Analytics dashboard. Version lives in a new `pkg/meraki/version.go` —
@@ -226,8 +226,7 @@ First public preview. Everything is new.
 
 ### Added
 
-- **Plugin IDs:** `rknightion-meraki-app` (app) and `rknightion-meraki-datasource` (nested DS).
-  The IDs will migrate to `robknight-*` at first signed release under the Grafana staff org.
+- **Plugin IDs:** `robknight-meraki-app` (app) and `robknight-meraki-datasource` (nested DS).
 - **App plugin shell** (`@grafana/scenes`) with three pages:
   - *Home* — organization count, device status overview, org listing.
   - *Organizations* — full inventory table.
@@ -243,7 +242,7 @@ First public preview. Everything is new.
   `startingAfter` pagination, per-endpoint time-range clamping + resolution quantization, and
   endpoint wrappers for organizations, networks, devices, device status overview, and sensor
   readings (latest + history).
-- **Nested data source** (`rknightion-meraki-datasource`) — frontend-only, proxies all queries
+- **Nested data source** (`robknight-meraki-datasource`) — frontend-only, proxies all queries
   and variable hydration through the app plugin's resource endpoints so the API key never
   reaches the browser. Auto-provisioned via `provisioning/datasources/meraki.yaml`.
 - **Query dispatcher** in `pkg/plugin/query` with handlers for `organizations`, `networks`,

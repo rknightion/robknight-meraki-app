@@ -7,7 +7,7 @@ App plugin with a nested data source that turns Cisco Meraki Dashboard API respo
 ## Architecture at a glance
 
 ```
-App plugin (rknightion-meraki-app)            Nested DS (rknightion-meraki-datasource)
+App plugin (robknight-meraki-app)             Nested DS (robknight-meraki-datasource)
   ├─ Go backend (gpx_meraki)                    ├─ Frontend only — NO backend binary
   ├─ Owns meraki.Client (rate limiter + cache)  ├─ DataSourceApi.query() posts to app's
   ├─ API key in secureJsonData.merakiApiKey     │   /resources/{query,metricFind}
@@ -38,7 +38,7 @@ go vet ./pkg/...
 
 ## Locked-in decisions (do not revisit without strong reason)
 
-- **Plugin IDs:** `rknightion-meraki-app` + `rknightion-meraki-datasource`. Renaming to `robknight-*` is planned at signed-release time — must be a single atomic commit (two constants in `src/scene-helpers/datasource.ts`, UIDs in `provisioning/`, plugin.json, docker-compose, supervisord).
+- **Plugin IDs:** `robknight-meraki-app` + `robknight-meraki-datasource`. Renamed from the original `rknightion-*` namespace at the signed-release pass (todos.txt Q.7 — shipped).
 - **Go module:** `github.com/robknight/grafana-meraki-plugin`. Independent from plugin ID; can stay as-is after a plugin rename.
 - **No Prometheus dependency, no exporter scraping.** `/Users/rob/repos/meraki-dashboard-exporter` is **read-only reference** for endpoint shapes and panel layouts only.
 - **Scenes everywhere.** Every page lives under `src/pages/<Area>/`. DO NOT add JSON dashboards under `provisioning/dashboards/`.
@@ -64,7 +64,7 @@ Sub-directory CLAUDE.md files exist for the most common edit surfaces — `src/`
 - `.config/` is scaffold-managed. `npx @grafana/create-plugin@latest update` may revert three files with local edits: `bundler/copyFiles.ts`, `docker-compose-base.yaml`, `supervisord/supervisord.conf`. Re-check after any scaffold upgrade (todos.txt §G.14).
 - **Config save MUST use `window.location.reload()`** — `locationService.reload()` leaves `plugin.meta` stale and does not re-instantiate the backend with the new secrets (todos.txt §G.15).
 - The nested DS has **no backend**. DO NOT set `"backend": true` in `src/datasource/plugin.json`.
-- `MERAKI_DS_UID` (`rknightion-meraki-ds`) is duplicated in `provisioning/datasources/meraki.yaml` and `src/scene-helpers/datasource.ts` — keep aligned.
+- `MERAKI_DS_UID` (`robknight-meraki-ds`) is duplicated in `provisioning/datasources/meraki.yaml` and `src/scene-helpers/datasource.ts` — keep aligned.
 - `plugin.json` changes require a **Grafana server restart** before they take effect.
 
 ## Reference docs

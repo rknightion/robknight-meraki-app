@@ -7,7 +7,7 @@ import "testing"
 // unknown product types falling back to sensor). Keeping the mapping pinned
 // here guards against silent renames when `ROUTES` changes on the frontend.
 func TestDeviceDrilldownURL(t *testing.T) {
-	const prefix = "/a/rknightion-meraki-app"
+	const prefix = "/a/robknight-meraki-app"
 
 	cases := []struct {
 		name        string
@@ -21,56 +21,56 @@ func TestDeviceDrilldownURL(t *testing.T) {
 			prefix:      prefix,
 			productType: "wireless",
 			serial:      "Q2AA-AAAA-AAAA",
-			want:        "/a/rknightion-meraki-app/access-points/Q2AA-AAAA-AAAA",
+			want:        "/a/robknight-meraki-app/access-points/Q2AA-AAAA-AAAA",
 		},
 		{
 			name:        "switch maps to switches",
 			prefix:      prefix,
 			productType: "switch",
 			serial:      "SW-1",
-			want:        "/a/rknightion-meraki-app/switches/SW-1",
+			want:        "/a/robknight-meraki-app/switches/SW-1",
 		},
 		{
 			name:        "appliance maps to appliances",
 			prefix:      prefix,
 			productType: "appliance",
 			serial:      "MX-1",
-			want:        "/a/rknightion-meraki-app/appliances/MX-1",
+			want:        "/a/robknight-meraki-app/appliances/MX-1",
 		},
 		{
 			name:        "camera maps to cameras",
 			prefix:      prefix,
 			productType: "camera",
 			serial:      "Q2MV-AAAA-AAAA",
-			want:        "/a/rknightion-meraki-app/cameras/Q2MV-AAAA-AAAA",
+			want:        "/a/robknight-meraki-app/cameras/Q2MV-AAAA-AAAA",
 		},
 		{
 			name:        "cellularGateway maps to cellular-gateways",
 			prefix:      prefix,
 			productType: "cellularGateway",
 			serial:      "Q2MG-AAAA-AAAA",
-			want:        "/a/rknightion-meraki-app/cellular-gateways/Q2MG-AAAA-AAAA",
+			want:        "/a/robknight-meraki-app/cellular-gateways/Q2MG-AAAA-AAAA",
 		},
 		{
 			name:        "sensor maps to sensors",
 			prefix:      prefix,
 			productType: "sensor",
 			serial:      "Q2MT-AAAA-AAAA",
-			want:        "/a/rknightion-meraki-app/sensors/Q2MT-AAAA-AAAA",
+			want:        "/a/robknight-meraki-app/sensors/Q2MT-AAAA-AAAA",
 		},
 		{
 			name:        "unknown productType falls back to sensor route",
 			prefix:      prefix,
 			productType: "wirelessController",
 			serial:      "S1",
-			want:        "/a/rknightion-meraki-app/sensors/S1",
+			want:        "/a/robknight-meraki-app/sensors/S1",
 		},
 		{
 			name:        "empty productType falls back to sensor route",
 			prefix:      prefix,
 			productType: "",
 			serial:      "S1",
-			want:        "/a/rknightion-meraki-app/sensors/S1",
+			want:        "/a/robknight-meraki-app/sensors/S1",
 		},
 		{
 			name:        "empty prefix short-circuits to empty string",
@@ -91,7 +91,7 @@ func TestDeviceDrilldownURL(t *testing.T) {
 			prefix:      prefix,
 			productType: "sensor",
 			serial:      "a/b c",
-			want:        "/a/rknightion-meraki-app/sensors/a%2Fb%20c",
+			want:        "/a/robknight-meraki-app/sensors/a%2Fb%20c",
 		},
 	}
 

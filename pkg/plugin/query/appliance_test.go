@@ -63,7 +63,7 @@ func TestHandle_ApplianceUplinkStatuses_FlattensInterfaces(t *testing.T) {
 
 	resp, err := Handle(context.Background(), client, &QueryRequest{
 		Queries: []MerakiQuery{{RefID: "A", Kind: KindApplianceUplinkStatuses, OrgID: "o1"}},
-	}, Options{PluginPathPrefix: "/a/rknightion-meraki-app"})
+	}, Options{PluginPathPrefix: "/a/robknight-meraki-app"})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}

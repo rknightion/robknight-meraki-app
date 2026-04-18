@@ -120,7 +120,7 @@ HOW TO READ THIS FILE
     alertsOverviewHistorical (apianalysis.txt audit, §A below).
 
 • Cache + client stack hardening (v0.4.0, §7 completion):
-    - User-Agent:  "GrafanaMerakiPlugin/<version> rknightion" (spec-compliant).
+    - User-Agent:  "GrafanaMerakiPlugin/<version> robknight" (spec-compliant).
     - Singleflight: N concurrent Get/GetAll calls for the same cache key
       collapse to 1 HTTP round-trip.
     - Cache:        per-org partitioned LRU + TTL jitter (±10%) +
@@ -134,8 +134,8 @@ HOW TO READ THIS FILE
 ================================================================================
 
 1.1  Plugin ID namespace
-     - Current IDs: "rknightion-meraki-app"        (app plugin)
-                    "rknightion-meraki-datasource" (nested data source)
+     - Current IDs: "robknight-meraki-app"        (app plugin)
+                    "robknight-meraki-datasource" (nested data source)
      - Go module: github.com/robknight/grafana-meraki-plugin
      - At first SIGNED release, plan to migrate to "robknight-meraki-app" +
        "robknight-meraki-datasource". Tracked in §4 as a pending task (Q.7).
@@ -342,7 +342,7 @@ HOW TO READ THIS FILE
      • .config/supervisord/supervisord.conf — updated path + binary name.
 
 2.6  Provisioning
-     - provisioning/datasources/meraki.yaml: stable UID "rknightion-meraki-ds".
+     - provisioning/datasources/meraki.yaml: stable UID "robknight-meraki-ds".
        This UID is hardcoded in src/scene-helpers/datasource.ts as
        MERAKI_DS_UID. If you rename the UID, update both.
      - provisioning/plugins/app.yaml: auto-enables the app plugin on startup.
@@ -360,7 +360,7 @@ HOW TO READ THIS FILE
 
   src/
     module.tsx                      # App plugin entry
-    plugin.json                     # id: rknightion-meraki-app; 12 includes entries
+    plugin.json                     # id: robknight-meraki-app; 12 includes entries
     constants.ts                    # PLUGIN_ID, ROUTES (12 routes), DEFAULT_MERAKI_BASE_URL
     types.ts                        # AppJsonData, AppSecureJsonData, MerakiProductType, SensorMetric
     components/
@@ -422,7 +422,7 @@ HOW TO READ THIS FILE
       sensorMetrics.ts              # Sensor metric metadata
       links.test.ts, panels.test.ts, sensorMetrics.test.ts, variables.test.ts
     datasource/                     # Nested DS (frontend-only)
-      plugin.json                   # id: rknightion-meraki-datasource, backend: false
+      plugin.json                   # id: robknight-meraki-datasource, backend: false
       module.ts, datasource.ts
       QueryEditor.tsx, ConfigEditor.tsx
       types.ts                      # 45+ QueryKind enum entries, MerakiQuery interface
@@ -434,7 +434,7 @@ HOW TO READ THIS FILE
       logo.svg, screenshots/README.md (screenshots deferred — see §4)
 
   pkg/
-    main.go                         # app.Manage("rknightion-meraki-app", ...)
+    main.go                         # app.Manage("robknight-meraki-app", ...)
     plugin/
       app.go                        # App struct, loadSettings, buildClient, Client(),
                                     # Configured(), CheckHealth, LabelMode, Settings
@@ -475,7 +475,7 @@ HOW TO READ THIS FILE
       events.go                         # NetworkEvents + startingAfter paginator (v0.3.0)
 
   provisioning/
-    datasources/meraki.yaml         # auto-provisions nested DS (uid=rknightion-meraki-ds)
+    datasources/meraki.yaml         # auto-provisions nested DS (uid=robknight-meraki-ds)
     plugins/app.yaml                # auto-enables the app plugin
 
   tests/
@@ -515,17 +515,16 @@ P.6  [PENDING] README screenshots.
      introduced in v0.3.0 + v0.4.0.
 
 P.9  [DONE — v0.4.0] User-Agent compliance. See §18.
-     Shipped as "GrafanaMerakiPlugin/<ClientVersion> rknightion"; version
+     Shipped as "GrafanaMerakiPlugin/<ClientVersion> robknight"; version
      lives in pkg/meraki/version.go and should be bumped each release
      alongside CHANGELOG + package.json.
 
-Q.7  [PENDING] Plugin-ID rename rknightion-* -> robknight-*.
-     Do as a single atomic commit: rename every occurrence of
-     "rknightion-meraki-app" and "rknightion-meraki-datasource", rebuild,
-     verify, ship. Watch for the two constants in
-     src/scene-helpers/datasource.ts and the provisioning yaml UIDs. The
-     vendor token in the User-Agent (set to "rknightion" in v0.4.0) should
-     flip to "robknight" at the same time — pkg/meraki/version.go:UserAgentVendor.
+Q.7  [DONE — signed-release prep] Plugin-ID rename rknightion-* -> robknight-*.
+     Shipped as a single atomic commit alongside folder rename to
+     robknight-meraki-app. UserAgentVendor in pkg/meraki/version.go
+     flipped to "robknight" at the same time. Go module path
+     (github.com/robknight/grafana-meraki-plugin) deliberately left on the
+     old repo-name segment — it's a binary, not a consumed library.
 
 --------------------------------------------------------------------------------
 4.2  DEFERRED FEATURE IDEAS (well-scoped; pick up when prioritised)
@@ -2522,8 +2521,8 @@ API 429, config-change-rate).
       (unless new key grants access to new orgs → new UIDs for those).
 
 4.5.12 PLUGIN-RENAME (Q.7) INTERACTION
-  When rknightion-* → robknight-* rename ships:
-    1. Every rule's query.datasourceUid changes (was rknightion-meraki-ds,
+  When the rknightion-* → robknight-* rename shipped:
+    1. Every rule's query.datasourceUid changes (was robknight-meraki-ds,
        becomes robknight-meraki-ds — assuming MERAKI_DS_UID also flips).
        OR decision: KEEP MERAKI_DS_UID on the old string to skip this
        migration. Document whichever path is chosen at rename time.
@@ -2635,7 +2634,7 @@ G.6  Resolution quantization: Meraki only accepts a fixed set per endpoint.
 
 G.7  The nested DS has NO backend. DO NOT add `"backend": true` to
      src/datasource/plugin.json — Grafana would try to launch a separate
-     gpx_rknightion-meraki-datasource binary that doesn't exist.
+     gpx_robknight-meraki-datasource binary that doesn't exist.
 
 G.8  Each plugin instance has its own Go process. If a future design adds a
      DS-level Go backend, the app and DS will NOT share memory. Design
@@ -2643,7 +2642,7 @@ G.8  Each plugin instance has its own Go process. If a future design adds a
      the DS delegates to the app via resource calls — which is what we do
      today, and the reason the DS is frontend-only).
 
-G.9  The MERAKI_DS_UID constant ("rknightion-meraki-ds") lives in two
+G.9  The MERAKI_DS_UID constant ("robknight-meraki-ds") lives in two
      places: provisioning/datasources/meraki.yaml AND
      src/scene-helpers/datasource.ts. Keep them aligned.
 
@@ -2840,7 +2839,7 @@ branded UA also makes this plugin findable in Cisco's ecosystem reports.
 Current value: "Grafana-Meraki-App" (pkg/meraki/client.go:22,
 pkg/plugin/app.go:128). NON-COMPLIANT — hyphens.
 
-Target value: "GrafanaMerakiPlugin/<semver> rknightion" (flip vendor token
+Target value: "GrafanaMerakiPlugin/<semver> robknight" (flip vendor token
 to "robknight" when Q.7 rename happens).
 
 --------------------------------------------------------------------------------
@@ -2879,7 +2878,7 @@ Four techniques for reducing request volume, and our status on each:
      Status: user-facing guidance; README addition after P.9 ships ("After
      deploying, watch dashboard.meraki.com -> your org -> API & Webhooks ->
      API requests — the plugin reports as GrafanaMerakiPlugin/<semver>
-     rknightion once P.9 lands.").
+     robknight once P.9 lands.").
 
 --------------------------------------------------------------------------------
 7.4  CACHING + REQUEST-HYGIENE IMPROVEMENTS
@@ -3000,7 +2999,7 @@ Q.6  Alert rule templates — [PLANNED as v0.6, §4.5]. 13 templates across
 
 Q.7  Namespace rename to robknight-* at publish time — [PENDING] §4.1.
      Do as a single atomic commit: rename every occurrence of
-     "rknightion-meraki-app" and "rknightion-meraki-datasource", rebuild,
+     "robknight-meraki-app" and "robknight-meraki-datasource", rebuild,
      verify, ship. Watch for the two constants in
      src/scene-helpers/datasource.ts and the provisioning yaml UIDs.
 
@@ -3340,7 +3339,7 @@ under multi-panel dashboards.
 Shipped:
 - User-Agent compliance (P.9). New file pkg/meraki/version.go holds the
   ClientVersion const + BuildUserAgent() helper. The UA string is now
-  "GrafanaMerakiPlugin/<version> rknightion" (no hyphens, single forward
+  "GrafanaMerakiPlugin/<version> robknight" (no hyphens, single forward
   slash for the version suffix). Meraki's API Analytics dashboard now
   attributes this plugin's traffic correctly. Bump ClientVersion alongside
   package.json + CHANGELOG at every release.

@@ -11,7 +11,7 @@ key, no extra exporter to deploy.
 - Device status overview (online / alerting / offline / dormant)
 - MT environmental sensor readings — temperature, humidity, door, water, CO₂, PM2.5, TVOC, noise,
   battery, and indoor air quality — with native timeseries history
-- Nested data source (`rknightion-meraki-datasource`) so Meraki queries can also appear in your
+- Nested data source (`robknight-meraki-datasource`) so Meraki queries can also appear in your
   own dashboards alongside Prometheus, Loki, Tempo, etc.
 
 Roadmap phases v0.2+ add MR wireless APs, MS switches, MX security appliances, MV cameras,
@@ -66,7 +66,7 @@ mage -v               # build Go backend binaries for all platforms
 npm run build         # build the frontend bundle
 ```
 
-Outputs land in `dist/`. Copy the contents to `<grafana>/data/plugins/rknightion-meraki-app/`
+Outputs land in `dist/`. Copy the contents to `<grafana>/data/plugins/robknight-meraki-app/`
 (or mount them via the provided `docker-compose.yaml`).
 
 ### Run locally
@@ -86,7 +86,7 @@ For self-hosted Grafana that is not using the dev docker-compose, add the plugin
 
 ```ini
 [plugins]
-allow_loading_unsigned_plugins = rknightion-meraki-app,rknightion-meraki-datasource
+allow_loading_unsigned_plugins = robknight-meraki-app,robknight-meraki-datasource
 ```
 
 ## Configuration
@@ -110,7 +110,7 @@ Cisco's guide: <https://developer.cisco.com/meraki/api-v1/authorization/>.
 ### Monitoring your plugin's API usage
 
 The plugin identifies itself to Meraki with a spec-compliant User-Agent of the form
-`GrafanaMerakiPlugin/<version> rknightion`. Your organization admins can see how much
+`GrafanaMerakiPlugin/<version> robknight`. Your organization admins can see how much
 API traffic this plugin generates from the Meraki dashboard under **Organization →
 API & Webhooks → API requests** — filter the `userAgent` column for
 `GrafanaMerakiPlugin` to attribute requests back to this integration.

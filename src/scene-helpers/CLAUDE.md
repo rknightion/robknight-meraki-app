@@ -15,7 +15,7 @@ sensorMetrics.ts     SENSOR_METRIC_BY_ID, ALL_SENSOR_METRICS, SensorMetricMeta (
 
 ## MERAKI_DS_UID
 
-`'rknightion-meraki-ds'` — **duplicated** in `provisioning/datasources/meraki.yaml`. Keep aligned. If you ever rename, update both plus any tests that assert the UID.
+`'robknight-meraki-ds'` — **duplicated** in `provisioning/datasources/meraki.yaml`. Keep aligned. If you ever rename, update both plus any tests that assert the UID.
 
 ## ConfigGuard (P.5 polish)
 

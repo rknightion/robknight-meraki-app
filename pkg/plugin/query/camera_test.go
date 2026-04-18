@@ -40,7 +40,7 @@ func TestHandle_CameraOnboarding_Table(t *testing.T) {
 
 	resp, err := Handle(context.Background(), client, &QueryRequest{
 		Queries: []MerakiQuery{{RefID: "A", Kind: KindCameraOnboarding, OrgID: "o1"}},
-	}, Options{PluginPathPrefix: "/a/rknightion-meraki-app"})
+	}, Options{PluginPathPrefix: "/a/robknight-meraki-app"})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -64,8 +64,8 @@ func TestHandle_CameraOnboarding_Table(t *testing.T) {
 	}
 
 	ddField, _ := frame.FieldByName("drilldownUrl")
-	if got, _ := ddField.ConcreteAt(0); got != "/a/rknightion-meraki-app/cameras/Q2AA-AAAA-AAAA" {
-		t.Fatalf("row 0 drilldownUrl = %v, want /a/rknightion-meraki-app/cameras/Q2AA-AAAA-AAAA", got)
+	if got, _ := ddField.ConcreteAt(0); got != "/a/robknight-meraki-app/cameras/Q2AA-AAAA-AAAA" {
+		t.Fatalf("row 0 drilldownUrl = %v, want /a/robknight-meraki-app/cameras/Q2AA-AAAA-AAAA", got)
 	}
 }
 

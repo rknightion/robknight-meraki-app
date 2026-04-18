@@ -319,7 +319,7 @@ func TestClient_UserAgent(t *testing.T) {
 		t.Fatalf("User-Agent %q, want %q", seen, want)
 	}
 	// Sanity: match the exact §7.2 target.
-	if want != "GrafanaMerakiPlugin/"+ClientVersion+" rknightion" {
+	if want != "GrafanaMerakiPlugin/"+ClientVersion+" robknight" {
 		t.Fatalf("BuildUserAgent() %q does not match expected format", want)
 	}
 }

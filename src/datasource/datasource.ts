@@ -17,7 +17,7 @@ import {
   QueryKind,
 } from './types';
 
-const APP_PLUGIN_ID = 'rknightion-meraki-app';
+const APP_PLUGIN_ID = 'robknight-meraki-app';
 
 /**
  * MerakiDataSource is a thin frontend-only data source — it proxies every query and every

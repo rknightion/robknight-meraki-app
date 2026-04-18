@@ -59,7 +59,7 @@ func TestHandle_MgUplinks_ParsesSignalDb(t *testing.T) {
 
 	resp, err := Handle(context.Background(), client, &QueryRequest{
 		Queries: []MerakiQuery{{RefID: "A", Kind: KindMgUplinks, OrgID: "o1"}},
-	}, Options{PluginPathPrefix: "/a/rknightion-meraki-app"})
+	}, Options{PluginPathPrefix: "/a/robknight-meraki-app"})
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -90,8 +90,8 @@ func TestHandle_MgUplinks_ParsesSignalDb(t *testing.T) {
 
 	// Sanity: drilldownUrl is the cellular-gateways family route.
 	ddField, _ := frame.FieldByName("drilldownUrl")
-	if got, _ := ddField.ConcreteAt(0); got != "/a/rknightion-meraki-app/cellular-gateways/Q2MG-AAAA-AAAA" {
-		t.Fatalf("drilldownUrl = %v, want /a/rknightion-meraki-app/cellular-gateways/Q2MG-AAAA-AAAA", got)
+	if got, _ := ddField.ConcreteAt(0); got != "/a/robknight-meraki-app/cellular-gateways/Q2MG-AAAA-AAAA" {
+		t.Fatalf("drilldownUrl = %v, want /a/robknight-meraki-app/cellular-gateways/Q2MG-AAAA-AAAA", got)
 	}
 }
 

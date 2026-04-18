@@ -1,6 +1,6 @@
 # Nested data source (`src/datasource/`)
 
-Plugin id `rknightion-meraki-datasource`. **Frontend-only — no Go backend.** Every `query()` and `metricFindQuery()` POSTs to the app plugin's resource endpoints at `/api/plugins/rknightion-meraki-app/resources/{query,metricFind}`.
+Plugin id `robknight-meraki-datasource`. **Frontend-only — no Go backend.** Every `query()` and `metricFindQuery()` POSTs to the app plugin's resource endpoints at `/api/plugins/robknight-meraki-app/resources/{query,metricFind}`.
 
 ## Why this shape
 
@@ -9,7 +9,7 @@ One API key (held by the app), one `meraki.Client` (per-org rate limiter + TTL c
 ## Files
 
 ```
-plugin.json         id: rknightion-meraki-datasource, backend: false, metrics: true, alerting: true
+plugin.json         id: robknight-meraki-datasource, backend: false, metrics: true, alerting: true
 module.ts           Exports plugin class — registers MerakiDataSource, ConfigEditor, QueryEditor
 datasource.ts       MerakiDataSource extends DataSourceApi — query/metricFindQuery/testDatasource
 QueryEditor.tsx     Kind picker (Combobox<QueryKind>) + per-kind fields (org/networks/serials/metrics)
@@ -20,7 +20,7 @@ img/logo.svg        Synced from src/img/logo.svg — 72×72 generic network icon
 
 ## Locked-in: the DS has NO backend
 
-- DO NOT add `"backend": true` to `plugin.json` — Grafana would try to launch a non-existent `gpx_rknightion-meraki-datasource` binary.
+- DO NOT add `"backend": true` to `plugin.json` — Grafana would try to launch a non-existent `gpx_robknight-meraki-datasource` binary.
 - `ConfigEditor.tsx` has no API-key field. All credentials live on the app.
 - `MerakiDSOptions` is deliberately a marker interface (`_placeholder?: never`).
 
@@ -40,7 +40,7 @@ Scenes usually use `metricFindQuery` via `QueryVariable` factories in `src/scene
 
 ## testDatasource
 
-Calls `GET /api/plugins/rknightion-meraki-app/health` (the app's `CheckHealth`). The app validates by hitting `GET /organizations` with a 15s timeout. Green when the API key is accepted.
+Calls `GET /api/plugins/robknight-meraki-app/health` (the app's `CheckHealth`). The app validates by hitting `GET /organizations` with a 15s timeout. Green when the API key is accepted.
 
 ## Query-kind contract
 

@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	if err := app.Manage("rknightion-meraki-app", plugin.NewApp, app.ManageOpts{}); err != nil {
+	if err := app.Manage("robknight-meraki-app", plugin.NewApp, app.ManageOpts{}); err != nil {
 		log.DefaultLogger.Error(err.Error())
 		os.Exit(1)
 	}

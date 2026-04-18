@@ -70,7 +70,7 @@ func NewApp(_ context.Context, s backend.AppInstanceSettings) (instancemgmt.Inst
 	if err != nil {
 		return nil, fmt.Errorf("meraki: load settings: %w", err)
 	}
-	logger := log.DefaultLogger.With("plugin", "rknightion-meraki-app")
+	logger := log.DefaultLogger.With("plugin", "robknight-meraki-app")
 
 	var client *meraki.Client
 	if settings.APIKey != "" {

@@ -5,7 +5,7 @@ Module: `github.com/robknight/grafana-meraki-plugin`. Go 1.25+ (go.mod declares 
 ## Layout
 
 ```
-main.go                          app.Manage("rknightion-meraki-app", NewApp, ManageOpts{})
+main.go                          app.Manage("robknight-meraki-app", NewApp, ManageOpts{})
 meraki/                          Meraki API client — see pkg/meraki/CLAUDE.md
   client.go                      HTTP, auth, 429+5xx retry, Link pagination
   ratelimit.go                   Per-org token bucket (testable Clock/Sleep/Rand hooks)
@@ -22,7 +22,7 @@ plugin/                          Plugin app — see pkg/plugin/CLAUDE.md
 
 ## Go module path vs plugin ID
 
-They're independent. The Go module is `github.com/robknight/...` (already namespaced to Rob). The plugin IDs are `rknightion-*` today and will be renamed to `robknight-*` at signed-release time. The Go module path can stay as-is.
+They're independent. The Go module is `github.com/robknight/...` (namespaced to Rob's GitHub account) and the plugin IDs are `robknight-*` (namespaced to the Grafana org). The module path retains `grafana-meraki-plugin` as its repo-name segment from before the folder rename — that's fine because the backend is built as a binary and isn't consumed as a library via `go get`.
 
 ## Dependencies
 

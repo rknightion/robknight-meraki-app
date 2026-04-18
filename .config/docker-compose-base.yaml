@@ -1,7 +1,7 @@
 services:
   grafana:
     user: root
-    container_name: 'rknightion-meraki-app'
+    container_name: 'robknight-meraki-app'
 
     build:
       context: .
@@ -19,13 +19,13 @@ services:
     cap_add:
       - SYS_PTRACE
     volumes:
-      - ../dist:/var/lib/grafana/plugins/rknightion-meraki-app
+      - ../dist:/var/lib/grafana/plugins/robknight-meraki-app
       - ../provisioning:/etc/grafana/provisioning
-      - ..:/root/rknightion-meraki-app
+      - ..:/root/robknight-meraki-app
 
     environment:
       NODE_ENV: development
-      GF_LOG_FILTERS: plugin.rknightion-meraki-app:debug
+      GF_LOG_FILTERS: plugin.robknight-meraki-app:debug
       GF_LOG_LEVEL: debug
       GF_DATAPROXY_LOGGING: 1
-      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: rknightion-meraki-app
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: robknight-meraki-app
