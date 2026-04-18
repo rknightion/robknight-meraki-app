@@ -271,6 +271,322 @@ func (c *Client) GetDeviceWirelessClients(ctx context.Context, serial string, ti
 }
 
 // ---------------------------------------------------------------------------
+// §4.4.3-1a — wireless client count history (per-network timeseries)
+// ---------------------------------------------------------------------------
+
+// WirelessClientCountPoint is one interval sample from
+// GET /networks/{networkId}/wireless/clientCountHistory.
+//
+// Wire shape (per item):
+//
+//	{"startTs":"...","endTs":"...","clientCount": N}
+//
+// The same endpoint optionally filters by SSID; when an SSID filter is
+// applied Meraki still returns the same flat shape so we do not model
+// per-SSID partitioning at this layer.
+type WirelessClientCountPoint struct {
+	StartTs     time.Time `json:"startTs"`
+	EndTs       time.Time `json:"endTs"`
+	ClientCount int64     `json:"clientCount"`
+}
+
+// WirelessClientCountOptions filters the client-count-history call.
+type WirelessClientCountOptions struct {
+	SSID         string
+	Band         string
+	DeviceSerial string
+	Window       *TimeRangeWindow
+	Resolution   time.Duration
+}
+
+func (o WirelessClientCountOptions) values() url.Values {
+	v := url.Values{}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+		if o.Resolution > 0 {
+			v.Set("resolution", strconv.Itoa(int(o.Resolution.Seconds())))
+		} else if o.Window.Resolution > 0 {
+			v.Set("resolution", strconv.Itoa(int(o.Window.Resolution.Seconds())))
+		}
+	} else if o.Resolution > 0 {
+		v.Set("resolution", strconv.Itoa(int(o.Resolution.Seconds())))
+	}
+	if o.SSID != "" {
+		v.Set("ssid", o.SSID)
+	}
+	if o.Band != "" {
+		v.Set("band", o.Band)
+	}
+	if o.DeviceSerial != "" {
+		v.Set("deviceSerial", o.DeviceSerial)
+	}
+	return v
+}
+
+// GetNetworkWirelessClientCountHistory fetches per-interval client-count
+// samples for a single network. Endpoint is not paginated.
+func (c *Client) GetNetworkWirelessClientCountHistory(ctx context.Context, networkID string, opts WirelessClientCountOptions, ttl time.Duration) ([]WirelessClientCountPoint, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/wireless/clientCountHistory", Message: "missing network id"}}
+	}
+	var out []WirelessClientCountPoint
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/wireless/clientCountHistory",
+		"", opts.values(), ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// §4.4.3-1a — wireless failed connections (per-network event list)
+// ---------------------------------------------------------------------------
+
+// WirelessFailedConnection is one failure event row from
+// GET /networks/{networkId}/wireless/failedConnections.
+//
+// Wire shape (per item):
+//
+//	{"ts":"...", "type":"assoc|auth|dhcp|dns", "serial":"Q2...",
+//	 "clientMac":"...", "ssidNumber": N, "failureStep":"..." , "vlan":"...",
+//	 "apTag":"...", "band":"2.4|5|6", "channel": N}
+type WirelessFailedConnection struct {
+	Ts          time.Time `json:"ts"`
+	Type        string    `json:"type"`
+	Serial      string    `json:"serial"`
+	ClientMac   string    `json:"clientMac"`
+	SsidNumber  int       `json:"ssidNumber"`
+	FailureStep string    `json:"failureStep"`
+	Vlan        string    `json:"vlan"`
+	ApTag       string    `json:"apTag"`
+	Band        string    `json:"band"`
+	Channel     int       `json:"channel"`
+}
+
+// WirelessFailedConnectionsOptions filters the failed-connections call.
+type WirelessFailedConnectionsOptions struct {
+	SSID   string
+	Band   string
+	Serial string
+	Window *TimeRangeWindow
+}
+
+func (o WirelessFailedConnectionsOptions) values() url.Values {
+	v := url.Values{}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+	}
+	if o.SSID != "" {
+		v.Set("ssid", o.SSID)
+	}
+	if o.Band != "" {
+		v.Set("band", o.Band)
+	}
+	if o.Serial != "" {
+		v.Set("serial", o.Serial)
+	}
+	return v
+}
+
+// GetNetworkWirelessFailedConnections fetches the failed-connection events
+// for a single network over the window. Endpoint is not paginated.
+func (c *Client) GetNetworkWirelessFailedConnections(ctx context.Context, networkID string, opts WirelessFailedConnectionsOptions, ttl time.Duration) ([]WirelessFailedConnection, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/wireless/failedConnections", Message: "missing network id"}}
+	}
+	var out []WirelessFailedConnection
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/wireless/failedConnections",
+		"", opts.values(), ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// §4.4.3-1a — wireless latency history (per-network timeseries)
+// ---------------------------------------------------------------------------
+
+// WirelessLatencyPoint is one interval sample from
+// GET /networks/{networkId}/wireless/latencyHistory.
+//
+// Wire shape (per item):
+//
+//	{"startTs":"...","endTs":"...","avgLatencyMs": F,
+//	 "backgroundTrafficMs": F, "bestEffortTrafficMs": F,
+//	 "videoTrafficMs": F, "voiceTrafficMs": F}
+//
+// Any of the per-access-category fields may be absent when the response
+// does not include a breakdown (default: aggregate only).
+type WirelessLatencyPoint struct {
+	StartTs             time.Time `json:"startTs"`
+	EndTs               time.Time `json:"endTs"`
+	AvgLatencyMs        float64   `json:"avgLatencyMs"`
+	BackgroundTrafficMs float64   `json:"backgroundTrafficMs"`
+	BestEffortTrafficMs float64   `json:"bestEffortTrafficMs"`
+	VideoTrafficMs      float64   `json:"videoTrafficMs"`
+	VoiceTrafficMs      float64   `json:"voiceTrafficMs"`
+}
+
+// WirelessLatencyOptions filters the latency-history call.
+type WirelessLatencyOptions struct {
+	SSID           string
+	Band           string
+	DeviceSerial   string
+	AccessCategory string
+	Window         *TimeRangeWindow
+	Resolution     time.Duration
+}
+
+func (o WirelessLatencyOptions) values() url.Values {
+	v := url.Values{}
+	if o.Window != nil {
+		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+		if o.Resolution > 0 {
+			v.Set("resolution", strconv.Itoa(int(o.Resolution.Seconds())))
+		} else if o.Window.Resolution > 0 {
+			v.Set("resolution", strconv.Itoa(int(o.Window.Resolution.Seconds())))
+		}
+	} else if o.Resolution > 0 {
+		v.Set("resolution", strconv.Itoa(int(o.Resolution.Seconds())))
+	}
+	if o.SSID != "" {
+		v.Set("ssid", o.SSID)
+	}
+	if o.Band != "" {
+		v.Set("band", o.Band)
+	}
+	if o.DeviceSerial != "" {
+		v.Set("deviceSerial", o.DeviceSerial)
+	}
+	if o.AccessCategory != "" {
+		v.Set("accessCategory", o.AccessCategory)
+	}
+	return v
+}
+
+// GetNetworkWirelessLatencyHistory fetches per-interval latency samples
+// for a single network. Endpoint is not paginated.
+func (c *Client) GetNetworkWirelessLatencyHistory(ctx context.Context, networkID string, opts WirelessLatencyOptions, ttl time.Duration) ([]WirelessLatencyPoint, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/wireless/latencyHistory", Message: "missing network id"}}
+	}
+	var out []WirelessLatencyPoint
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/wireless/latencyHistory",
+		"", opts.values(), ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// §4.4.3-1a — wireless SSID statuses by device (org-wide radio status proxy)
+// ---------------------------------------------------------------------------
+
+// WirelessSsidStatusByDevice is one BSSID row from
+// GET /organizations/{organizationId}/wireless/ssids/statuses/byDevice.
+//
+// Wire shape (per item):
+//
+//	{
+//	  "network": {"id": "N_..."},
+//	  "serial": "Q2...",
+//	  "basicServiceSets": [
+//	    {"ssid": {"number": N, "name": "..."},
+//	     "radio": {"band": "2.4|5|6", "channel": N, "channelWidth": N, "isBroadcasting": bool},
+//	     "bssid": "...", "visible": bool, "enabled": bool}
+//	  ]
+//	}
+//
+// We use this in lieu of a true org-wide radioSettings/bySsid endpoint (which
+// Meraki does not expose). For each device we aggregate which bands are
+// currently broadcasting to yield {serial, band2_4, band5, band6, enabled}.
+type WirelessSsidStatusByDevice struct {
+	Serial    string
+	NetworkID string
+	// Band24Active is true when at least one BSSID on this device reports a
+	// 2.4 GHz radio with isBroadcasting=true (and the SSID itself is enabled).
+	Band24Active bool
+	Band5Active  bool
+	Band6Active  bool
+	// AnyEnabled mirrors the plan's "enabled" column — true when any BSSID
+	// on the device is enabled.
+	AnyEnabled bool
+}
+
+// WirelessSsidStatusOptions filters the ssids/statuses/byDevice call.
+type WirelessSsidStatusOptions struct {
+	NetworkIDs []string
+	Serials    []string
+}
+
+type rawBasicServiceSet struct {
+	Enabled bool `json:"enabled"`
+	Radio   struct {
+		Band           string `json:"band"`
+		IsBroadcasting bool   `json:"isBroadcasting"`
+	} `json:"radio"`
+}
+
+type rawSsidStatusEntry struct {
+	Serial  string `json:"serial"`
+	Network struct {
+		ID string `json:"id"`
+	} `json:"network"`
+	BasicServiceSets []rawBasicServiceSet `json:"basicServiceSets"`
+}
+
+// GetOrganizationWirelessSsidsStatusesByDevice returns per-device BSSID
+// broadcasting snapshot. Paginated via Link header; perPage 500 (max).
+func (c *Client) GetOrganizationWirelessSsidsStatusesByDevice(ctx context.Context, orgID string, opts WirelessSsidStatusOptions, ttl time.Duration) ([]WirelessSsidStatusByDevice, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{
+			Endpoint: "organizations/{organizationId}/wireless/ssids/statuses/byDevice",
+			Message:  "missing organization id",
+		}}
+	}
+	v := url.Values{"perPage": []string{"500"}}
+	for _, id := range opts.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range opts.Serials {
+		v.Add("serials[]", s)
+	}
+	var raw []rawSsidStatusEntry
+	if _, err := c.GetAll(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/wireless/ssids/statuses/byDevice",
+		orgID, v, ttl, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]WirelessSsidStatusByDevice, 0, len(raw))
+	for _, e := range raw {
+		row := WirelessSsidStatusByDevice{Serial: e.Serial, NetworkID: e.Network.ID}
+		for _, b := range e.BasicServiceSets {
+			if b.Enabled {
+				row.AnyEnabled = true
+			}
+			if !b.Radio.IsBroadcasting {
+				continue
+			}
+			switch b.Radio.Band {
+			case "2.4":
+				row.Band24Active = true
+			case "5":
+				row.Band5Active = true
+			case "6":
+				row.Band6Active = true
+			}
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
 // §2.1 — Org-level AP client counts
 // ---------------------------------------------------------------------------
 

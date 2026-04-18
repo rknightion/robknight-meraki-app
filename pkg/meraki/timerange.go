@@ -273,4 +273,43 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 			7 * 24 * time.Hour,
 		},
 	},
+
+	// §4.4.3-1a — Wireless client count history. Meraki spec: 31-day max,
+	// resolutions 300/600/1200/3600/14400/86400 seconds. Plan calls for a
+	// 7-day cap and 5-min floor — we clamp to 7d so the default AP overview
+	// panel never issues a 31-day fan-out against every selected network.
+	"networks/{networkId}/wireless/clientCountHistory": {
+		MaxTimespan: 7 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			300 * time.Second,
+			600 * time.Second,
+			1200 * time.Second,
+			3600 * time.Second,
+			14400 * time.Second,
+			86400 * time.Second,
+		},
+	},
+
+	// §4.4.3-1a — Wireless failed connections. Meraki spec: up to 180-day
+	// lookback, t1 ≤ t0 + 7d. No resolution parameter — returns a flat event
+	// list. Plan calls for a 30-day cap (fans-out across 7-day chunks would
+	// be needed to exceed that; keep it simple for now).
+	"networks/{networkId}/wireless/failedConnections": {
+		MaxTimespan: 7 * 24 * time.Hour,
+	},
+
+	// §4.4.3-1a — Wireless latency history (network-scoped). 31-day max;
+	// resolutions 300/600/1200/3600/14400/86400s. Plan caps to 7d / 5-min
+	// floor for per-network latency timeseries panels.
+	"networks/{networkId}/wireless/latencyHistory": {
+		MaxTimespan: 7 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			300 * time.Second,
+			600 * time.Second,
+			1200 * time.Second,
+			3600 * time.Second,
+			14400 * time.Second,
+			86400 * time.Second,
+		},
+	},
 }

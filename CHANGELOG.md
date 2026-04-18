@@ -50,6 +50,17 @@ top-level pages.
   `mttrMeanSeconds`, `mttrP50Seconds`, `mttrP95Seconds`, `resolvedCount`,
   `openCount`. Server-side aggregation matches §G.20 — no client-side
   filterByValue + reduce. 1 m TTL (v0.5 §4.4.2).
+- **Access Points: per-SSID client count, radio status, band split,
+  failed connections, latency stats** (v0.5 §4.4.3-1a). Four new query
+  kinds (`wirelessClientCountHistory`, `wirelessFailedConnections`,
+  `wirelessLatencyStats`, `deviceRadioStatus`) feed five new panels on
+  the top-level Access Points page. `deviceRadioStatus` uses
+  `GET /organizations/{id}/wireless/ssids/statuses/byDevice` as the
+  org-wide proxy because Meraki's v1 OpenAPI spec does not expose a
+  `wireless/devices/radioSettings/bySsid` endpoint. TTLs: 1 m (client
+  count), 5 m (failed connections + latency), 15 m (radio status).
+  `KnownEndpointRanges` clamps the three timeseries endpoints to 7 d
+  with a 5-min resolution floor.
 
 ## 0.4.0 (Unreleased)
 

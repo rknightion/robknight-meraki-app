@@ -142,6 +142,14 @@ const (
 	// the new Org Health page (§4.4.4).
 	KindConfigurationChangesAnnotation QueryKind = "configurationChangesAnnotation"
 	KindAlertsMttrSummary              QueryKind = "alertsMttrSummary"
+
+	// §4.4.3-1a — MR panels: per-network client-count timeseries, per-network
+	// failed-connection wide table, per-network latency timeseries, and an
+	// org-wide radio/band-status snapshot.
+	KindWirelessClientCountHistory QueryKind = "wirelessClientCountHistory"
+	KindWirelessFailedConnections  QueryKind = "wirelessFailedConnections"
+	KindWirelessLatencyStats       QueryKind = "wirelessLatencyStats"
+	KindDeviceRadioStatus          QueryKind = "deviceRadioStatus"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -316,6 +324,12 @@ var handlers = map[QueryKind]handlerFn{
 	KindApplianceTrafficShaping: handleApplianceTrafficShaping,
 	KindApplianceFailoverEvents: handleApplianceFailoverEvents,
 	KindApplianceVpnHeatmap:     handleApplianceVpnHeatmap,
+
+	// §4.4.3-1a — MR panels.
+	KindWirelessClientCountHistory: handleWirelessClientCountHistory,
+	KindWirelessFailedConnections:  handleWirelessFailedConnections,
+	KindWirelessLatencyStats:       handleWirelessLatencyStats,
+	KindDeviceRadioStatus:          handleDeviceRadioStatus,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

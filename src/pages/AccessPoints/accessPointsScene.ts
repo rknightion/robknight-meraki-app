@@ -17,7 +17,12 @@ import {
   apClientsByDeviceTable,
   apInventoryTable,
   apStatusKpiRow,
+  bandUsageSplitDonut,
+  clientLatencyStatsTimeseries,
+  failedConnectionRateTimeseries,
   networkChannelUtilTimeseries,
+  perApRadioStatusTable,
+  perSsidClientCountTimeseries,
   ssidUsageStackedTimeseries,
   wirelessApCpuLoadTimeseries,
   wirelessEthernetStatusTable,
@@ -74,6 +79,27 @@ export function accessPointsScene(): EmbeddedScene {
         new SceneFlexItem({
           height: 320,
           body: networkChannelUtilTimeseries(),
+        }),
+        // v0.5 §4.4.3-1a — per-network client count timeseries + band-split donut.
+        new SceneFlexLayout({
+          direction: 'row',
+          children: [
+            new SceneFlexItem({ minWidth: 400, height: 320, body: perSsidClientCountTimeseries() }),
+            new SceneFlexItem({ minWidth: 300, height: 320, body: bandUsageSplitDonut() }),
+          ],
+        }),
+        // v0.5 §4.4.3-1a — failed-connection aggregation + per-network latency stats.
+        new SceneFlexLayout({
+          direction: 'row',
+          children: [
+            new SceneFlexItem({ minWidth: 400, height: 320, body: failedConnectionRateTimeseries() }),
+            new SceneFlexItem({ minWidth: 400, height: 320, body: clientLatencyStatsTimeseries() }),
+          ],
+        }),
+        // v0.5 §4.4.3-1a — org-wide AP radio-band status snapshot.
+        new SceneFlexItem({
+          height: 320,
+          body: perApRadioStatusTable(),
         }),
         new SceneFlexItem({
           height: 320,
