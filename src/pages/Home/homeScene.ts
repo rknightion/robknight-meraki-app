@@ -17,6 +17,8 @@ import {
   orgDeviceStatusDonut,
   orgInventoryTable,
 } from '../../scene-helpers/panels';
+import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
+import { recentAlertsTile } from '../Alerts/panels';
 import { QueryKind } from '../../datasource/types';
 
 export function homeScene() {
@@ -32,6 +34,7 @@ export function homeScene() {
     body: new SceneFlexLayout({
       direction: 'column',
       children: [
+        configGuardFlexItem(),
         new SceneFlexItem({
           minHeight: 160,
           body: new SceneReactObject({ component: HomeIntro }),
@@ -48,6 +51,14 @@ export function homeScene() {
               body: orgDeviceStatusDonut('$org'),
             }),
           ],
+        }),
+        // Recent alerts tile — sits above the org inventory so operators
+        // land on "what's firing?" before they scan the inventory table.
+        // The tile uses the Alerts query runner with a `limit` transform
+        // to show the top five newest alerts across the selected org.
+        new SceneFlexItem({
+          minHeight: 260,
+          body: recentAlertsTile('$org'),
         }),
         new SceneFlexItem({
           minHeight: 360,

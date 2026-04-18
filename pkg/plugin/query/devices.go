@@ -16,8 +16,11 @@ import (
 const devicesTTL = 5 * time.Minute
 
 // handleDevices emits one row per device in the requested org, optionally
-// filtered server-side by productType.
-func handleDevices(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange) ([]*data.Frame, error) {
+// filtered server-side by productType. Every row carries a `drilldownUrl`
+// column pointing at the right per-family detail page for that device's
+// productType, so downstream tables can route serial clicks to the correct
+// scene without frontend template branching.
+func handleDevices(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, opts Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("devices: orgId is required")
 	}
@@ -38,6 +41,7 @@ func handleDevices(ctx context.Context, client *meraki.Client, q MerakiQuery, _ 
 	addresses := make([]string, 0, len(devices))
 	lats := make([]float64, 0, len(devices))
 	lngs := make([]float64, 0, len(devices))
+	drilldownURLs := make([]string, 0, len(devices))
 	for _, d := range devices {
 		serials = append(serials, d.Serial)
 		names = append(names, d.Name)
@@ -51,6 +55,7 @@ func handleDevices(ctx context.Context, client *meraki.Client, q MerakiQuery, _ 
 		addresses = append(addresses, d.Address)
 		lats = append(lats, d.Lat)
 		lngs = append(lngs, d.Lng)
+		drilldownURLs = append(drilldownURLs, deviceDrilldownURL(opts.PluginPathPrefix, d.ProductType, d.Serial))
 	}
 
 	return []*data.Frame{
@@ -67,6 +72,7 @@ func handleDevices(ctx context.Context, client *meraki.Client, q MerakiQuery, _ 
 			data.NewField("address", nil, addresses),
 			data.NewField("lat", nil, lats),
 			data.NewField("lng", nil, lngs),
+			data.NewField("drilldownUrl", nil, drilldownURLs),
 		),
 	}, nil
 }

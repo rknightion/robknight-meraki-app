@@ -7,35 +7,61 @@ file is a compact but complete handoff: architectural decisions that are LOCKED
 IN, code conventions to follow, the v0.2+ phase plan, and the gotchas that will
 bite you if you don't read them.
 
-Last updated: 2026-04-17 (right after v0.1 MVP was feature-complete).
+Last updated: 2026-04-18 (v0.2.0 feature-complete; §16 API-optimisation roadmap added).
 
 Repo: /Users/rob/repos/grafana-meraki-plugin
-Git: not yet initialised as of writing. Plan doc: /Users/rob/.claude/plans/we-are-building-a-wobbly-pancake.md
+Git: initialised; v0.1 is committed (4dee99a). v0.2.0 changes are staged
+as working-tree edits awaiting a 0.2.0 commit.
+Plan docs:
+  - /Users/rob/.claude/plans/we-are-building-a-wobbly-pancake.md (v0.1 MVP)
+  - /Users/rob/.claude/plans/consume-todos-txt-we-joyful-lagoon.md (v0.2.0 polish + phases 5/6/7)
 
 ================================================================================
-0. TL;DR — WHAT WORKS TODAY (v0.1 MVP)
+0. TL;DR — WHAT WORKS TODAY (v0.2.0)
 ================================================================================
 
 • Full stack builds green:
     npm run typecheck            -> clean
-    npm run lint                 -> 0 errors, 2 Select-deprecation warnings
-    npm run test:ci              -> 0 tests (Jest scaffold present, no specs yet)
+    npm run lint                 -> 0 errors (one pre-existing third-party plugin
+                                     deprecation notice, unrelated)
+    npm run test:ci              -> 15 Jest tests pass across 4 suites
     npm run build                -> webpack emits dist/module.js + dist/datasource/module.js
     mage -v                      -> 6 platform binaries in dist/gpx_meraki_*
+    mage test                    -> passes
     go test ./pkg/...            -> 3 packages pass (meraki, plugin, plugin/query)
     go vet ./pkg/...             -> clean
 
-• User flow that works end-to-end today:
+• User flow that works end-to-end today (v0.2.0):
     1. Install plugin, enable it.
-    2. Open Apps -> Cisco Meraki -> Configuration, paste Meraki API key, optionally
-       override base URL, optionally set shared fraction for HA.
+    2. Open Apps -> Cisco Meraki -> Configuration (the in-app scene page). Paste
+       Meraki API key, pick a region (Global/Canada/China/India/US Federal/Custom),
+       set shared fraction for HA, choose sensor label mode (serial or name).
     3. Click "Test connection" -> calls GET /organizations via the Go backend.
-    4. Navigate to Home / Organizations / Sensors pages. Sensors shows real
-       native-timeseries data for MT devices (temperature, humidity, door,
-       water, CO2, PM2.5, TVOC, noise, battery, indoorAirQuality).
+    4. Navigate the nav: Home / Organizations / Access Points / Switches / Sensors
+       / Alerts / Configuration.
+       - Home surfaces org KPIs, device status donut, a "Recent alerts" tile, and
+         the org inventory table.
+       - Organizations is a clickable inventory; each org opens a tabbed detail
+         page (Overview / Devices / Alerts).
+       - Access Points (MR) renders channel-util and SSID-usage timeseries plus a
+         clickable AP inventory; per-AP drilldown has Overview / Clients / RF tabs.
+       - Switches (MS) renders an inventory table; per-switch drilldown has
+         Overview / Ports, with a colour-coded port map (link speed thresholds)
+         and per-port drilldown to packet counters.
+       - Sensors (MT) renders native-timeseries data (temperature, humidity,
+         door, water, CO2, PM2.5, TVOC, noise, battery, indoorAirQuality) plus a
+         per-sensor detail page with auto-hide-on-empty behaviours.
+       - Alerts shows a severity filter, hourly timeline bar chart, and a sortable
+         alerts table.
+    5. Every scene shows a "not configured" banner (linking into the in-app
+       Configuration page) when the API key is missing.
 
-• Query kinds implemented on backend: organizations, networks, devices,
-  deviceStatusOverview, sensorReadingsLatest, sensorReadingsHistory.
+• Query kinds implemented on backend:
+    organizations, networks, devices, deviceStatusOverview, deviceAvailabilities,
+    sensorReadingsLatest, sensorReadingsHistory, sensorAlertSummary,
+    wirelessChannelUtil, wirelessUsage, networkSsids, apClients,
+    alerts, alertsOverview,
+    switchPorts, switchPortConfig, switchPortPacketCounters.
 
 ================================================================================
 1. LOCKED-IN ARCHITECTURE DECISIONS (do not revisit without strong reason)
@@ -301,65 +327,121 @@ Git: not yet initialised as of writing. Plan doc: /Users/rob/.claude/plans/we-ar
 4. IMMEDIATE POLISH ITEMS (do these before starting a new phase)
 ================================================================================
 
-P.1  Wire MaxDataPoints into sensor-history resolution quantization.
-     Currently sensor_readings.go calls Resolve(from, to, 0, nil). Thread
-     QueryRequest.MaxDataPoints into the handler so Grafana's panel width
-     controls resolution.
-     File: pkg/plugin/query/sensor_readings.go
+Status as of 2026-04-17: P.1-P.5, P.7, P.8 DONE. P.6 partially done (plugin.json
+scaffold + README added; actual PNG capture deferred to release prep).
+
+P.1  [DONE] Wire MaxDataPoints into sensor-history resolution quantization.
+     TimeRange now carries MaxDataPoints; handleSensorReadingsHistory calls
+     spec.Resolve(from, to, tr.MaxDataPoints, nil). Regression test:
+     TestHandle_SensorReadingsHistory_RespectsMaxDataPoints in
+     pkg/plugin/query/dispatch_test.go asserts 6h @ MDP=60 quantizes to 900s
+     and @ MDP=2000 quantizes to 60s.
      Accept: plot a 6h timeseries on a wide panel -> 1-min resolution; on a
      narrow panel -> 5-min resolution. No 400s.
 
-P.2  Migrate QueryEditor's Select to Combobox.
-     Lint warns 2x: "Select is deprecated. Use Combobox component instead".
-     File: src/datasource/QueryEditor.tsx lines 49 and 91.
-     Note: Combobox doesn't support isMulti in all Grafana versions — may need
-     to keep Select for the multi-metric field or use a different pattern.
+P.2  [DONE] Migrated QueryEditor's Select to Combobox / MultiCombobox.
+     File: src/datasource/QueryEditor.tsx — Combobox<QueryKind> for the Kind
+     picker, MultiCombobox<string> for the metrics multi-select. Zero Select
+     deprecation warnings in `npm run lint`.
 
-P.3  Add Jest unit tests for src/scene-helpers/panels.ts and variables.ts.
-     Currently "test:ci" reports "No tests found". Good candidates:
-       - orgVariable() emits a QueryVariable with the right datasource ref
-       - makeStatPanel() skips orgId for kind=Organizations
-       - sensorTimeseries() includes the partitionByValues transform
+P.3  [DONE] Added Jest unit tests.
+     New files: src/scene-helpers/variables.test.ts,
+     src/scene-helpers/panels.test.ts, src/scene-helpers/sensorMetrics.test.ts,
+     src/components/AppConfig/AppConfig.test.tsx.
+     Total: 15 tests across 4 suites. `npm run test:ci` is no longer a no-op.
+     Note: the original "sensorTimeseries() includes partitionByValues" idea
+     is obsolete — panels.ts was rewritten to emit labelled per-series frames
+     server-side (see G.18).
 
-P.4  Region URL presets in AppConfig.
-     Add a dropdown next to the base URL field with common region presets:
-       Global / US:     https://api.meraki.com/api/v1     (default)
-       Canada:          https://api.meraki.ca/api/v1
-       China:           https://api.meraki.cn/api/v1
-       India:           https://api.meraki.in/api/v1
-       US Federal:      https://api.gov-meraki.com/api/v1
-     Keep the raw input so power users can override.
+P.4  [DONE] Region URL presets in AppConfig.
+     MERAKI_REGIONS list in src/constants.ts; MerakiConfigForm in
+     src/components/AppConfig/AppConfig.tsx renders a Region <Combobox> above
+     the Base URL input and disables the text input unless "Custom…" is
+     selected. Exported regionForUrl() helper is jest-tested.
 
-P.5  Graceful "plugin not configured" UX on scenes.
-     Today if the API key is not set, scene queries fail silently. Detect
-     this (either by calling /resources/ping, which returns {configured: bool},
-     or by intercepting 412 from /resources/query) and show a "Configure the
-     Meraki app to see data" banner with a link to /plugins/rknightion-meraki-app.
+P.5  [DONE] Graceful "plugin not configured" UX on scenes.
+     New src/scene-helpers/ConfigGuard.tsx component + configGuardFlexItem()
+     factory. Wired as the first child of homeScene, sensorsScene,
+     organizationsScene, accessPointsScene, switchesScene, alertsScene. Fetches
+     /resources/ping; renders an Alert with a LinkButton to
+     prefixRoute(ROUTES.Configuration) (the in-app config page, not
+     /plugins/<id>).
 
-P.6  README screenshots.
-     Add 2-3 screenshots under src/img/screenshots/ showing:
-       1. Configuration page after test-connection
-       2. Home page with stats
-       3. Sensors timeseries
-     Reference them in src/plugin.json info.screenshots.
+P.6  [PARTIAL] README screenshots — scaffolding only.
+     src/img/screenshots/README.md added with capture guidance (1200×800,
+     dark theme, panels to capture). plugin.json `info.screenshots` is
+     currently empty because webpack rejects the build when referenced PNGs
+     don't exist on disk — populate it + check in 01/02/03 PNGs as part of
+     the signed-release prep, against a live instance with real data.
 
-P.7  Plugin logo.
-     src/img/logo.svg is the default scaffolded logo. Replace with a
-     Meraki-themed design (respecting Cisco trademark guidance — use generic
-     network iconography, NOT the Meraki brand mark).
+P.7  [DONE] Plugin logo.
+     src/img/logo.svg is a hand-authored 72×72 generic network icon (three
+     rounded node boxes connected by lines, orange #f2924a fill / dark-blue
+     #3865ab outline). Synced into src/datasource/img/logo.svg. No Cisco or
+     Meraki trademarks.
 
-P.8  Go test for pkg/plugin/query/sensor_readings.go.
-     dispatch_test.go has a smoke test for organizations only. Add a
-     sensor-readings test stubbing the Meraki /sensor/readings/history
-     endpoint and asserting a timeseries frame comes back with the right
-     columns (ts, serial, metric, value).
+P.8  [DONE] Go test for sensor readings history.
+     TestHandle_SensorReadingsHistory in pkg/plugin/query/dispatch_test.go
+     stubs /sensor/readings/history and asserts per-(serial, metric) frame
+     shape with Prometheus labels on the value field. Complemented by
+     TestHandle_SensorReadingsHistory_RespectsMaxDataPoints (P.1).
+
+P.9  [TODO] Fix User-Agent to match Meraki spec.
+     Current: "Grafana-Meraki-App" — contains a hyphen, which violates the
+     Meraki documented format ("ApplicationName VendorName", no spaces,
+     hyphens, or special chars in names; forward slashes only for version).
+     Meraki uses the UA to monitor API interactions on behalf of customer
+     admins; a non-compliant UA muddies their dashboards and may be flagged
+     as "unregistered third-party integration".
+     Target: "GrafanaMerakiPlugin/<semver> rknightion"
+       • ApplicationName = GrafanaMerakiPlugin (matches plugin purpose)
+       • Version = plugin semver (read from a new pkg/meraki/version.go
+         const ClientVersion = "0.2.0" — bump each release alongside
+         CHANGELOG + package.json)
+       • VendorName  = rknightion (matches current plugin-ID namespace;
+         revisit when §Q.7 namespace rename to robknight- happens)
+     Files to change:
+       • pkg/meraki/client.go:22   — DefaultUserAgent const
+       • pkg/plugin/app.go:128     — explicit UserAgent in buildClient()
+       • pkg/meraki/version.go     — new file, const ClientVersion string
+     Accept: `curl -H ...` any request from the plugin shows the new UA in
+     access logs; Meraki "API Analytics" dashboard (org settings -> API
+     analytics) attributes traffic to GrafanaMerakiPlugin.
+     Ref: https://developer.cisco.com/meraki/api-v1/user-agents-overview/
+     Ref: §16.2 below (full rationale).
 
 ================================================================================
-5. V0.2 — MR (WIRELESS ACCESS POINTS)
+5. V0.2 — MR (WIRELESS ACCESS POINTS)   [DONE — shipped in v0.2.0, 2026-04-17]
 ================================================================================
 
 Goal: a "Wireless" scene with per-AP drilldown. Second most-demoable after
 sensors because channel utilization and client counts are naturally timeseries.
+
+COMPLETION NOTES (2026-04-17):
+- Scene files: src/pages/AccessPoints/{accessPointsPage, accessPointsScene,
+  accessPointDetailPage, apOverviewScene, apClientsScene, apRfScene,
+  panels, variables, links}.ts.
+- Backend files: pkg/meraki/wireless.go (types + 4 endpoint wrappers),
+  pkg/meraki/devices.go extended with GetOrganizationDevicesAvailabilities,
+  pkg/plugin/query/wireless.go (4 handlers),
+  pkg/plugin/query/availabilities.go (handleDeviceAvailabilities).
+- resolveDeviceNames moved to pkg/plugin/query/device_names.go and now takes
+  productTypes ...string so wireless / switch / sensor handlers can all
+  reuse it for name-based legends.
+- Endpoint surprises (vs the spec below):
+    * /devices/{serial}/wirelessClients does NOT exist in v1 — the real
+      endpoint is /devices/{serial}/clients. The plan's `rssi/ssid/status/
+      manufacturer` columns aren't in the response; the emitted frame surfaces
+      `mac, ip, user, vlan, description, switchport, sentKB, recvKB` instead.
+    * Channel utilisation path is
+      /organizations/{orgId}/wireless/devices/channelUtilization/history/byDevice/byInterval
+      (not the shorter path in the spec). KnownEndpointRanges still keys on
+      the shorter logical path.
+    * DeviceAvailabilities endpoint has no `lastReportedAt` — the frame
+      column exists but stays zero-valued until Meraki exposes it.
+- Tests: TestHandle_WirelessChannelUtil_EmitsPerBandFrames,
+  TestHandle_NetworkSsids_Table, TestHandle_DeviceAvailabilities_Status in
+  pkg/plugin/query/dispatch_test.go.
 
 5.1  New endpoints (add wrappers under pkg/meraki/):
      - GET /organizations/{orgId}/wireless/devices/channelUtilization/history
@@ -406,11 +488,38 @@ sensors because channel utilization and client counts are naturally timeseries.
      timeseries for the last 24h, variable cascade works, drilldown resolves.
 
 ================================================================================
-6. V0.3 — ALERTS + ASSURANCE
+6. V0.3 — ALERTS + ASSURANCE            [DONE — shipped in v0.2.0, 2026-04-17]
 ================================================================================
 
 Goal: an "Alerts" scene that lists active alerts with severity filter and a
 timeline.
+
+COMPLETION NOTES (2026-04-17):
+- Endpoint path uses /organizations/{orgId}/assurance/alerts (the
+  /assurance/ prefix; the plain /alerts path in 6.1 below is DEPRECATED).
+  Plus the companion /assurance/alerts/overview/byType for the KPI row.
+- Meraki's alerts endpoint DOES follow RFC5988 Link-header pagination
+  (verified via ctx7). Our existing client.GetAll() handles it — no
+  changes to pagination.go were needed. The "startingAfter-aware branch"
+  concern in 6.1 below turned out to be unfounded.
+- Query kinds: `alerts` (table) + `alertsOverview` (KPI summary — mirrors
+  the server-side aggregation pattern in sensor_summary.go; see G.20).
+- Severity filter is plumbed via q.Metrics[0] (no dedicated field on
+  MerakiQuery to avoid churn). Frontend pushes `metrics: ['$severity']`
+  and the handler pops [0] into AlertsOptions.Severity.
+- Org-detail "Alerts" tab: organizationDetailScene was restructured into
+  organizationDetailPage (tabbed) with Overview / Devices / Alerts. The
+  Alerts tab renders alertsKpiRow + alertsTable filtered to the org.
+- Home "Recent alerts" tile: top-5 rows sorted by occurredAt desc, with a
+  client-side organize + limit transform to keep the panel compact.
+- Scene files: src/pages/Alerts/{alertsPage, alertsScene, panels,
+  variables, links}.ts.
+- Backend files: pkg/meraki/alerts.go + pkg/plugin/query/alerts.go.
+- Tests: TestHandle_Alerts_FollowsLinkHeaderPagination and
+  TestHandle_AlertsOverview_ProducesWideRow in dispatch_test.go.
+
+Historical spec below kept for reference (superseded by the completion notes
+above where they disagree):
 
 6.1  Endpoint: GET /organizations/{orgId}/alerts
      (paginated with startingAfter cursor — pagination.go may need a
@@ -433,11 +542,38 @@ timeline.
 6.6  TTL: 30s (alerts are volatile).
 
 ================================================================================
-7. V0.4 — MS (SWITCHES)
+7. V0.4 — MS (SWITCHES)                 [DONE — shipped in v0.2.0, 2026-04-17]
 ================================================================================
 
 Goal: a "Switches" scene whose centerpiece is a port map — a table with
 color-coded link-speed thresholds and drilldown per port.
+
+COMPLETION NOTES (2026-04-17):
+- Scene files: src/pages/Switches/{switchesPage, switchesScene,
+  switchDetailPage, switchOverviewScene, switchPortsScene, portDetailPage,
+  portDetailScene, panels, variables, links}.ts.
+- Backend files: pkg/meraki/switches.go + pkg/plugin/query/switches.go
+  (3 handlers: switchPorts, switchPortConfig, switchPortPacketCounters).
+- Endpoint surprise: the spec's
+  /devices/{serial}/switch/ports/{portId}/packetCounters does NOT exist.
+  The real endpoint is /devices/{serial}/switch/ports/statuses/packets
+  which returns counters for ALL ports on a switch; the handler filters
+  client-side by q.Metrics[0] (the port ID overload; see below).
+- STACK handling: implemented per todos §7.5. Frame has a `stackId` column,
+  empty when the device is standalone and populated from switchStackId
+  when it's a stack member. The port map panel groups by `stackId ?? serial`.
+- Speed field is a human string ("1 Gbps", "100 Mbps") in the Meraki
+  response; a parseSpeedMbps helper normalises to int64 Mbps so the
+  colour-coded thresholds (red/orange/yellow/green) work.
+- Port ID overload: SwitchPortPacketCounters queries pass the port ID via
+  q.Metrics[0] (same trick as Alerts severity — no dedicated field on
+  MerakiQuery to avoid churn). Documented at the SceneQueryRunner call
+  site in src/pages/Switches/panels.ts.
+- perPage cap for /switch/ports/statuses/bySwitch is 3-20 (default 10) —
+  much lower than other endpoints. MaxPages=100 × 20 = 2000 switches per
+  org before truncation; fine for typical estates.
+- Tests: TestHandle_SwitchPorts_GroupsByStack and
+  TestHandle_SwitchPortPacketCounters_SingleRow in dispatch_test.go.
 
 7.1  Endpoints:
      - GET /organizations/{orgId}/switch/ports/statuses/bySwitch   (PREFERRED — org-level)
@@ -646,6 +782,39 @@ G.16 AppConfig is NOT wrapped in a `<form onSubmit>`. Use a `<div>` with
      submission on an API-key field is a mild foot-gun (accidental submits).
      The Save button is the only action surface — keep it that way.
 
+G.17 FieldConfig.DisplayNameFromDS is a pre-formatted final string — Grafana
+     does NOT template-substitute it. Use FieldConfig.DisplayName with
+     ${__field.labels.<name>} if you need interpolation, or bake the final
+     string at emit time. We hit this when the CO₂ card legend rendered as
+     literal "{{serial}}". See pkg/plugin/query/sensor_readings.go where
+     the DisplayNameFromDS is composed per-frame; use the same pattern for
+     AP (wireless) and switch legends in v0.2+.
+
+G.18 Native-timeseries frames must be one-frame-per-series with data.Labels
+     on the value field. A single long-format frame with
+     (ts, serial, metric, value) columns renders as an EMPTY chart — the
+     timeseries viz can't infer series grouping from a mixed
+     (time, string, number) shape. A client-side partitionByValues transform
+     does NOT fix this (the residual string column stays on each partition
+     and the viz still ignores it). Backend fix is the correct call.
+     See pkg/plugin/query/sensor_readings.go:handleSensorReadingsHistory for
+     the canonical shape and pkg/plugin/query/wireless.go:handleWirelessChannelUtil
+     for the per-(serial, band) variant.
+
+G.19 Query-handler signature takes Options as the 5th argument (LabelMode
+     etc.). The dispatcher threads plugin settings through Handle → runOne →
+     handler. New handlers MUST accept the param even when unused (use
+     `_ Options`). See pkg/plugin/query/dispatch.go — `Options` struct +
+     `handlerFn` type.
+
+G.20 Prefer server-side KPI aggregation over client-side filterByValue +
+     reduce transform chains. Client transforms silently fall back to the
+     wrong reducer in some Grafana versions; the sensorAlertSummary kind
+     (pkg/plugin/query/sensor_summary.go) exists because of this. Every
+     future KPI row (alerts counts via alertsOverview, switch port totals,
+     AP availability) should follow the same "one wide frame, one field per
+     KPI" pattern.
+
 ================================================================================
 13. REFERENCE POINTS
 ================================================================================
@@ -725,6 +894,323 @@ Q.7  Namespace rename to robknight-* at publish time — planned but not done.
      "rknightion-meraki-app" and "rknightion-meraki-datasource", rebuild,
      verify, ship. Watch for the two constants in
      src/scene-helpers/datasource.ts and the provisioning yaml UIDs.
+
+================================================================================
+16. API USAGE OPTIMISATION — RATE LIMITS, USER-AGENT, CACHING
+================================================================================
+
+This section captures Meraki's documented optimisation levers and the
+Grafana-side caching improvements we've deferred, so a future contributor has a
+single reading order for "make the plugin less API-hungry".
+
+Sources (verbatim in §16.6):
+  - https://developer.cisco.com/meraki/api-v1/rate-limit/
+  - https://developer.cisco.com/meraki/api-v1/user-agents-overview/
+  - https://developer.cisco.com/meraki/api-v1/action-batches-overview
+
+Cross-refs already in this file: §1.6 (rate limiter config), §1.7 (cache TTL
+table), §G.1 (per-org limits), §G.4 (freshness floor), §Q.1 / §Q.3 (distributed
+limiter / caching).
+
+--------------------------------------------------------------------------------
+16.1  MERAKI-DOCUMENTED LIMITS (authoritative numbers)
+--------------------------------------------------------------------------------
+
+Organization (our primary constraint; rate limiter keys on orgID):
+  - Steady-state: 10 requests per second per organization.
+  - Burst:        10 requests in the first second; max 30 requests in 2s.
+  - Shared across ALL API applications using the organization's API key.
+  - Exceeding -> HTTP 429 + Retry-After header. Meraki's own guidance: "Pause
+    for one or two seconds before making the next API call" and "increase wait
+    times during high-volume periods".
+
+Source IP (secondary; effectively unreachable from one Grafana instance unless
+you fan out to many orgs):
+  - 100 requests per second per source IP, shared across all clients using
+    that address.
+  - Relevant if we ever run this plugin with many orgs off one Grafana
+    instance, OR if multiple tenants share an egress IP.
+
+Current code posture (as of v0.2.0):
+  - pkg/meraki/ratelimit.go: token bucket, 10 rps, burst 20, ±10% jitter,
+    keyed on orgID. MATCHES the per-org cap.
+  - We do NOT model the IP-level 100 rps ceiling. At one instance x 10-org
+    concurrency we'd hit 100 rps total — still within the cap — but it would
+    be wise to add an OPT-IN global bucket for safety. See §16.4-G below.
+
+--------------------------------------------------------------------------------
+16.2  USER-AGENT COMPLIANCE   (P.9 is the immediate-next action item)
+--------------------------------------------------------------------------------
+
+Required format per Meraki docs:
+  "ApplicationName VendorName"
+or with version:
+  "ApplicationName/1.0 VendorName"
+
+Rules (all required, not optional):
+  - Omit all spaces, hyphens, and special characters from ApplicationName AND
+    VendorName. So "Grafana-Meraki-App" is invalid (hyphens); so is
+    "Grafana Meraki" (space in the app name).
+  - Forward slashes are reserved for version info only.
+  - Must be consistent/correct across every request from the application.
+  - "Do not omit the user agent string from any of your requests."
+
+Why it matters beyond spec compliance: Meraki states the UA "helps your
+customers and Meraki administrators monitor API interactions with their
+environments and helps build their trust." Customers can see per-app traffic
+attribution in their org's API Analytics dashboard. A compliant, versioned,
+branded UA also makes this plugin findable in Cisco's ecosystem reports.
+
+Current value: "Grafana-Meraki-App" (pkg/meraki/client.go:22,
+pkg/plugin/app.go:128). NON-COMPLIANT — hyphens.
+
+Target value: "GrafanaMerakiPlugin/<semver> rknightion"
+  - Semver pulled from a new pkg/meraki/version.go (const ClientVersion),
+    bumped each release in lockstep with CHANGELOG.md + package.json.
+  - Vendor "rknightion" matches current plugin-ID namespace; revisit when
+    §Q.7 rename to robknight-* happens (vendor token moves to "robknight").
+
+Tracked as polish item P.9 (§4). Do this before the next signed release.
+
+--------------------------------------------------------------------------------
+16.3  MERAKI-RECOMMENDED API-EFFICIENCY LEVERS
+--------------------------------------------------------------------------------
+
+Meraki's rate-limit page lists four techniques for reducing request volume.
+Status + proposed action in our plugin:
+
+  A. "Use organization-wide API endpoints instead of per-device operations."
+     Example: `getOrganizationDevices` over `getDevice`.
+     Status: ALREADY FOLLOWED. pkg/meraki/devices.go uses
+     GetOrganizationDevices(orgID); pkg/meraki/switches.go uses
+     switch/ports/statuses/bySwitch; sensors uses the org-level readings
+     endpoint. Document this as a hard rule in §2 (Code conventions) so
+     future endpoint wrappers don't regress.
+     Action: add a bullet to §2.2 / §2.7 on next doc pass — "Always prefer
+     the org-wide endpoint; per-device endpoints are last resort."
+
+  B. "Use Action Batches to bundle configuration requests."
+     Status: NOT APPLICABLE TO v0.x. The plugin is read-only today (all query
+     handlers call GET; resources.go exposes /ping, /query, /metricFind but
+     never POST/PUT/DELETE to Meraki). Action Batches are POST-only and
+     only useful when the plugin gains write capabilities.
+     Action: park. Revisit if v1+ adds "Configure from Grafana" flows (e.g.
+     an alert-rule auto-provisioner writing to Meraki webhook settings).
+
+  C. "Use getOrganizationConfigurationChanges instead of frequent polling."
+     Endpoint: GET /organizations/{orgId}/configurationChanges
+     Params: t0, t1, timespan. Cursor pagination (startingAfter/endingBefore).
+     Use case: a "Change Log" scene showing who changed what, when, across
+     the org. Replaces scenarios where a user today might poll devices or
+     networks to detect drift.
+     Proposal: add NEW query kind `ConfigurationChanges` in a future phase
+     (suggested v0.6, alongside licensing/api-usage; see §9).
+     TTL: 5m (audit log is cold; we only need near-freshness for the most
+     recent entries).
+     New files: pkg/meraki/configuration_changes.go (endpoint wrapper) +
+     pkg/plugin/query/configuration_changes.go (handler) + a scene under
+     src/pages/AuditLog/.
+
+  D. "Replace repetitive polling with change-history endpoints like
+      getOrganizationDevicesAvailabilitiesChangeHistory."
+     Endpoint: GET /organizations/{orgId}/devices/availabilities/changeHistory
+     Params: t0, t1, timespan, perPage (3-1000), startingAfter, endingBefore,
+     networkIds, serials, productTypes.
+     Use case: instead of re-reading the full availability snapshot (our
+     current DeviceAvailabilities query kind, TTL 1m), a user on a long
+     dashboard refresh interval can ask for only the *changes* since the
+     last render.
+     Proposal: add NEW query kind `DeviceAvailabilityChanges` in a future
+     phase (v0.3+ or bundled with v0.7 MG/MV phase).
+     TTL: 30s (small deltas, cheap to re-pull).
+     DO NOT replace the existing DeviceAvailabilities kind — change-history
+     is additive. Operators with short refresh intervals still want the
+     snapshot; operators building "device flaps over 24h" panels want the
+     changeHistory feed.
+     New files: add GetOrganizationDevicesAvailabilitiesChangeHistory() to
+     pkg/meraki/devices.go (supports Link header AND startingAfter cursor —
+     extend pagination.go if change-history endpoints prefer the cursor
+     variant; verify against a live org before coding).
+
+  E. "Monitor actual usage via API Analytics in the Dashboard."
+     Status: user-facing guidance, not a plugin change.
+     Action: README addition — "After deploying, watch
+     https://dashboard.meraki.com/ -> your org -> API & Webhooks -> API
+     requests to see per-app traffic. Our plugin reports as
+     GrafanaMerakiPlugin/<semver> rknightion once P.9 ships."
+
+--------------------------------------------------------------------------------
+16.4  CACHING + REQUEST-HYGIENE IMPROVEMENTS
+--------------------------------------------------------------------------------
+
+Current state (pkg/meraki/cache.go):
+  - TTLCache: golang-lru/v2 + per-entry expiry.
+  - 2048-entry LRU shared across every endpoint, every org.
+  - Per-kind TTLs enumerated in §1.7.
+  - Keyed on sha256(orgID + path + sorted params).
+  - Scope: per plugin-instance, in-memory. No Redis, no cross-replica share.
+
+Improvements to consider, in priority order:
+
+  A. Singleflight / request coalescing.
+     Problem: when a user opens a dashboard with 5 panels all querying
+     getOrganizationDevices for the same org, we fire 5 concurrent HTTP
+     requests because the cache is checked per-request. Only AFTER the first
+     one lands does the TTL prevent duplicate requests.
+     Fix: wrap Client.Get / Client.GetAll in golang.org/x/sync/singleflight.
+     Key = the existing CacheKey(orgID, path, params). Result: N concurrent
+     lookups for the same key share ONE in-flight request.
+     Estimated reduction: the worst offender (Home page, 6+ panels on
+     initial load, all hitting Organizations / Devices / Alerts) goes from
+     ~15 requests to ~3-4 on a cold cache. On a warm cache: no change.
+     Files: pkg/meraki/client.go (wrap Get / GetAll + add a per-Client
+     singleflight.Group), pkg/meraki/client_test.go (table test asserting N
+     parallel Get calls land in 1 HTTP round-trip when keys match).
+     Dep add: golang.org/x/sync (already transitively in go.mod? verify
+     before adding).
+     Priority: HIGH — single biggest win for typical dashboard load.
+
+  B. Cache-key jitter on TTL (avoid thundering-herd at expiry).
+     Problem: every Organizations cache entry set at roughly the same time
+     expires at the same time, so the next dashboard refresh after 1h
+     stampedes ALL handlers in parallel.
+     Fix: when setting a TTL, randomise within ±10% of the configured value.
+     Pairs naturally with the rate-limiter jitter (§1.6).
+     Files: pkg/meraki/cache.go:Set (wrap ttl with applyJitter before
+     computing expires).
+     Priority: MEDIUM — mitigates a specific failure mode but singleflight
+     (16.4-A) addresses the same root cause with bigger payoff.
+
+  C. Stale-while-revalidate (SWR).
+     Problem: when a TTL expires mid-dashboard-refresh, the user sees a
+     spinner while we re-fetch. For high-cardinality slow endpoints
+     (sensor history, channelUtil history), this stings.
+     Fix: expose a "stale_grace" window alongside TTL. While t is between
+     (expires, expires+stale_grace), serve the cached value immediately AND
+     fire an async refresh. After stale_grace, fall back to a synchronous
+     fetch.
+     Files: pkg/meraki/cache.go (new Entry.StaleUntil + Cache.GetStale
+     method returning (value, stale bool, ok bool)); client.go (refactor
+     Get / GetAll to take a staleGrace param; dispatch refresh in a goroutine
+     gated by singleflight from 16.4-A so we don't stampede the refresh).
+     Per-kind stale_grace proposals:
+       Organizations:                1h +  30m stale
+       Networks:                    15m +  10m stale
+       Devices / DeviceStatusOverv:  5m +   2m stale
+       SensorReadingsHistory:        1m +  30s stale
+       Alerts:                      30s +  15s stale
+     Priority: MEDIUM-HIGH — dashboard "snappiness" improvement without
+     extra API load if combined with singleflight.
+
+  D. Negative caching of 404 / 412.
+     Problem: if a query refers to a deleted network, every re-render pays
+     a full API round-trip for the 404.
+     Fix: cache negative responses with a short TTL (30s-60s).
+     Scope: only 404 for resource-not-found shapes. Do NOT cache 401/403
+     (user may rotate the key) or 5xx (transient). 412 from our own
+     /query / /metricFind (API key unset) is already handled by
+     ConfigGuard on the frontend — skip.
+     Files: pkg/meraki/client.go:Do (on terminal non-2xx, write a negative
+     entry in cache tagged as such), cache.go (add tri-state getter).
+     Priority: LOW — edge case. Only worth it after telemetry shows repeat
+     404s.
+
+  E. Cache size tuning + per-org eviction fairness.
+     Current: a single 2048-entry LRU for the whole plugin instance.
+     Concern: a big-org operator with 50 networks + 500 devices evicts a
+     small-org operator's entries before their TTL fires.
+     Fix: partition the cache PER ORG (map[string]*TTLCache), each capped at
+     e.g. 512 entries. OR keep one LRU but segment by orgID prefix and
+     evict from the largest segment first.
+     Files: pkg/meraki/cache.go (new partitioned type) OR app.go (wire a
+     map instead of a single cache).
+     Priority: LOW — revisit only if operators report multi-org fairness
+     issues.
+
+  F. Optional external cache for multi-replica deployments.
+     See §Q.3 (currently "not planned for v0.x"). Same decision stands —
+     rely on 429 + Retry-After across replicas, plus the sharedFraction
+     knob. Revisit only if operators report cold-cache stampedes at scale.
+
+  G. Opt-in IP-level rate limiter.
+     See §16.1 above. Only relevant when multiple orgs fan out from one
+     instance (aggregate > 100 rps on a single egress IP).
+     Fix: add a SECOND token bucket keyed on the literal "ip" with
+     RequestsPerSecond=100, Burst=200, SharedFraction=sharedFraction. Both
+     the per-org and the per-ip limiter must grant before Do() fires the
+     request.
+     Files: pkg/meraki/ratelimit.go (accept multiple bucket keys per
+     Acquire) OR layer a second RateLimiter in client.go.
+     Priority: LOW-DEFER — only useful for multi-tenant / many-org
+     deployments.
+
+--------------------------------------------------------------------------------
+16.5  GRAFANA-SIDE CACHING INTERACTIONS
+--------------------------------------------------------------------------------
+
+Grafana itself provides query result caching (Enterprise) and backend plugin
+caching primitives. Worth noting BEFORE we reach for them:
+
+  - Grafana's backend plugin cache (data.Cache in the SDK) caches the final
+    data.Frames, not raw responses. It's complementary to our TTLCache, not
+    a replacement — we cache BEFORE frame assembly so a single cache entry
+    can feed different frame shapes (e.g. stat vs timeseries). No change
+    proposed.
+  - Grafana query result caching (Enterprise) sits in FRONT of the plugin.
+    When enabled, the plugin's Query() isn't called until the Grafana-level
+    TTL expires. Our TTLs remain correct but effective TTL becomes
+    max(our_ttl, grafana_ttl). Document this in README once §16.4
+    improvements ship so operators know not to double-tune TTLs.
+  - "Query result reuse via instance manager" — NewApp() is called per
+    plugin instance; Dispose() on rebuild. Our cache lifetime matches
+    instance lifetime. Grafana may rebuild instances on setting changes,
+    flushing our cache — that's EXPECTED and desirable (settings changes
+    can invalidate key hashes).
+
+--------------------------------------------------------------------------------
+16.6  VERBATIM SOURCES (for future re-reading without another web fetch)
+--------------------------------------------------------------------------------
+
+Rate-limit page (https://developer.cisco.com/meraki/api-v1/rate-limit/):
+  - "10 requests per second per organization."
+  - "10 requests in the first second (max 30 requests in 2s)."
+  - "100 requests per second" per source IP, "shared among all clients
+     using that address."
+  - Org cap is "shared across all API applications using the organization's
+     API key."
+  - 429 response: "The response includes a Retry-After header indicating
+     wait duration before the next request."
+  - Recommended handling: "Pause for one or two seconds before making the
+     next API call" and "increase wait times during high-volume periods."
+  - Action Batches "bundle multiple configuration requests into a single
+     transaction" — "bulk POST, PUT, and DELETE operations."
+  - "Use organization-wide API endpoints instead of per-device operations"
+     (example given: getOrganizationDevices vs getDevice).
+  - "Implement getOrganizationConfigurationChanges to retrieve snapshots
+     instead of polling frequently."
+  - "Replace repetitive polling with change-history endpoints like
+     getOrganizationDevicesAvailabilitiesChangeHistory."
+  - "Monitor actual usage via API Analytics in the dashboard."
+
+User-Agent page (https://developer.cisco.com/meraki/api-v1/user-agents-overview/):
+  - Required format: "ApplicationName VendorName" — optional with version
+    "ApplicationName/1.0 VendorName".
+  - Application and Vendor names must "omit all spaces, hyphens, and
+    special characters".
+  - "Use only forward slashes (/) for version information."
+  - Must be "consistent or correct...across your application."
+  - "Provide the user agent string in the user agent header of every API
+    request" and "Do not omit the user agent string from any of your
+    requests."
+  - Benefit: "helps your customers and Meraki administrators monitor API
+    interactions with their environments and helps build their trust."
+
+Action Batches overview
+(https://developer.cisco.com/meraki/api-v1/action-batches-overview):
+  - POST / GET / PUT / DELETE on /organizations/{orgId}/actionBatches.
+  - `confirmed` + `synchronous` flags; nested `actions[]` with
+    `operation` (create/update/delete) + `resource` + `body`.
+  - Only relevant once the plugin grows write-side features. Parked.
 
 ================================================================================
 END OF FILE

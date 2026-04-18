@@ -21,6 +21,7 @@ import {
   sensorKpiRow,
   sensorMetricCard,
 } from '../../scene-helpers/panels';
+import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 
 /**
  * Sensors overview — a dense dashboard-style view with a KPI row, one
@@ -51,6 +52,7 @@ export function sensorsScene() {
     body: new SceneFlexLayout({
       direction: 'column',
       children: [
+        configGuardFlexItem(),
         new SceneFlexItem({
           height: 120,
           body: new SceneCSSGridLayout({

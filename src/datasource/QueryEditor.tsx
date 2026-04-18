@@ -1,12 +1,15 @@
 import React, { useMemo } from 'react';
-import { QueryEditorProps, SelectableValue } from '@grafana/data';
-import { InlineField, Input, Select } from '@grafana/ui';
+import { QueryEditorProps } from '@grafana/data';
+import { Combobox, InlineField, Input, MultiCombobox } from '@grafana/ui';
 import { MerakiDataSource } from './datasource';
 import { DEFAULT_MERAKI_QUERY, MerakiDSOptions, MerakiQuery, QueryKind } from './types';
 
 type Props = QueryEditorProps<MerakiDataSource, MerakiQuery, MerakiDSOptions>;
 
-const KIND_OPTIONS: Array<SelectableValue<QueryKind>> = [
+// Option rows for the Kind picker. Combobox's value is a plain string, so we
+// don't need a SelectableValue wrapper here — the string `value` matches
+// QueryKind's string enum values directly.
+const KIND_OPTIONS: Array<{ label: string; value: QueryKind; description?: string }> = [
   { label: 'Organizations', value: QueryKind.Organizations, description: 'List organizations visible to the API key.' },
   { label: 'Networks', value: QueryKind.Networks, description: 'List networks in an organization.' },
   { label: 'Devices', value: QueryKind.Devices, description: 'List devices in an organization.' },
@@ -15,7 +18,7 @@ const KIND_OPTIONS: Array<SelectableValue<QueryKind>> = [
   { label: 'Sensor readings (history)', value: QueryKind.SensorReadingsHistory, description: 'Native timeseries of sensor metrics.' },
 ];
 
-const SENSOR_METRIC_OPTIONS: Array<SelectableValue<string>> = [
+const SENSOR_METRIC_OPTIONS: Array<{ label: string; value: string }> = [
   { label: 'Temperature', value: 'temperature' },
   { label: 'Humidity', value: 'humidity' },
   { label: 'Door', value: 'door' },
@@ -46,10 +49,10 @@ export function QueryEditor({ query, onChange, onRunQuery }: Props) {
   return (
     <div>
       <InlineField label="Kind" labelWidth={18} tooltip="What type of Meraki query to run.">
-        <Select
+        <Combobox<QueryKind>
           options={KIND_OPTIONS}
-          value={KIND_OPTIONS.find((o) => o.value === effective.kind) ?? KIND_OPTIONS[0]}
-          onChange={(v) => handleCommit({ kind: (v.value as QueryKind) ?? QueryKind.Organizations })}
+          value={effective.kind}
+          onChange={(opt) => handleCommit({ kind: opt?.value ?? QueryKind.Organizations })}
           width={32}
         />
       </InlineField>
@@ -88,17 +91,13 @@ export function QueryEditor({ query, onChange, onRunQuery }: Props) {
 
       {showMetricsField && (
         <InlineField label="Metrics" labelWidth={18} tooltip="One or more sensor metrics.">
-          <Select
-            isMulti
+          <MultiCombobox<string>
             options={SENSOR_METRIC_OPTIONS}
-            value={SENSOR_METRIC_OPTIONS.filter((o) =>
-              (effective.metrics as string[] | undefined)?.includes(o.value as string)
-            )}
-            onChange={(v) => {
-              const values = v as unknown as Array<SelectableValue<string>>;
-              const metrics = values
-                .map((s) => s.value)
-                .filter((s): s is string => Boolean(s));
+            value={(effective.metrics as string[] | undefined) ?? []}
+            onChange={(selected) => {
+              const metrics = selected
+                .map((o) => o.value)
+                .filter((v): v is string => Boolean(v));
               handleCommit({ metrics: metrics as MerakiQuery['metrics'] });
             }}
             width={48}

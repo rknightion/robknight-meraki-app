@@ -59,7 +59,7 @@ var metricLabel = map[string]string{
 // /sensor/readings/latest feed. Long-format is kept here on purpose — the UI
 // uses this frame directly as a table (inventory, "last seen" column) and
 // for client-side KPI aggregations.
-func handleSensorReadingsLatest(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange) ([]*data.Frame, error) {
+func handleSensorReadingsLatest(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("sensorReadingsLatest: orgId is required")
 	}
@@ -136,7 +136,12 @@ type sensorHistoryKey struct {
 // Time-range resolution: we ask meraki.KnownEndpointRanges to quantize the
 // panel's (from, to, maxDataPoints) tuple to the nearest Meraki-allowed
 // bucket before sending, otherwise the API rejects with 400.
-func handleSensorReadingsHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange) ([]*data.Frame, error) {
+//
+// Label mode: when opts.LabelMode == "name", the `DisplayNameFromDS` on each
+// frame resolves to the device name (via a cached /devices lookup) instead
+// of the raw serial. Blank names fall back to the serial so we never show
+// an empty legend entry.
+func handleSensorReadingsHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("sensorReadingsHistory: orgId is required")
 	}
@@ -151,23 +156,31 @@ func handleSensorReadingsHistory(ctx context.Context, client *meraki.Client, q M
 	if !ok {
 		return nil, fmt.Errorf("sensorReadingsHistory: missing endpoint spec")
 	}
-	// maxDataPoints is not on the wire yet for history — we pass the widest
-	// allowed bucket (largest resolution) so Meraki chooses a reasonable
-	// default. The caller can override via intervalMs in future phases.
-	window, err := spec.Resolve(from, to, 0, nil)
+	// Quantize resolution to panel width (MaxDataPoints).
+	window, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
 	if err != nil {
 		return nil, fmt.Errorf("sensorReadingsHistory: resolve window: %w", err)
 	}
 
-	opts := meraki.SensorReadingsHistoryOptions{
+	reqOpts := meraki.SensorReadingsHistoryOptions{
 		NetworkIDs: q.NetworkIDs,
 		Serials:    q.Serials,
 		Metrics:    q.Metrics,
 		Window:     &window,
 	}
-	points, err := client.GetOrganizationSensorReadingsHistory(ctx, q.OrgID, opts, sensorHistoryTTL)
+	points, err := client.GetOrganizationSensorReadingsHistory(ctx, q.OrgID, reqOpts, sensorHistoryTTL)
 	if err != nil {
 		return nil, err
+	}
+
+	// If the user opted into name-based labels, resolve serial→name from the
+	// already-cached /devices response. A failure here is non-fatal: we log
+	// via the returned frame notice path (caller) and fall back to serials.
+	var nameBySerial map[string]string
+	if opts.LabelMode == "name" {
+		if names, lookupErr := resolveDeviceNames(ctx, client, q.OrgID, "sensor"); lookupErr == nil {
+			nameBySerial = names
+		}
 	}
 
 	// Group by (serial, metric) so each series ends up in its own frame.
@@ -245,8 +258,14 @@ func handleSensorReadingsHistory(ctx context.Context, client *meraki.Client, q M
 		// NOT template-substitute it, so we compose the label here rather than
 		// emit `{{serial}}` placeholders. The labels are still attached to the
 		// field so panels can add their own override rules if needed.
+		displayName := k.serial
+		if nameBySerial != nil {
+			if name := nameBySerial[k.serial]; name != "" {
+				displayName = name
+			}
+		}
 		valueField.Config = &data.FieldConfig{
-			DisplayNameFromDS: k.serial,
+			DisplayNameFromDS: displayName,
 		}
 
 		frames = append(frames, data.NewFrame("sensor_readings_history",

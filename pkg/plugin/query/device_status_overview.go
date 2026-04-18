@@ -18,7 +18,7 @@ const deviceStatusTTL = 1 * time.Minute
 // handleDeviceStatusOverview emits one row per status bucket (online,
 // alerting, offline, dormant). The panel side typically renders this as a
 // stat/bar panel keyed on status.
-func handleDeviceStatusOverview(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange) ([]*data.Frame, error) {
+func handleDeviceStatusOverview(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("deviceStatusOverview: orgId is required")
 	}

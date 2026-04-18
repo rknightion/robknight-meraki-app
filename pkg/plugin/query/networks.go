@@ -19,7 +19,7 @@ const networksTTL = 15 * time.Minute
 // handleNetworks emits one row per network under the requested org. We fold
 // multi-valued fields (productTypes, tags) into comma-joined strings so the
 // frame stays flat and table-friendly.
-func handleNetworks(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange) ([]*data.Frame, error) {
+func handleNetworks(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("networks: orgId is required")
 	}

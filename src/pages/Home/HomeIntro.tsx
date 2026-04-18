@@ -2,7 +2,8 @@ import React from 'react';
 import { css } from '@emotion/css';
 import { GrafanaTheme2 } from '@grafana/data';
 import { LinkButton, useStyles2 } from '@grafana/ui';
-import { PLUGIN_ID } from '../../constants';
+import { ROUTES } from '../../constants';
+import { prefixRoute } from '../../utils/utils.routing';
 import { testIds } from '../../components/testIds';
 
 export function HomeIntro() {
@@ -20,7 +21,7 @@ export function HomeIntro() {
         estate.
       </p>
       <div className={styles.actions}>
-        <LinkButton href={`/plugins/${PLUGIN_ID}`} icon="cog" variant="primary">
+        <LinkButton href={prefixRoute(ROUTES.Configuration)} icon="cog" variant="primary">
           Configure API key
         </LinkButton>
         <LinkButton

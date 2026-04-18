@@ -7,6 +7,18 @@ import (
 	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/query"
 )
 
+// pluginID is the app plugin's manifest id. Duplicated from plugin.json / main.go
+// because backend code doesn't have easy access to the manifest at request
+// time. Update here when the signed-release rename to `robknight-meraki-app`
+// happens (todos.txt Q.7).
+const pluginID = "rknightion-meraki-app"
+
+// pluginPathPrefix is the full Grafana route prefix for this plugin's app
+// shell. Threaded into `query.Options.PluginPathPrefix` so handlers that emit
+// `drilldownUrl` columns can compose full URLs like
+// `/a/<plugin>/access-points/<serial>`.
+var pluginPathPrefix = "/a/" + pluginID
+
 // handlePing is a lightweight liveness probe useful during development.
 func (a *App) handlePing(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -32,7 +44,10 @@ func (a *App) handleQuery(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp, err := query.Handle(req.Context(), a.client, &body)
+	resp, err := query.Handle(req.Context(), a.client, &body, query.Options{
+		LabelMode:        string(a.settings.LabelMode),
+		PluginPathPrefix: pluginPathPrefix,
+	})
 	if err != nil {
 		a.logger.Warn("query dispatch failed", "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

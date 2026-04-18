@@ -31,19 +31,30 @@ type App struct {
 	logger   log.Logger
 }
 
+// LabelMode controls how sensor series are labeled on timeseries panels.
+// Must match src/types.ts SensorLabelMode.
+type LabelMode string
+
+const (
+	LabelModeSerial LabelMode = "serial"
+	LabelModeName   LabelMode = "name"
+)
+
 // Settings is the merged non-secret + secret configuration for a plugin instance.
 type Settings struct {
 	BaseURL        string
 	SharedFraction float64
 	APIKey         string
 	IsApiKeySet    bool
+	LabelMode      LabelMode
 }
 
 // appJSONData mirrors src/types.ts AppJsonData.
 type appJSONData struct {
-	BaseURL        string  `json:"baseUrl,omitempty"`
-	SharedFraction float64 `json:"sharedFraction,omitempty"`
-	IsAPIKeySet    bool    `json:"isApiKeySet,omitempty"`
+	BaseURL        string    `json:"baseUrl,omitempty"`
+	SharedFraction float64   `json:"sharedFraction,omitempty"`
+	IsAPIKeySet    bool      `json:"isApiKeySet,omitempty"`
+	LabelMode      LabelMode `json:"labelMode,omitempty"`
 }
 
 // NewApp is the factory invoked by Grafana for each plugin instance.
@@ -83,6 +94,12 @@ func loadSettings(s backend.AppInstanceSettings) (Settings, error) {
 		settings.BaseURL = jd.BaseURL
 		settings.SharedFraction = jd.SharedFraction
 		settings.IsApiKeySet = jd.IsAPIKeySet
+		settings.LabelMode = jd.LabelMode
+	}
+	if settings.LabelMode != LabelModeName {
+		// Default to serial — matches the current shipped behaviour and keeps
+		// the legend short for users who haven't touched the setting.
+		settings.LabelMode = LabelModeSerial
 	}
 	if v, ok := s.DecryptedSecureJSONData["merakiApiKey"]; ok {
 		settings.APIKey = v

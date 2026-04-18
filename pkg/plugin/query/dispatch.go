@@ -28,9 +28,64 @@ const (
 	KindNetworks              QueryKind = "networks"
 	KindDevices               QueryKind = "devices"
 	KindDeviceStatusOverview  QueryKind = "deviceStatusOverview"
+	KindDeviceAvailabilities  QueryKind = "deviceAvailabilities"
 	KindSensorReadingsLatest  QueryKind = "sensorReadingsLatest"
 	KindSensorReadingsHistory QueryKind = "sensorReadingsHistory"
 	KindSensorAlertSummary    QueryKind = "sensorAlertSummary"
+
+	// Wireless (MR) — phase 5.
+	KindWirelessChannelUtil QueryKind = "wirelessChannelUtil"
+	KindWirelessUsage       QueryKind = "wirelessUsage"
+	KindNetworkSsids        QueryKind = "networkSsids"
+	KindApClients           QueryKind = "apClients"
+
+	// Alerts (assurance) — phase 6.
+	KindAlerts         QueryKind = "alerts"
+	KindAlertsOverview QueryKind = "alertsOverview"
+
+	// Switch (MS) — phase 7.
+	KindSwitchPorts              QueryKind = "switchPorts"
+	KindSwitchPortConfig         QueryKind = "switchPortConfig"
+	KindSwitchPortPacketCounters QueryKind = "switchPortPacketCounters"
+
+	// Appliance (MX) — phase 8.
+	KindApplianceUplinkStatuses  QueryKind = "applianceUplinkStatuses"
+	KindApplianceUplinksOverview QueryKind = "applianceUplinksOverview"
+	KindApplianceVpnStatuses     QueryKind = "applianceVpnStatuses"
+	KindApplianceVpnStats        QueryKind = "applianceVpnStats"
+	KindDeviceUplinksLossLatency QueryKind = "deviceUplinksLossLatency"
+	KindAppliancePortForwarding  QueryKind = "appliancePortForwarding"
+	KindApplianceSettings        QueryKind = "applianceSettings"
+
+	// Insights (licensing / API usage / clients) — phase 9.
+	KindLicensesOverview      QueryKind = "licensesOverview"
+	KindLicensesList          QueryKind = "licensesList"
+	KindApiRequestsOverview   QueryKind = "apiRequestsOverview"
+	KindApiRequestsByInterval QueryKind = "apiRequestsByInterval"
+	KindClientsOverview       QueryKind = "clientsOverview"
+	KindTopClients            QueryKind = "topClients"
+	KindTopDevices            QueryKind = "topDevices"
+	KindTopDeviceModels       QueryKind = "topDeviceModels"
+	KindTopSsids              QueryKind = "topSsids"
+	KindTopSwitchesByEnergy   QueryKind = "topSwitchesByEnergy"
+	KindTopNetworksByStatus   QueryKind = "topNetworksByStatus"
+
+	// Camera (MV) — phase 10.
+	KindCameraOnboarding           QueryKind = "cameraOnboarding"
+	KindCameraAnalyticsOverview    QueryKind = "cameraAnalyticsOverview"
+	KindCameraAnalyticsLive        QueryKind = "cameraAnalyticsLive"
+	KindCameraAnalyticsZones       QueryKind = "cameraAnalyticsZones"
+	KindCameraAnalyticsZoneHistory QueryKind = "cameraAnalyticsZoneHistory"
+	KindCameraRetentionProfiles    QueryKind = "cameraRetentionProfiles"
+
+	// Cellular Gateway (MG) — phase 10.
+	KindMgUplinks        QueryKind = "mgUplinks"
+	KindMgPortForwarding QueryKind = "mgPortForwarding"
+	KindMgLan            QueryKind = "mgLan"
+	KindMgConnectivity   QueryKind = "mgConnectivity"
+
+	// Network events — phase 11.
+	KindNetworkEvents QueryKind = "networkEvents"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -52,6 +107,9 @@ type MerakiQuery struct {
 type TimeRange struct {
 	From int64 `json:"from"` // unix ms
 	To   int64 `json:"to"`   // unix ms
+	// MaxDataPoints mirrors QueryRequest.MaxDataPoints so handlers can
+	// quantize resolution to the panel width.
+	MaxDataPoints int64 `json:"maxDataPoints,omitempty"`
 }
 
 // QueryRequest is the POST body sent to /resources/query.
@@ -76,10 +134,10 @@ type MetricFindRequest struct {
 }
 
 // MetricFindValue is one {text, value} pair returned by a variable query.
-// Value is interface{} so we can return strings (most common) or numbers.
+// Value is any so we can return strings (most common) or numbers.
 type MetricFindValue struct {
-	Text  string      `json:"text"`
-	Value interface{} `json:"value,omitempty"`
+	Text  string `json:"text"`
+	Value any    `json:"value,omitempty"`
 }
 
 // MetricFindResponse is the wire shape returned to the datasource.
@@ -87,11 +145,25 @@ type MetricFindResponse struct {
 	Values []MetricFindValue `json:"values"`
 }
 
+// Options are the non-per-query settings the dispatcher needs — mostly
+// plugin-level preferences (like sensor label mode) that don't belong on the
+// MerakiQuery wire shape but still influence how frames are rendered.
+type Options struct {
+	// LabelMode selects how sensor series are labeled. Values match
+	// pkg/plugin.LabelMode; unknown values fall back to "serial".
+	LabelMode string
+	// PluginPathPrefix is the full `/a/<plugin-id>` prefix used when
+	// handlers compute cross-family device-detail drilldown URLs. Populated
+	// from plugin settings at request time so the Go code doesn't hard-code
+	// the plugin ID (the `robknight-*` rename is a real future possibility).
+	PluginPathPrefix string
+}
+
 // handlerFn is the common signature every per-kind handler implements. Handlers return one or
 // more frames so that long-format data (e.g. sensor history) can be split into per-series
 // frames with labels — Grafana's timeseries panel infers series from labeled value fields, so
 // a single long-format frame renders as a flat table instead of a chart.
-type handlerFn func(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange) ([]*data.Frame, error)
+type handlerFn func(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error)
 
 // handlers maps a QueryKind to its implementation. Kept in one place so the
 // dispatcher logic stays tiny.
@@ -100,9 +172,56 @@ var handlers = map[QueryKind]handlerFn{
 	KindNetworks:              handleNetworks,
 	KindDevices:               handleDevices,
 	KindDeviceStatusOverview:  handleDeviceStatusOverview,
+	KindDeviceAvailabilities:  handleDeviceAvailabilities,
 	KindSensorReadingsLatest:  handleSensorReadingsLatest,
 	KindSensorReadingsHistory: handleSensorReadingsHistory,
 	KindSensorAlertSummary:    handleSensorAlertSummary,
+
+	KindWirelessChannelUtil: handleWirelessChannelUtil,
+	KindWirelessUsage:       handleWirelessUsage,
+	KindNetworkSsids:        handleNetworkSsids,
+	KindApClients:           handleApClients,
+
+	KindAlerts:         handleAlerts,
+	KindAlertsOverview: handleAlertsOverview,
+
+	KindSwitchPorts:              handleSwitchPorts,
+	KindSwitchPortConfig:         handleSwitchPortConfig,
+	KindSwitchPortPacketCounters: handleSwitchPortPacketCounters,
+
+	KindApplianceUplinkStatuses:  handleApplianceUplinkStatuses,
+	KindApplianceUplinksOverview: handleApplianceUplinksOverview,
+	KindApplianceVpnStatuses:     handleApplianceVpnStatuses,
+	KindApplianceVpnStats:        handleApplianceVpnStats,
+	KindDeviceUplinksLossLatency: handleDeviceUplinksLossLatency,
+	KindAppliancePortForwarding:  handleAppliancePortForwarding,
+	KindApplianceSettings:        handleApplianceSettings,
+
+	KindLicensesOverview:      handleLicensesOverview,
+	KindLicensesList:          handleLicensesList,
+	KindApiRequestsOverview:   handleApiRequestsOverview,
+	KindApiRequestsByInterval: handleApiRequestsByInterval,
+	KindClientsOverview:       handleClientsOverview,
+	KindTopClients:            handleTopClients,
+	KindTopDevices:            handleTopDevices,
+	KindTopDeviceModels:       handleTopDeviceModels,
+	KindTopSsids:              handleTopSsids,
+	KindTopSwitchesByEnergy:   handleTopSwitchesByEnergy,
+	KindTopNetworksByStatus:   handleTopNetworksByStatus,
+
+	KindCameraOnboarding:           handleCameraOnboarding,
+	KindCameraAnalyticsOverview:    handleCameraAnalyticsOverview,
+	KindCameraAnalyticsLive:        handleCameraAnalyticsLive,
+	KindCameraAnalyticsZones:       handleCameraAnalyticsZones,
+	KindCameraAnalyticsZoneHistory: handleCameraAnalyticsZoneHistory,
+	KindCameraRetentionProfiles:    handleCameraRetentionProfiles,
+
+	KindMgUplinks:        handleMgUplinks,
+	KindMgPortForwarding: handleMgPortForwarding,
+	KindMgLan:            handleMgLan,
+	KindMgConnectivity:   handleMgConnectivity,
+
+	KindNetworkEvents: handleNetworkEvents,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and
@@ -110,7 +229,7 @@ var handlers = map[QueryKind]handlerFn{
 // notice on a synthetic error frame (named "<refId>_error") so one bad query
 // does not blank the whole panel. Returns an error only when the request
 // envelope itself is malformed (nil req, unknown kind, etc.).
-func Handle(ctx context.Context, client *meraki.Client, req *QueryRequest) (*QueryResponse, error) {
+func Handle(ctx context.Context, client *meraki.Client, req *QueryRequest, opts Options) (*QueryResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("query: nil request")
 	}
@@ -118,11 +237,18 @@ func Handle(ctx context.Context, client *meraki.Client, req *QueryRequest) (*Que
 		return nil, fmt.Errorf("query: meraki client not configured")
 	}
 	resp := &QueryResponse{Frames: make([]json.RawMessage, 0, len(req.Queries))}
+	// Propagate the panel's MaxDataPoints into the per-query TimeRange so handlers
+	// that quantize resolution (e.g. sensor history) can honour the panel width.
+	tr := TimeRange{
+		From:          req.Range.From,
+		To:            req.Range.To,
+		MaxDataPoints: req.MaxDataPoints,
+	}
 	for _, q := range req.Queries {
 		if q.Hide {
 			continue
 		}
-		frames, err := runOne(ctx, client, q, req.Range)
+		frames, err := runOne(ctx, client, q, tr, opts)
 		if len(frames) == 0 {
 			// Handler returned (nil/empty, err) — manufacture an error frame so
 			// the panel still gets a visible notice rather than a blank
@@ -161,12 +287,12 @@ func Handle(ctx context.Context, client *meraki.Client, req *QueryRequest) (*Que
 
 // runOne looks up the handler for q.Kind and invokes it. Unknown kinds become
 // errors so the caller can turn them into frame notices.
-func runOne(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange) ([]*data.Frame, error) {
+func runOne(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
 	h, ok := handlers[q.Kind]
 	if !ok {
 		return nil, fmt.Errorf("unknown query kind %q", q.Kind)
 	}
-	return h(ctx, client, q, tr)
+	return h(ctx, client, q, tr, opts)
 }
 
 // HandleMetricFind runs a single variable-hydration query. Unlike Handle,

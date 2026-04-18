@@ -68,6 +68,37 @@ func runMetricFind(ctx context.Context, client *meraki.Client, q MerakiQuery) (*
 		}
 		return &MetricFindResponse{Values: values}, nil
 
+	case KindCameraAnalyticsZones:
+		// Zone enumeration is per-camera (the /zones endpoint is device-scoped),
+		// so the caller must supply a serial. We return one {text, value} per
+		// configured zone where the text is "<type>: <label>" — the Meraki
+		// zone object carries both — and the value is the raw zone id used in
+		// subsequent /zones/{zoneId}/history calls.
+		if len(q.Serials) == 0 || q.Serials[0] == "" {
+			return nil, fmt.Errorf("metricFind cameraAnalyticsZones: serial is required")
+		}
+		zones, err := client.GetDeviceCameraAnalyticsZones(ctx, q.Serials[0], cameraAnalyticsZonesTTL)
+		if err != nil {
+			return nil, err
+		}
+		values := make([]MetricFindValue, 0, len(zones))
+		for _, z := range zones {
+			// Compose a human-friendly label. When either `type` or `label`
+			// is blank we still want a non-empty text entry so the variable
+			// picker isn't a list of colons — fall back to the zoneId.
+			text := z.Type
+			if text != "" && z.Label != "" {
+				text = text + ": " + z.Label
+			} else if text == "" {
+				text = z.Label
+			}
+			if text == "" {
+				text = z.ZoneID
+			}
+			values = append(values, MetricFindValue{Text: text, Value: z.ZoneID})
+		}
+		return &MetricFindResponse{Values: values}, nil
+
 	default:
 		return nil, fmt.Errorf("metricFind: unsupported kind %q", q.Kind)
 	}

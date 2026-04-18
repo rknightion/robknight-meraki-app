@@ -145,4 +145,52 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 	"organizations/{organizationId}/devices/uplinksLossAndLatency": {
 		MaxTimespan: 5 * time.Minute,
 	},
+	// Phase 8 — appliance VPN stats aggregates latency/jitter/loss per peer
+	// over the window; no resolution parameter.
+	"organizations/{organizationId}/appliance/vpn/stats": {
+		MaxTimespan: 31 * 24 * time.Hour,
+	},
+	// Phase 9 — organization client overview.
+	"organizations/{organizationId}/clients/overview": {
+		MaxTimespan: 31 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			2 * time.Hour,
+			24 * time.Hour,
+			7 * 24 * time.Hour,
+			30 * 24 * time.Hour, // 2629746s = ~30.44 days (monthly bucket)
+		},
+	},
+	// Phase 9 — API requests byInterval chart.
+	"organizations/{organizationId}/apiRequests/overview/responseCodes/byInterval": {
+		MaxTimespan: 31 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			2 * time.Minute,
+			1 * time.Hour,
+			4 * time.Hour,
+			6 * time.Hour,
+		},
+	},
+	// Phase 9 — top-N usage summaries.
+	"organizations/{organizationId}/summary/top/clients/byUsage": {
+		MaxTimespan: 186 * 24 * time.Hour,
+	},
+	"organizations/{organizationId}/summary/top/devices/byUsage": {
+		MaxTimespan: 186 * 24 * time.Hour,
+	},
+	"organizations/{organizationId}/summary/top/devices/models/byUsage": {
+		MaxTimespan: 186 * 24 * time.Hour,
+	},
+	"organizations/{organizationId}/summary/top/ssids/byUsage": {
+		MaxTimespan: 186 * 24 * time.Hour,
+	},
+	// Top switches by energy requires a 25-minute floor per spec; Resolve()
+	// doesn't enforce a floor, handlers should use a 24h default when the
+	// user-picked window is shorter.
+	"organizations/{organizationId}/summary/top/switches/byEnergyUsage": {
+		MaxTimespan: 186 * 24 * time.Hour,
+	},
+	// Phase 10 — camera analytics (per-device).
+	"devices/{serial}/camera/analytics/overview": {
+		MaxTimespan: 7 * 24 * time.Hour,
+	},
 }

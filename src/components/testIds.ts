@@ -2,8 +2,10 @@ export const testIds = {
   appConfig: {
     container: 'data-testid ac-container',
     apiKey: 'data-testid ac-api-key',
+    region: 'data-testid ac-region',
     baseUrl: 'data-testid ac-base-url',
     sharedFraction: 'data-testid ac-shared-fraction',
+    labelMode: 'data-testid ac-label-mode',
     submit: 'data-testid ac-submit',
     testConnection: 'data-testid ac-test-connection',
     connectionResult: 'data-testid ac-connection-result',

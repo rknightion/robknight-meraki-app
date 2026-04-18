@@ -11,9 +11,64 @@ export enum QueryKind {
   Networks = 'networks',
   Devices = 'devices',
   DeviceStatusOverview = 'deviceStatusOverview',
+  DeviceAvailabilities = 'deviceAvailabilities',
   SensorReadingsLatest = 'sensorReadingsLatest',
   SensorReadingsHistory = 'sensorReadingsHistory',
   SensorAlertSummary = 'sensorAlertSummary',
+
+  /* Wireless (MR) — phase 5. */
+  WirelessChannelUtil = 'wirelessChannelUtil',
+  WirelessUsage = 'wirelessUsage',
+  NetworkSsids = 'networkSsids',
+  ApClients = 'apClients',
+
+  /* Alerts (assurance) — phase 6. */
+  Alerts = 'alerts',
+  AlertsOverview = 'alertsOverview',
+
+  /* Switch (MS) — phase 7. */
+  SwitchPorts = 'switchPorts',
+  SwitchPortConfig = 'switchPortConfig',
+  SwitchPortPacketCounters = 'switchPortPacketCounters',
+
+  /* Appliance (MX) — phase 8. */
+  ApplianceUplinkStatuses = 'applianceUplinkStatuses',
+  ApplianceUplinksOverview = 'applianceUplinksOverview',
+  ApplianceVpnStatuses = 'applianceVpnStatuses',
+  ApplianceVpnStats = 'applianceVpnStats',
+  DeviceUplinksLossLatency = 'deviceUplinksLossLatency',
+  AppliancePortForwarding = 'appliancePortForwarding',
+  ApplianceSettings = 'applianceSettings',
+
+  /* Insights (licensing / API usage / clients) — phase 9. */
+  LicensesOverview = 'licensesOverview',
+  LicensesList = 'licensesList',
+  ApiRequestsOverview = 'apiRequestsOverview',
+  ApiRequestsByInterval = 'apiRequestsByInterval',
+  ClientsOverview = 'clientsOverview',
+  TopClients = 'topClients',
+  TopDevices = 'topDevices',
+  TopDeviceModels = 'topDeviceModels',
+  TopSsids = 'topSsids',
+  TopSwitchesByEnergy = 'topSwitchesByEnergy',
+  TopNetworksByStatus = 'topNetworksByStatus',
+
+  /* Camera (MV) — phase 10. */
+  CameraOnboarding = 'cameraOnboarding',
+  CameraAnalyticsOverview = 'cameraAnalyticsOverview',
+  CameraAnalyticsLive = 'cameraAnalyticsLive',
+  CameraAnalyticsZones = 'cameraAnalyticsZones',
+  CameraAnalyticsZoneHistory = 'cameraAnalyticsZoneHistory',
+  CameraRetentionProfiles = 'cameraRetentionProfiles',
+
+  /* Cellular Gateway (MG) — phase 10. */
+  MgUplinks = 'mgUplinks',
+  MgPortForwarding = 'mgPortForwarding',
+  MgLan = 'mgLan',
+  MgConnectivity = 'mgConnectivity',
+
+  /* Network events — phase 11. */
+  NetworkEvents = 'networkEvents',
 }
 
 export interface MerakiQuery extends DataQuery {

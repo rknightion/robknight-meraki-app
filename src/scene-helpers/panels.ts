@@ -545,21 +545,26 @@ export function orgNetworksTable(orgId: string): VizPanel {
 }
 
 /**
- * Devices table scoped to one org. `serial` drills into the sensor detail
- * when the device is an MT (filter is purely presentational — non-sensor
- * rows still show but their link won't find a sensor detail scene).
+ * Devices table scoped to one org. `serial` drills into the per-family
+ * detail page derived from the row's own productType — the backend emits
+ * a `drilldownUrl` column for every row, so MR serials route to the
+ * access-point page, MS to switches, MV to cameras, etc., without any
+ * frontend template branching.
+ *
+ * The `drilldownUrl` column is hidden from the operator-facing view; it's
+ * consumed only by the serial-column link.
  */
 export function orgDevicesTable(orgId: string): VizPanel {
   const runner = oneQuery({ kind: QueryKind.Devices, orgId });
   return PanelBuilders.table()
     .setTitle('Devices')
-    .setData(hideColumns(runner, ['mac', 'lat', 'lng']))
+    .setData(hideColumns(runner, ['mac', 'lat', 'lng', 'drilldownUrl']))
     .setNoValue('No devices in this organization.')
     .setOverrides((b) => {
       b.matchFieldsWithName('serial').overrideLinks([
         {
           title: 'Open device',
-          url: `${PLUGIN_BASE_URL}/${ROUTES.Sensors}/\${__value.raw:percentencode}?var-org=\${var-org:queryparam}`,
+          url: '${__data.fields.drilldownUrl}',
         },
       ]);
     })

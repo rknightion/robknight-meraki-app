@@ -8,23 +8,27 @@ import (
 
 // Organization mirrors the subset of `GET /organizations` fields that the plugin uses.
 type Organization struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	URL             string   `json:"url,omitempty"`
-	API             APIInfo  `json:"api,omitempty"`
-	Licensing       License  `json:"licensing,omitempty"`
-	Cloud           Cloud    `json:"cloud,omitempty"`
-	Management      Manage   `json:"management,omitempty"`
-	DevicesCount    int      `json:"-"`
-	NetworksCount   int      `json:"-"`
-	ProductTypes    []string `json:"-"`
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	URL           string          `json:"url,omitempty"`
+	API           APIInfo         `json:"api,omitempty"`
+	Licensing     OrgLicensingRef `json:"licensing,omitempty"`
+	Cloud         Cloud           `json:"cloud,omitempty"`
+	Management    Manage          `json:"management,omitempty"`
+	DevicesCount  int             `json:"-"`
+	NetworksCount int              `json:"-"`
+	ProductTypes  []string        `json:"-"`
 }
 
 type APIInfo struct {
 	Enabled bool `json:"enabled"`
 }
 
-type License struct {
+// OrgLicensingRef is the nested "licensing" object returned by GET /organizations.
+// It only describes the licensing *model* the org is on (e.g. "co-term",
+// "per-device"). Per-license records live on a separate type (`meraki.License`
+// defined in insights.go) because they come from a different endpoint.
+type OrgLicensingRef struct {
 	Model string `json:"model,omitempty"`
 }
 

@@ -2,6 +2,7 @@ import { QueryVariable } from '@grafana/scenes';
 import { VariableRefresh } from '@grafana/schema';
 import { MERAKI_DS_REF } from './datasource';
 import { QueryKind } from '../datasource/types';
+import type { MerakiProductType } from '../types';
 
 /**
  * $org — hydrated from the Meraki DS metricFindQuery. Default refreshes on dashboard load so
@@ -33,6 +34,62 @@ export function networkVariable(): QueryVariable {
     defaultToAll: true,
     isMulti: true,
     allValue: '',
+    refresh: VariableRefresh.onDashboardLoad,
+    sort: 1,
+  });
+}
+
+/**
+ * $network filtered by one or more productTypes. Shared factory used by every
+ * per-family overview scene (MR/MS/MX/MV/MG/MT) so the dropdown only lists
+ * networks that carry the relevant product — a wireless network for Access
+ * Points, a switch network for Switches, etc.
+ */
+export function networkVariableForProductTypes(
+  productTypes: MerakiProductType[]
+): QueryVariable {
+  return new QueryVariable({
+    name: 'network',
+    label: 'Network',
+    datasource: MERAKI_DS_REF,
+    query: { kind: QueryKind.Networks, refId: 'networks', orgId: '$org', productTypes },
+    includeAll: true,
+    defaultToAll: true,
+    isMulti: true,
+    allValue: '',
+    refresh: VariableRefresh.onDashboardLoad,
+    sort: 1,
+  });
+}
+
+/**
+ * Single-select device picker hydrated from the Meraki Devices metricFind
+ * handler. Shared factory that replaces per-area copies like `apVariable()`,
+ * `switchVariable()`, and the new `mxVariable()`/`cameraVariable()`/`mgVariable()`.
+ *
+ * Single-select by design: Meraki per-device endpoints accept one serial at a
+ * time, so multi-select would force panels to fan out into N frames per series
+ * and break the legend contract.
+ */
+export function deviceVariable(params: {
+  name: string;
+  label: string;
+  productType: MerakiProductType;
+}): QueryVariable {
+  return new QueryVariable({
+    name: params.name,
+    label: params.label,
+    datasource: MERAKI_DS_REF,
+    query: {
+      kind: QueryKind.Devices,
+      refId: `${params.name}s`,
+      orgId: '$org',
+      productTypes: [params.productType],
+    },
+    includeAll: true,
+    defaultToAll: true,
+    allValue: '',
+    isMulti: false,
     refresh: VariableRefresh.onDashboardLoad,
     sort: 1,
   });

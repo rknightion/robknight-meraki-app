@@ -78,3 +78,48 @@ func (c *Client) GetOrganizationDevicesStatusOverview(ctx context.Context, orgID
 	}
 	return &overview, nil
 }
+
+// DeviceAvailability is one row from `GET /organizations/{organizationId}/devices/availabilities`.
+// Each entry captures a device's current availability (online/alerting/offline/dormant) plus
+// identifying metadata and the network it belongs to. The field set mirrors the Meraki wire
+// format as of v1 (2026-04).
+//
+// The Meraki spec does not include a "lastReportedAt" field on this endpoint — availability
+// status is "current" per the documentation. Callers that need change timestamps should use
+// `/organizations/{organizationId}/devices/availabilities/changeHistory` (not yet wrapped).
+type DeviceAvailability struct {
+	Serial      string              `json:"serial"`
+	Name        string              `json:"name,omitempty"`
+	MAC         string              `json:"mac,omitempty"`
+	ProductType string              `json:"productType,omitempty"`
+	Status      string              `json:"status,omitempty"`
+	Tags        []string            `json:"tags,omitempty"`
+	Network     DeviceAvailabilityNetworkRef `json:"network"`
+}
+
+// DeviceAvailabilityNetworkRef is the nested network object on DeviceAvailability.
+type DeviceAvailabilityNetworkRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
+// GetOrganizationDevicesAvailabilities paginates through the org's device availability rows.
+// productTypes, when non-empty, limits the response to those product families (wireless,
+// switch, appliance, sensor, etc.).
+func (c *Client) GetOrganizationDevicesAvailabilities(ctx context.Context, orgID string, productTypes []string, ttl time.Duration) ([]DeviceAvailability, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/devices/availabilities", Message: "missing organization id"}}
+	}
+	params := url.Values{"perPage": []string{"1000"}}
+	for _, pt := range productTypes {
+		params.Add("productTypes[]", pt)
+	}
+	var out []DeviceAvailability
+	_, err := c.GetAll(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/devices/availabilities",
+		orgID, params, ttl, &out)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}

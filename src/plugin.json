@@ -36,9 +36,71 @@
     },
     {
       "type": "page",
+      "name": "Appliances",
+      "path": "/a/%PLUGIN_ID%/appliances",
+      "addToNav": true,
+      "icon": "shield"
+    },
+    {
+      "type": "page",
+      "name": "Access Points",
+      "path": "/a/%PLUGIN_ID%/access-points",
+      "addToNav": true
+    },
+    {
+      "type": "page",
+      "name": "Switches",
+      "path": "/a/%PLUGIN_ID%/switches",
+      "addToNav": true
+    },
+    {
+      "type": "page",
+      "name": "Cameras",
+      "path": "/a/%PLUGIN_ID%/cameras",
+      "addToNav": true,
+      "icon": "camera"
+    },
+    {
+      "type": "page",
+      "name": "Cellular Gateways",
+      "path": "/a/%PLUGIN_ID%/cellular-gateways",
+      "addToNav": true,
+      "icon": "signal"
+    },
+    {
+      "type": "page",
       "name": "Sensors",
       "path": "/a/%PLUGIN_ID%/sensors",
       "addToNav": true
+    },
+    {
+      "type": "page",
+      "name": "Insights",
+      "path": "/a/%PLUGIN_ID%/insights",
+      "addToNav": true,
+      "icon": "graph-bar"
+    },
+    {
+      "type": "page",
+      "name": "Events",
+      "path": "/a/%PLUGIN_ID%/events",
+      "addToNav": true,
+      "icon": "list-ul"
+    },
+    {
+      "type": "page",
+      "name": "Alerts",
+      "path": "/a/%PLUGIN_ID%/alerts",
+      "addToNav": true,
+      "icon": "bell"
+    },
+    {
+      "type": "page",
+      "name": "Configuration",
+      "path": "/a/%PLUGIN_ID%/configuration",
+      "addToNav": true,
+      "role": "Admin",
+      "icon": "cog"
     }
   ],
   "dependencies": {

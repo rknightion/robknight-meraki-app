@@ -10,20 +10,18 @@ import {
   SceneTimeRange,
 } from '@grafana/scenes';
 import {
-  orgDetailKpiRow,
-  orgDeviceStatusDonut,
-  orgDevicesTable,
-  orgNetworksTable,
-} from '../../scene-helpers/panels';
+  applianceOverviewKpiRow,
+  applianceUplinkStatusTable,
+} from './panels';
 
 /**
- * Per-organization detail — KPI row, status donut, networks + devices
- * tables. Devices table serial column deep-links into the sensor detail
- * scene (used for MTs; non-sensor devices will show a broken link until
- * the MR/MS/MX pages land in v0.2+).
+ * Per-appliance Overview tab — KPI row (status / model / firmware /
+ * network) on top of a per-serial uplink status table. Mirrors the shape of
+ * `apOverviewScene` and `switchOverviewScene`; the richer content
+ * (loss/latency timeseries, VPN peers, firewall) lives on sibling tabs.
  */
-export function organizationDetailScene(orgId: string) {
-  const kpiItems = orgDetailKpiRow(orgId).map(
+export function applianceOverviewScene(serial: string): EmbeddedScene {
+  const kpiItems = applianceOverviewKpiRow(serial).map(
     (panel) => new SceneCSSGridItem({ body: panel })
   );
 
@@ -38,26 +36,18 @@ export function organizationDetailScene(orgId: string) {
       direction: 'column',
       children: [
         new SceneFlexItem({
-          height: 120,
+          height: 160,
           body: new SceneCSSGridLayout({
-            templateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            autoRows: '100px',
+            templateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            autoRows: '140px',
             rowGap: 1,
             columnGap: 1,
             children: kpiItems,
           }),
         }),
         new SceneFlexItem({
-          height: 300,
-          body: orgDeviceStatusDonut(orgId),
-        }),
-        new SceneFlexItem({
-          minHeight: 360,
-          body: orgNetworksTable(orgId),
-        }),
-        new SceneFlexItem({
-          minHeight: 420,
-          body: orgDevicesTable(orgId),
+          minHeight: 320,
+          body: applianceUplinkStatusTable(serial),
         }),
       ],
     }),

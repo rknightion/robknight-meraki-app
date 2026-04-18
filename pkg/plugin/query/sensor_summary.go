@@ -34,7 +34,7 @@ const lowBatteryThreshold = 20.0
 // A sensor counts as "reporting" if it appears in the latest-readings
 // response — Meraki drops sensors that have been silent for ~24h, so this
 // doubles as a liveness proxy without needing a separate heartbeat call.
-func handleSensorAlertSummary(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange) ([]*data.Frame, error) {
+func handleSensorAlertSummary(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("sensorAlertSummary: orgId is required")
 	}

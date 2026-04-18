@@ -16,7 +16,7 @@ const organizationsTTL = 1 * time.Hour
 // handleOrganizations emits one row per organization visible to the API key.
 // Shape: id, name, url, apiEnabled. The datasource uses this both for the
 // org-picker dropdown and as a template variable source.
-func handleOrganizations(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange) ([]*data.Frame, error) {
+func handleOrganizations(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	_ = q // Organizations has no per-query filters.
 	orgs, err := client.GetOrganizations(ctx, organizationsTTL)
 	if err != nil {
