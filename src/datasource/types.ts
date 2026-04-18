@@ -192,6 +192,14 @@ export enum QueryKind {
    * link graph; org-wide fan-out is intentionally disabled. */
   NetworkGeo = 'networkGeo',
   DeviceLldpCdp = 'deviceLldpCdp',
+
+  /* §4.4.4-E — Org Health Overview. Single-row wide KPI frame fanned out in
+   * parallel across 6 existing handlers (deviceStatusOverview,
+   * alertsOverview, licensesList, firmwarePending, apiRequestsByInterval,
+   * applianceUplinkStatuses). 30s TTL on the underlying calls +
+   * singleflight makes re-entry from the §4.4.5 Home merge effectively
+   * free. No dedicated page ships in this phase. */
+  OrgHealthSummary = 'orgHealthSummary',
 }
 
 export interface MerakiQuery extends DataQuery {

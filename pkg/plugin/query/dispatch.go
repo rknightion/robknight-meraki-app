@@ -211,6 +211,13 @@ const (
 	// network device link graph; org-wide fan-out is intentionally disabled.
 	KindNetworkGeo    QueryKind = "networkGeo"
 	KindDeviceLldpCdp QueryKind = "deviceLldpCdp"
+
+	// §4.4.4-E — Org Health Overview. Cross-family single-row wide KPI frame
+	// fanned out in parallel over 6 existing handlers (deviceStatusOverview,
+	// alertsOverview, licensesList, firmwarePending, apiRequestsByInterval,
+	// applianceUplinkStatuses). Backs the Home merge in §4.4.5; no dedicated
+	// page ships in this phase.
+	KindOrgHealthSummary QueryKind = "orgHealthSummary"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -421,6 +428,9 @@ var handlers = map[QueryKind]handlerFn{
 	// §4.4.4-D — Topology page.
 	KindNetworkGeo:    handleNetworkGeo,
 	KindDeviceLldpCdp: handleDeviceLldpCdp,
+
+	// §4.4.4-E — Org Health Overview (single wide KPI frame).
+	KindOrgHealthSummary: handleOrgHealthSummary,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and
