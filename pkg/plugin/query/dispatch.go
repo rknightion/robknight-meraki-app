@@ -124,6 +124,15 @@ const (
 	// §3.4 — Alerts overview byNetwork + historical.
 	KindAlertsOverviewByNetwork  QueryKind = "alertsOverviewByNetwork"
 	KindAlertsOverviewHistorical QueryKind = "alertsOverviewHistorical"
+
+	// §4.4.4-A — Clients page kinds. clientsOverview already exists (kind
+	// `clientsOverview` from phase 9); these three are net-new.
+	//   - clientsList:    fan-out /networks/{id}/clients across q.NetworkIDs.
+	//   - clientLookup:   org-wide /clients/search?mac=q.Metrics[0].
+	//   - clientSessions: per-client /networks/{id}/wireless/clients/{id}/latencyHistory.
+	KindClientsList    QueryKind = "clientsList"
+	KindClientLookup   QueryKind = "clientLookup"
+	KindClientSessions QueryKind = "clientSessions"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -289,6 +298,11 @@ var handlers = map[QueryKind]handlerFn{
 	// §3.4 — Alerts overview byNetwork + historical.
 	KindAlertsOverviewByNetwork:  handleAlertsOverviewByNetwork,
 	KindAlertsOverviewHistorical: handleAlertsOverviewHistorical,
+
+	// §4.4.4-A — Clients page (top talkers / new clients / search / sessions).
+	KindClientsList:    handleClientsList,
+	KindClientLookup:   handleClientLookup,
+	KindClientSessions: handleClientSessions,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

@@ -105,6 +105,17 @@ export enum QueryKind {
   /* §3.4 — Alerts overview byNetwork + historical. */
   AlertsOverviewByNetwork = 'alertsOverviewByNetwork',
   AlertsOverviewHistorical = 'alertsOverviewHistorical',
+
+  /* §4.4.4-A — Clients page kinds. ClientsOverview already exists (phase 9
+   * — `clientsOverview` enum value above). The three new kinds:
+   *  - ClientsList:    fan-out /networks/{id}/clients across selected networks.
+   *  - ClientLookup:   /organizations/{id}/clients/search?mac=...
+   *                    (zero-row + Info notice when MAC not found).
+   *  - ClientSessions: per-client wireless latency history; one frame per
+   *                    traffic category with labels on the value field. */
+  ClientsList = 'clientsList',
+  ClientLookup = 'clientLookup',
+  ClientSessions = 'clientSessions',
 }
 
 export interface MerakiQuery extends DataQuery {

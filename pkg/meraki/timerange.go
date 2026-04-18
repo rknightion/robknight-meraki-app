@@ -273,4 +273,15 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 			7 * 24 * time.Hour,
 		},
 	},
+
+	// §4.4.4-A — per-client wireless latency history. Spec allows up to 791
+	// days lookback; the only legal `resolution` is 86400 (one bucket per
+	// day). We clamp to 31d so a default 7-day session-history panel still
+	// gets a tight, daily-resolved series without being capped at 7 days.
+	"networks/{networkId}/wireless/clients/{clientId}/latencyHistory": {
+		MaxTimespan: 31 * 24 * time.Hour,
+		AllowedResolutions: []time.Duration{
+			86400 * time.Second,
+		},
+	},
 }
