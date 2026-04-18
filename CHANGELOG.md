@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 (Unreleased)
+
+### Added
+
+- New Clients page with top talkers, new clients, MAC/IP search, and session history (v0.5 §4.4.4-A).
+
 ## 0.4.0 (Unreleased)
 
 API optimisation wave — closes out todos.txt §7. Spec-compliant User-Agent,
