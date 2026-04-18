@@ -1,0 +1,82 @@
+{
+  "uid": "meraki-availability-device-offline-987654",
+  "title": "Meraki device offline — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "orgDeviceStatuses",
+        "orgId": "987654",
+        "productTypes": [
+          "appliance",
+          "switch",
+          "wireless",
+          "camera",
+          "cellularGateway",
+          "sensor"
+        ],
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "last",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0
+              ],
+              "type": "gt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "5m",
+  "annotations": {
+    "description": "One or more devices are reporting offline status. Open the Meraki plugin Devices page for details.",
+    "summary": "Device offline in Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "availability",
+    "meraki_org": "987654",
+    "meraki_product": "",
+    "meraki_rule": "device-offline",
+    "severity": "critical"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "availability"
+}
