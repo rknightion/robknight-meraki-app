@@ -96,6 +96,13 @@
     },
     {
       "type": "page",
+      "name": "Topology",
+      "path": "/a/%PLUGIN_ID%/topology",
+      "addToNav": true,
+      "icon": "share-alt"
+    },
+    {
+      "type": "page",
       "name": "Audit Log",
       "path": "/a/%PLUGIN_ID%/audit-log",
       "addToNav": true,

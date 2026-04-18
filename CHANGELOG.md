@@ -8,6 +8,8 @@ top-level pages.
 
 ### Added
 
+- New Topology page — network geomap and per-network device link graph via LLDP/CDP (v0.5 §4.4.4-D).
+
 - **Cross-cutting panels — v0.5 §4.4.3-1f.**
   - New `orgChangeFeed` query kind: server-side union of
     `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the

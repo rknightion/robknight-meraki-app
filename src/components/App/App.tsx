@@ -13,6 +13,7 @@ import { sensorsPage } from '../../pages/Sensors/sensorsPage';
 import { insightsPage } from '../../pages/Insights/insightsPage';
 import { eventsPage } from '../../pages/Events/eventsPage';
 import { alertsPage } from '../../pages/Alerts/alertsPage';
+import { topologyPage } from '../../pages/Topology/topologyPage';
 import { auditLogPage } from '../../pages/AuditLog/auditLogPage';
 import { configurationPage } from '../../pages/Configuration/configurationPage';
 
@@ -37,6 +38,7 @@ function allPages(): SceneAppPageLike[] {
     insightsPage,
     eventsPage,
     alertsPage,
+    topologyPage,
     auditLogPage,
     configurationPage,
   ];

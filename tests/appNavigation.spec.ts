@@ -61,4 +61,9 @@ test.describe('Meraki app navigation', () => {
     await gotoPage(`/${ROUTES.Events}`);
     await expect(page.getByRole('heading', { name: 'Events' })).toBeVisible();
   });
+
+  test('Topology page renders the geomap row', async ({ gotoPage, page }) => {
+    await gotoPage(`/${ROUTES.Topology}`);
+    await expect(page.getByRole('heading', { name: 'Topology' })).toBeVisible();
+  });
 });
