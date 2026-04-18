@@ -1,0 +1,54 @@
+kind: alert_rule_template
+id: license-expiring-info
+group: lifecycle
+display_name: License expiring (info — 90 day horizon)
+severity: info
+thresholds:
+  - key: days_info
+    type: int
+    default: 90
+    label: Days-remaining threshold
+    help: Fire when any license's remaining days drops below this value.
+rule:
+  title: "Meraki license expiring within <% .Thresholds.days_info %> days — <% .OrgID %>"
+  for: "10m"
+  query:
+    kind: licensesList
+    params:
+      orgId: "<% .OrgID %>"
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 3600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: licensesList
+        orgId: "<% .OrgID %>"
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: min
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: lt, params: [<% .Thresholds.days_info %>] }
+        expression: B
+  annotations:
+    summary: "Meraki licenses approaching expiry (info) in org <% .OrgID %>"
+    description: "One or more Meraki licenses will expire within the configured info-horizon window. Open the Licenses scene for detail."
+  labels:
+    severity: info
+    meraki_group: lifecycle
+    meraki_product: ""
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: license-expiring-info
+    managed_by: meraki-plugin
