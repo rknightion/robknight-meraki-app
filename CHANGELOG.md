@@ -16,6 +16,14 @@ UX.
   externalServiceAccounts feature-toggle state.
 - Resource endpoints for the bundled alert rules — templates registry, live
   status, reconcile, uninstall-all (§4.5.5).
+- Alert templates (v0.6 §4.5.7):
+  - 5a availability: meraki-critical (+ existing device-offline).
+  - 5b wan: uplink-down, uplink-loss-latency, vpn-peer-down.
+  - 5c sensors: readings-out-of-range, binary-state, battery-low.
+  - 5d wireless: ap-channel-util, failed-connections.
+  - 5f cameras: offline.
+  - 5g lifecycle: license-expiring (info/warn/crit fan-out at 90/30/7 days).
+- 5e cellular (mg-data-cap) DROPPED — depended on v0.5 §4.4.3-1d cellularDataUsage kind that was itself dropped (no Meraki v1 endpoint).
 
 ### Developer
 
