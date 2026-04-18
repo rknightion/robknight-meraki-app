@@ -134,6 +134,14 @@ export enum QueryKind {
   WirelessFailedConnections = 'wirelessFailedConnections',
   WirelessLatencyStats = 'wirelessLatencyStats',
   DeviceRadioStatus = 'deviceRadioStatus',
+
+  /* §4.4.3-1b — MS (switches) panels: PoE draw, STP topology, MAC table,
+   * VLAN distribution. Port-error timeline reshapes the existing
+   * switchPortPacketCounters kind (no new kind). */
+  SwitchPoe = 'switchPoe',
+  SwitchStp = 'switchStp',
+  SwitchMacTable = 'switchMacTable',
+  SwitchVlansSummary = 'switchVlansSummary',
 }
 
 export interface MerakiQuery extends DataQuery {

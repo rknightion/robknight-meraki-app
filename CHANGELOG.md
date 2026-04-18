@@ -25,6 +25,23 @@ top-level pages.
     `/networks/{id}/appliance/trafficShaping` +
     `/networks/{id}/appliance/trafficShaping/uplinkSelection` with a 5 m
     TTL.
+- **§4.4.3-1b — MS (switches) panels.** Four new query kinds with
+  server-side aggregation:
+  - `switchPoe` — per-port PoE draw flattened from the org-level
+    statuses/bySwitch feed (TTL 30 s, shared cache with `switchPorts`).
+  - `switchStp` — bridge-priority + `rstpEnabled` per network, expanded to
+    one row per switch/stack (TTL 1 m, `GET /networks/{id}/switch/stp`).
+  - `switchMacTable` — per-switch client list with IP, VLAN, port,
+    last-seen, and kbytes sent/recv (TTL 30 s, default 24-hour span,
+    `GET /devices/{serial}/clients`).
+  - `switchVlansSummary` — port-count per (serial, VLAN) aggregated from
+    the config-feed bySwitch endpoint (TTL 5 m); voice VLANs emitted as
+    synthetic `voice:<n>` rows.
+  Five new scene panels wired onto the switch detail pages:
+  - Switch Overview → PoE draw stat + VLAN distribution donut.
+  - Ports tab → MAC address table + STP topology table.
+  - Port detail → port-error snapshot (reshape of existing
+    `switchPortPacketCounters` via a `desc` regex filter — no new kind).
 
 ### Changed
 

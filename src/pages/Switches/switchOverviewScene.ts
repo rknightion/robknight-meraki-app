@@ -10,17 +10,25 @@ import {
   SceneTimeRange,
 } from '@grafana/scenes';
 import { orgOnlyVariables } from '../../scene-helpers/variables';
-import { switchOverviewKpiRow } from './panels';
+import {
+  switchOverviewKpiRow,
+  switchPoeBudgetStat,
+  switchVlanDistributionDonut,
+} from './panels';
 
 /**
- * Overview tab for a single switch — four KPI tiles (status, model,
- * firmware, client count). The deeper per-port data lives on the Ports tab,
+ * Overview tab for a single switch — KPI tiles (status, model, firmware,
+ * client count) plus §4.4.3-1b additions: a PoE draw stat and a VLAN
+ * distribution donut. The deeper per-port data lives on the Ports tab,
  * keeping this page fast to render and quick to eyeball.
  */
 export function switchOverviewScene(serial: string): EmbeddedScene {
   const kpiItems = switchOverviewKpiRow(serial).map(
     (panel) => new SceneCSSGridItem({ body: panel })
   );
+  // PoE draw sits beside the existing four KPIs — it's a scalar summary of
+  // the ports feed we already fetch. Five tiles total at 200px minmax width.
+  kpiItems.push(new SceneCSSGridItem({ body: switchPoeBudgetStat(serial) }));
 
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
@@ -46,6 +54,12 @@ export function switchOverviewScene(serial: string): EmbeddedScene {
             columnGap: 1,
             children: kpiItems,
           }),
+        }),
+        // VLAN distribution donut below the KPI row. Width is flex so it
+        // fills the page; height 320 matches other donut panels.
+        new SceneFlexItem({
+          minHeight: 320,
+          body: switchVlanDistributionDonut(),
         }),
       ],
     }),

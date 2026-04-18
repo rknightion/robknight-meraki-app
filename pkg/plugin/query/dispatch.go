@@ -150,6 +150,14 @@ const (
 	KindWirelessFailedConnections  QueryKind = "wirelessFailedConnections"
 	KindWirelessLatencyStats       QueryKind = "wirelessLatencyStats"
 	KindDeviceRadioStatus          QueryKind = "deviceRadioStatus"
+
+	// §4.4.3-1b — MS (switches) panels: PoE draw, STP topology, MAC table,
+	// VLAN distribution. All snapshot kinds. Port-error timeline reshapes the
+	// existing switchPortPacketCounters kind (no new kind).
+	KindSwitchPoe          QueryKind = "switchPoe"
+	KindSwitchStp          QueryKind = "switchStp"
+	KindSwitchMacTable     QueryKind = "switchMacTable"
+	KindSwitchVlansSummary QueryKind = "switchVlansSummary"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -330,6 +338,12 @@ var handlers = map[QueryKind]handlerFn{
 	KindWirelessFailedConnections:  handleWirelessFailedConnections,
 	KindWirelessLatencyStats:       handleWirelessLatencyStats,
 	KindDeviceRadioStatus:          handleDeviceRadioStatus,
+
+	// §4.4.3-1b — MS (switches) panels.
+	KindSwitchPoe:          handleSwitchPoe,
+	KindSwitchStp:          handleSwitchStp,
+	KindSwitchMacTable:     handleSwitchMacTable,
+	KindSwitchVlansSummary: handleSwitchVlansSummary,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and
