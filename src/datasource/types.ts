@@ -148,6 +148,19 @@ export enum QueryKind {
    * networkEvents for the Home "what just changed in 24h" tile. Always a
    * fixed 24h lookback regardless of dashboard time range. */
   OrgChangeFeed = 'orgChangeFeed',
+
+  /* §4.4.4-B — Firmware & Lifecycle page.
+   *  - FirmwareUpgrades: org-wide past + scheduled upgrade events table.
+   *  - FirmwarePending:  per-device pending/in-progress upgrades
+   *                      (currentUpgradesOnly=true; MS+MR only per Meraki's
+   *                      documented limitation as of 2026-04).
+   *  - DeviceEol:        inventory devices with EOX status sourced from
+   *                      /inventory/devices?eoxStatuses[]=. Defaults to all
+   *                      three buckets (endOfSale, endOfSupport,
+   *                      nearEndOfSupport) when q.metrics is empty. */
+  FirmwareUpgrades = 'firmwareUpgrades',
+  FirmwarePending = 'firmwarePending',
+  DeviceEol = 'deviceEol',
 }
 
 export interface MerakiQuery extends DataQuery {
