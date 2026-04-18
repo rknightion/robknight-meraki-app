@@ -8,6 +8,7 @@ code conventions to follow, the pending work queue, and the gotchas that will
 bite you if you don't read them.
 
 Last updated: 2026-04-18 (v0.4.0 feature-complete — phases 1–12 shipped;
+apianalysis.txt audit follow-up ALSO SHIPPED on top of v0.4.0 — see §A below;
 v0.5 panels+pages and v0.6 alert-rule bundle PLANNED — see §4.4 and §4.5).
 
 Repo: /Users/rob/repos/grafana-meraki-plugin
@@ -103,11 +104,20 @@ HOW TO READ THIS FILE
     licensesOverview, licensesList, apiRequestsOverview, apiRequestsByInterval,
     clientsOverview, topClients, topDevices, topDeviceModels, topSsids,
     topSwitchesByEnergy, topNetworksByStatus,
-    cameraOnboarding, cameraAnalyticsOverview, cameraAnalyticsLive,
-    cameraAnalyticsZones, cameraAnalyticsZoneHistory, cameraRetentionProfiles,
+    cameraOnboarding, cameraBoundaryAreas, cameraBoundaryLines,
+    cameraDetectionsHistory, cameraRetentionProfiles
+      (the four legacy cameraAnalytics* kinds were deprecated by Meraki in
+       March 2024 and replaced by the boundaries model — see §A / commit
+       55c6a12),
     mgUplinks, mgPortForwarding, mgLan, mgConnectivity,
     networkEvents,
-    configurationChanges, deviceAvailabilityChanges (v0.4.0).
+    configurationChanges, deviceAvailabilityChanges (v0.4.0),
+    wirelessApClientCounts, wirelessPacketLossByNetwork,
+    wirelessDevicesEthernetStatuses, wirelessDevicesCpuLoadHistory,
+    deviceUplinksLossLatencyHistory, applianceUplinksUsageHistory,
+    applianceUplinksUsageByNetwork, switchPortsOverviewBySpeed,
+    switchPortsUsageHistory, deviceMemoryHistory, alertsOverviewByNetwork,
+    alertsOverviewHistorical (apianalysis.txt audit, §A below).
 
 • Cache + client stack hardening (v0.4.0, §7 completion):
     - User-Agent:  "GrafanaMerakiPlugin/<version> rknightion" (spec-compliant).
@@ -223,13 +233,26 @@ HOW TO READ THIS FILE
        apiRequests (31d), apiRequests byInterval (31d), wireless usage
        history (31d), channel util history (31d), uplinksLossAndLatency
        (5min), appliance VPN stats (31d), clients overview (31d),
-       summary/top/* (186d), camera analytics overview (7d).
+       summary/top/* (186d), configurationChanges (365d),
+       devices/availabilities/changeHistory (31d),
+       devices/{serial}/uplinks/lossAndLatencyHistory (31d),
+       networks/{networkId}/appliance/uplinks/usageHistory (31d),
+       wireless/devices/packetLoss/byNetwork (90d),
+       wireless/devices/system/cpu/load/history (1d),
+       switch/ports/usage/history/byDevice/byInterval (31d),
+       devices/system/memory/usage/history/byInterval (31d),
+       assurance/alerts/overview/historical (31d).
+       (Camera analytics/overview's 7-day entry was removed when the
+        deprecated endpoint was replaced by the boundaries model — §A.)
      - ADD new entries whenever a new timeseries endpoint lands.
 
 1.9  Snapshot vs. timeseries conventions
      - Native timeseries only from: sensor readings history, wireless usage
-       history, channel utilization history, uplinksLossAndLatency, camera
-       analytics overview + zone history, apiRequests byInterval.
+       history, channel utilization history, uplinksLossAndLatency (+ the
+       per-device /lossAndLatencyHistory companion), camera detections
+       history per boundary, apiRequests byInterval, switch ports usage
+       history, device memory usage history, wireless CPU load history,
+       alerts overview historical, network appliance uplinks usage history.
      - Snapshot endpoints (deviceStatusOverview, deviceStatuses, switch port
        statuses, VPN statuses, appliance uplinks, MG uplinks, camera live)
        return point-in-time frames meant for Stat or Table viz. DO NOT try to
@@ -2596,9 +2619,16 @@ G.5  Timespan caps per endpoint (see KnownEndpointRanges for the full table):
      - appliance/vpn/stats:                          31 days
      - clients/overview:                             31 days
      - summary/top/*:                                186 days (25m floor for switches-by-energy)
-     - camera/analytics/overview:                    7 days
+     - devices/{serial}/uplinks/lossAndLatencyHistory: 31 days
+     - networks/{networkId}/appliance/uplinks/usageHistory: 31 days
+     - wireless/devices/packetLoss/byNetwork:         90 days
+     - wireless/devices/system/cpu/load/history:      1 day
+     - switch/ports/usage/history/byDevice/byInterval: 31 days
+     - devices/system/memory/usage/history/byInterval: 31 days
+     - assurance/alerts/overview/historical:          31 days
      Passing a longer window is a 400. Resolve() clamps and emits a truncation
-     annotation.
+     annotation. (camera/analytics/overview's 7-day entry was removed when
+     the deprecated endpoint was replaced by the boundaries model — §A.)
 
 G.6  Resolution quantization: Meraki only accepts a fixed set per endpoint.
      Always round UP to the nearest allowed bucket. quantizeUp() handles it.
@@ -2659,7 +2689,7 @@ G.17 FieldConfig.DisplayNameFromDS is a pre-formatted final string — Grafana
      ${__field.labels.<name>} if you need interpolation, or bake the final
      string at emit time. We hit this when the CO₂ card legend rendered as
      literal "{{serial}}". See handleWirelessChannelUtil + handleSensorReadingsHistory
-     + handleCameraAnalyticsOverview for canonical examples.
+     + handleCameraDetectionsHistory for canonical examples.
 
 G.18 Native-timeseries frames must be one-frame-per-series with data.Labels
      on the value field. A single long-format frame with
@@ -2670,16 +2700,18 @@ G.18 Native-timeseries frames must be one-frame-per-series with data.Labels
      and the viz still ignores it). Backend fix is the correct call.
      Canonical shapes: sensor_readings.go:handleSensorReadingsHistory,
      wireless.go:handleWirelessChannelUtil, appliance.go:handleDeviceUplinksLossLatency,
-     camera.go:handleCameraAnalyticsOverview.
+     camera.go:handleCameraDetectionsHistory.
 
 G.19 Query-handler signature takes Options as the 5th argument (LabelMode,
      PluginPathPrefix). The dispatcher threads plugin settings through
      Handle → runOne → handler. New handlers MUST accept the param even when
      unused (use `_ Options`). See pkg/plugin/query/dispatch.go — `Options`
      struct + `handlerFn` type. LabelMode is generic across every device
-     family (sensor/MR/MS/MX/MV/MG); when it's "serial", per-device handlers
+     family (sensor/MR/MS/MX/MG); when it's "serial", per-device handlers
      skip the /devices lookup entirely (sensor_readings.go, wireless.go,
-     appliance.go:handleDeviceUplinksLossLatency, camera.go).
+     appliance.go:handleDeviceUplinksLossLatency). Camera detection
+     handlers don't use LabelMode because boundary IDs are their primary
+     legend keys.
 
 G.20 Prefer server-side KPI aggregation over client-side filterByValue +
      reduce transform chains. Client transforms silently fall back to the
@@ -3239,20 +3271,27 @@ Shipped:
     pkg/meraki/cellular.go (4 wrappers + ParseSignalDb)
     pkg/plugin/query/camera.go (6 handlers)
     pkg/plugin/query/cellular.go (4 handlers)
-- Camera analytics overview is native timeseries per §G.18 — one frame per
-  (serial, zoneId) with {serial, zone_id, object_type} labels.
-- objectType (person/vehicle) and zoneId smuggled through q.Metrics[0/1]
-  (see §G.21).
+- [SUPERSEDED by §A] Camera analytics overview was native timeseries per
+  §G.18 — one frame per (serial, zoneId) with {serial, zone_id, object_type}
+  labels. The /camera/analytics/* endpoints were deprecated by Meraki in
+  March 2024 and replaced by the boundaries model (camera detections
+  history per boundary). See §A / commit 55c6a12.
+- objectType (person/vehicle) still smuggled through q.Metrics; boundary IDs
+  replace zone IDs (see §A).
 - MG uplink RSRP/RSRQ strings parsed to float64 via `ParseSignalDb` — handles
   ASCII hyphen-minus, unicode minus, and the " dBm" suffix. Frontend gauges
   threshold on the numeric column (red ≤ -110, amber ≤ -100, green > -100).
 - MG port-forwarding endpoint returns {rules: [...]} — wrapper unwraps.
-- metricfind.go extended with KindCameraAnalyticsZones for the $zone
-  variable on the Camera Analytics tab.
+- metricfind.go extended with KindCameraBoundaryAreas +
+  KindCameraBoundaryLines for the $boundary variable on the Camera
+  Analytics / Boundaries tabs (was originally KindCameraAnalyticsZones for
+  $zone, replaced by §A).
 
 Tests: TestHandle_CameraOnboarding_Table,
-TestHandle_CameraAnalyticsOverview_EmitsPerZoneFrames,
-TestHandle_CameraAnalyticsOverview_RespectsSevenDayCap,
+TestHandle_CameraBoundaryAreas_Table,
+TestHandle_CameraBoundaryLines_Table,
+TestHandle_CameraDetectionsHistory_EmitsPerBoundaryObjectFrames,
+TestHandle_CameraDetectionsHistory_EmptyWhenNoBoundaries,
 TestHandle_MgUplinks_ParsesSignalDb,
 TestHandle_MgPortForwarding_DecodesRulesWrapper.
 
@@ -3395,18 +3434,84 @@ Config form updates:
   the full variant. Catalog variant unchanged.
 - AppConfig.tsx: "Sensor label mode" field renamed to "Device label mode".
   Setting now applies generically across every device family — handlers
-  for MX uplink loss/latency and MV camera analytics now honour
-  opts.LabelMode and skip the /devices fetch in serial mode (previously
-  always-on regardless of setting). TypeScript type
-  SensorLabelMode → DeviceLabelMode; wire key (jsonData.labelMode) and
-  enum values ("serial" / "name") unchanged so persisted settings load
-  without migration.
+  for MX uplink loss/latency now honour opts.LabelMode and skip the
+  /devices fetch in serial mode (previously always-on regardless of
+  setting). The camera detection handlers added in §A do NOT use
+  LabelMode (boundary IDs are their primary legend keys). TypeScript
+  type SensorLabelMode → DeviceLabelMode; wire key (jsonData.labelMode)
+  and enum values ("serial" / "name") unchanged so persisted settings
+  load without migration.
 
 Deferred (intentionally, from §7):
 - §7.4-F (external cache for multi-replica) — still Q.3 deferred.
 - §7.3-B (Action Batches for bulk config writes) — N/A; the plugin is
   read-only today. Revisit only if v1+ grows "configure from Grafana"
   features.
+
+================================================================================
+§A. APIANALYSIS.TXT AUDIT — ALL SECTIONS SHIPPED              [2026-04-18]
+================================================================================
+
+apianalysis.txt (2026-04-18 endpoint audit) flagged ten work items against the
+Meraki v1 OpenAPI spec. Every actionable section has been implemented on top
+of v0.4.0 and lives on `main`. See the top-of-file banner in apianalysis.txt
+for the full per-section completion notes; short form here for search:
+
+  §1  Camera analytics → boundaries API                            DONE  55c6a12
+       Four deprecated `/camera/analytics/*` wrappers removed;
+       replaced by /camera/boundaries/areas,lines/byDevice and
+       /camera/detections/history/byBoundary/byInterval. Cameras detail
+       page: Zones tab renamed to Boundaries, Analytics tab now renders
+       per-boundary detection counts.
+  §2.1 Org-level AP client counts                                  DONE  540fe1f
+       Replaces N per-AP fan-out on the AP overview page with a single
+       /wireless/clients/overview/byDevice call.
+  §2.2 Per-device uplink loss/latency HISTORY (augments snapshot)  DONE  591fedb
+       New 31-day timeseries from /devices/{serial}/uplinks/lossAndLatencyHistory.
+  §3.1 Switch port overview + usage history                        DONE  e23b0c8
+       Org-wide port counts by speed + 31-day per-switch usage
+       timeseries.
+  §3.2 Wireless packetLoss / ethernet / CPU load                   DONE  540fe1f
+       Three new org-wide kinds for AP health metrics.
+  §3.3 Device memory usage history                                 DONE  02faff0
+       Org-wide /devices/system/memory/usage/history/byInterval;
+       Home scene gets a memory-pressure chart.
+  §3.4 Alerts overview byNetwork + historical                      DONE  f589122
+       Two new aggregations on top of the existing byType feed.
+  §3.5 MX uplinks usage history + usage/byNetwork                  DONE  673a5b8
+       Per-network MX uplink usage + org-wide summary table.
+  §3.6 Subscription-licensing fallback                             DONE  591fedb
+       /licenses[/overview] returns 400 on subscription-model orgs; we
+       now fall back to /administered/licensing/subscription/subscriptions
+       and synthesise the same KPI frame shape. New wrapper:
+       GetAdministeredLicensingSubscriptions. New helper:
+       IsSubscriptionLicensingError + SummariseSeats.
+  §5   CheckHealth polish                                          DONE  591fedb
+       CheckHealth now probes /administered/identities/me in parallel
+       with /organizations, surfaces "Signed in as <email>" in the
+       AppConfig connection card via CheckHealthResult.JSONDetails.
+       NOTE: this is a DIFFERENT CheckHealth probe from the
+       §4.5.2 alerts-bundle feature-toggle probe (still planned under
+       v0.6). The two probes coexist when v0.6 ships — they target
+       different capabilities (Meraki identity vs Grafana alert.provisioning).
+
+  §4   Verified-current endpoints (no action required)             N/A
+  §6   Early-Access API explainer                                  INFO
+
+Files that changed (aggregate): pkg/meraki/{camera,wireless,appliance,
+switches,devices,alerts,timerange,administered}.go (administered.go new);
+pkg/plugin/app.go; pkg/plugin/query/{dispatch,camera,wireless,appliance,
+switches,devices,alerts,insights,metricfind,sensor_readings}.go + matching
+_test.go files (three new); pkg/plugin/resources_test.go;
+src/datasource/types.ts; src/components/AppConfig/AppConfig.tsx; per-page
+panels under src/pages/{Cameras,AccessPoints,Appliances,Switches,Alerts,
+Home}/*.ts + the renamed src/pages/Cameras/cameraBoundariesScene.ts.
+
+Merge commit: 0d20818 (merged worktree-agent-a06f5872 which carried §3.1,
+§3.3, §3.4; the other sections landed directly on main via wireless /
+appliance agents). apianalysis.txt itself retains its full inline prose and
+now carries a per-section DONE banner so future readers don't mistake it
+for outstanding work.
 
 ================================================================================
 END OF FILE

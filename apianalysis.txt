@@ -1,0 +1,633 @@
+# Meraki API endpoint audit — apianalysis.txt
+
+Audit date: 2026-04-18
+Scope: every Meraki Dashboard API endpoint invoked from `pkg/meraki/*.go` (the
+only place in this repo that talks to api.meraki.com), verified against the
+current Meraki v1 OpenAPI spec (`/openapi/api_meraki_api_v1_openapispec`) and
+https://developer.cisco.com/meraki/api-v1/deprecated-operations.
+
+=== STATUS: ALL SECTIONS COMPLETED (2026-04-18) ===
+Every actionable section (§1, §2.1, §2.2, §3.1, §3.2, §3.3, §3.4, §3.5, §3.6,
+§5) has been implemented and shipped on `main`. Per-section completion notes
+appear inline below each section header. §4 and §6 are informational-only and
+were intentionally unchanged.
+
+Landed commits (oldest → newest):
+  55c6a12  refactor(camera): migrate deprecated analytics endpoints to
+           boundaries API                                                 §1
+  540fe1f  feat(wireless): add org-level AP client counts (§2.1) and
+           packet-loss/ethernet/CPU kinds (§3.2)                     §2.1+§3.2
+  591fedb  feat(appliance): add per-device uplink loss/latency history
+           (§2.2)  — also bundled §3.6 subscription-licensing fallback
+           and §5 CheckHealth/AppConfig polish                  §2.2+§3.6+§5
+  673a5b8  feat(appliance): add MX uplinks usage-history kinds (§3.5)   §3.5
+  e23b0c8  feat(switches): add port overview-by-speed + usage-history   §3.1
+  02faff0  feat(devices): add memory-usage history                      §3.3
+  f589122  feat(alerts): add byNetwork + historical overviews           §3.4
+  0d20818  Merge §3.1 (switches) + §3.3 (devices) + §3.4 (alerts)     [merge]
+
+Scope no longer matches reality — subsequent code changes have already
+superseded parts of this file; treat the rest as historical audit notes.
+==========================================================================
+
+Original plan follows. Each section now has a DONE banner; the prose is
+preserved for future auditors.
+
+This file is a TODO list for a follow-up LLM to implement. Each section is
+self-contained: rationale, change required, files to edit, and test plan.
+Order matters: §1 is the only MUST-fix (deprecated); §2 is an efficiency win
+worth doing next; §3–§5 are additive (new panels / richer data); §6 is
+purely informational.
+
+
+==============================================================================
+§0  COORDINATION WITH todos.txt V0.5 / V0.6 ROADMAP
+==============================================================================
+
+Re-checked against todos.txt §4.4 (v0.5 roadmap — 23 panels / 5 pages) and
+§4.5 (v0.6 alert bundle). Every endpoint, query-kind, and panel in this
+audit is DISTINCT from what v0.5/v0.6 plans, so this workstream and the
+v0.5 workstream can proceed in parallel without stepping on each other.
+
+File-level overlap (the two workstreams modify the same files; merges need
+care but the CHANGES don't conflict semantically):
+
+  pkg/meraki/wireless.go          — v0.5 1a adds 4 wrappers
+                                    (clientCountHistory, failedConnections,
+                                     latencyStats, radioSettings);
+                                    §2.1 + §3.2 here add 4 more
+                                    (wirelessClientsOverviewByDevice,
+                                     wirelessDevicesPacketLossByNetwork,
+                                     wirelessDevicesEthernetStatuses,
+                                     wirelessDevicesCpuLoadHistory).
+                                    No name or endpoint collision.
+  pkg/meraki/switches.go          — v0.5 1b adds STP, MAC-table, VLAN
+                                    summary, PoE; §3.1 adds
+                                    switchPortsOverview (org-level by
+                                     speed) + switchPortsUsageHistory.
+                                    Disjoint.
+  pkg/meraki/appliance.go         — v0.5 1c adds trafficShaping +
+                                    uplinkSelection; §2.2 + §3.5 add
+                                    deviceUplinksLossAndLatencyHistory
+                                    and networks/{id}/appliance/uplinks/
+                                    usageHistory + org /uplinks/usage/
+                                    byNetwork. Disjoint.
+  pkg/meraki/camera.go            — §1.1 REPLACES 4 deprecated analytics
+                                    wrappers with the boundaries endpoints.
+                                    todos.txt v0.5 does NOT touch camera
+                                    wrappers; the §3226 camera scene
+                                    layout is pre-v0.5 and will be rewritten
+                                    by §1.1 regardless. Do §1.1 BEFORE
+                                    any future Camera-page work.
+  pkg/meraki/timerange.go         — both workstreams extend the
+                                    KnownEndpointRanges map. Additive —
+                                    rebases trivially.
+  pkg/plugin/query/dispatch.go    — both workstreams add kind constants
+                                    + handler map entries. Additive.
+  src/datasource/types.ts         — both add QueryKind enum entries.
+                                    Additive.
+
+Content overlap (same dashboard area, DIFFERENT endpoint / kind — these
+are complementary, not duplicative):
+
+  Appliances WAN latency:
+    - v0.5 1c Panel #11 reshapes EXISTING deviceUplinksLossLatency
+      (5-minute org snapshot) into a histogram viz.
+    - §2.2 ADDS a per-device 31-day history endpoint for a drill-down
+      trend panel.
+    Both should coexist — the snapshot answers "who's hot now?", the
+    history answers "what did last week look like on device X?".
+  Alerts:
+    - v0.5 §4.4.2 adds alertsMttrSummary + orgChangeFeed (Phase 0 + 1f);
+      MTTR aggregation from existing assurance alerts.
+    - §3.4 ADDS /assurance/alerts/overview/byNetwork and /historical —
+      different dimensions (by-network breakdown + alert-count trend).
+    No overlap in kinds or endpoints.
+  Licensing:
+    - v0.5 1f Panel #24 uses existing `licensesList` (PDL-only) for a
+      renewal calendar.
+    - §3.6 adds a fallback to /administered/licensing/subscription/
+      subscriptions for orgs on the newer subscription licensing model.
+    Implement §3.6 AFTER 1f Panel #24 — the fallback will light up the
+    calendar for subscription-licensed orgs that currently show empty.
+  Wireless client visibility:
+    - v0.5 Page A (Clients) uses /organizations/{id}/clients/overview
+      and /clients/search for an org-wide client inventory.
+    - §2.1 uses /organizations/{id}/wireless/clients/overview/byDevice
+      for per-AP client COUNTS (no client list).
+    Different question; no overlap.
+
+Items in this audit that could be folded into existing v0.5 phases if
+scope permits (entirely optional; only worth doing if the v0.5 PR for
+that phase is still open when this audit is picked up):
+
+  §3.1 (switch port overview + usage history)
+      → could join v0.5 1b (Switches panels) PR.
+  §3.2 (wireless packet loss / CPU / ethernet)
+      → could join v0.5 1a (AP panels) PR.
+  §3.4 (alerts byNetwork + historical)
+      → could join v0.5 1f (cross-cutting) PR.
+  §3.5 (MX uplinks usage history)
+      → could join v0.5 1c (Appliances) PR.
+
+§1.1 (camera boundaries), §2.1, §2.2, §3.3 (device memory), §3.6
+(subscription licensing), §5 (CheckHealth polish) have no natural v0.5
+home and should ship as independent PRs after the v0.5 branch lands.
+
+Note on the "Early Access API" the user asked about:
+Meraki's Early Access API is an opt-in program per-organization, not a
+separate base URL or API version. Endpoints live under the same
+`/api/v1/...` path and are dispatched to the caller's account based on the
+opt-ins on `/organizations/{orgId}/earlyAccess/features/optIns`. Many of
+the "new" endpoints flagged below (wireless clients overview, alert
+overview/byNetwork, port overview, packet loss byNetwork, etc.) started
+life in the EA program and are now fully GA — we do not need to add
+early-access opt-in plumbing to call them. If we ever reach for a v1.52+
+endpoint that is still EA-gated, we can add a CheckHealth probe that
+warns when the feature isn't opted-in, but that's not required for any
+recommendation below.
+
+
+==============================================================================
+§1  DEPRECATED endpoints we use — MUST MIGRATE
+==============================================================================
+
+§1.1 MV camera analytics (five endpoints) — deprecated March 2024
+------------------------------------------------------------------------------
+[DONE — commit 55c6a12] Four deprecated wrappers removed; replaced with
+GetOrganizationCameraBoundariesAreasByDevice / …LinesByDevice /
+…DetectionsHistoryByBoundaryByInterval. KindCameraBoundaryAreas /
+…Lines / …DetectionsHistory added. Cameras detail page: Analytics tab now
+renders boundary detection counts; Zones tab renamed to Boundaries with a
+merged areas+lines table. Per-zone TTL entry removed from timerange.go.
+------------------------------------------------------------------------------
+Currently used, all confirmed DEPRECATED per
+https://developer.cisco.com/meraki/api-v1/deprecated-operations:
+
+  - GET devices/{serial}/camera/analytics/live
+  - GET devices/{serial}/camera/analytics/overview
+  - GET devices/{serial}/camera/analytics/zones
+  - GET devices/{serial}/camera/analytics/zones/{zoneId}/history
+  - (we don't use `analytics/recent` but it's deprecated too)
+
+Source files calling them:
+  - pkg/meraki/camera.go  (GetDeviceCameraAnalyticsOverview @ L112,
+                           GetDeviceCameraAnalyticsLive @ L141,
+                           GetDeviceCameraAnalyticsZones @ L166,
+                           GetDeviceCameraAnalyticsZoneHistory @ L195)
+  - pkg/plugin/query/ — wherever the Cameras page dispatches these kinds
+    (search for `CameraAnalytics` in pkg/plugin/query/ and src/pages/Cameras/)
+  - pkg/meraki/timerange.go L193 KnownEndpointRanges entry for the `overview`
+    variant
+  - src/pages/Cameras/panels.ts — panels consuming these query kinds
+
+Replacement (Meraki's prescribed path): the new **"boundaries"** model.
+
+  A boundary is a user-configured area or line on a camera. The new
+  endpoints return object-detection counts (person / vehicle) aggregated
+  by boundary + interval.
+
+  New endpoints to adopt:
+    - GET organizations/{organizationId}/camera/boundaries/areas/byDevice
+        → list area boundaries for cameras in the org (replaces `zones`)
+    - GET organizations/{organizationId}/camera/boundaries/lines/byDevice
+        → list line boundaries for cameras in the org
+    - GET organizations/{organizationId}/camera/detections/history/
+          byBoundary/byInterval
+        → object-detection counts (person/vehicle) per boundary over time;
+          replaces `analytics/zones/{zoneId}/history` and is also the
+          de-facto replacement for `analytics/overview`
+    - GET devices/{serial}/camera/sense/objectDetectionModels
+        → list which object types the camera can detect (model-specific)
+
+Why the change is non-trivial:
+  - The data shape is fundamentally different. Old endpoints returned
+    "zones" (per-camera) with aggregate `entrances`/`averageCount`. New
+    endpoints return "boundaries" (per-camera) with in/out counts per
+    object type (person/vehicle/etc.) per interval. Dashboards will need
+    re-designing rather than field-for-field swapping.
+  - The new `/camera/detections/history/byBoundary/byInterval` endpoint
+    is org-level: a single call returns data for multiple boundaries
+    across multiple cameras — a big efficiency win over the N-camera
+    fan-out we do today.
+  - Cameras without boundaries configured in Dashboard return empty
+    results. We should surface this in the Camera panel as an empty-state
+    with a link to https://documentation.meraki.com/MV/.../Area_and_Line_Crossing
+    rather than showing zero series.
+
+Implementation steps:
+  1. Add wrappers in pkg/meraki/camera.go:
+      - GetOrganizationCameraBoundariesAreasByDevice(ctx, orgID, ttl)
+      - GetOrganizationCameraBoundariesLinesByDevice(ctx, orgID, ttl)
+      - GetOrganizationCameraDetectionsHistoryByBoundaryByInterval(
+          ctx, orgID, params {t0,t1,boundaryIds,boundaryTypes,
+          perPage,ranges}, ttl)
+      - (optional) GetDeviceCameraSenseObjectDetectionModels(ctx, serial, ttl)
+  2. Add corresponding query kinds + handlers in pkg/plugin/query/
+     (follow the pattern in pkg/plugin/query/CLAUDE.md — kind constant
+     in src/datasource/types.ts, dispatch case, Go handler, frontend
+     scene panel).
+  3. Add a KnownEndpointRanges entry for
+     `organizations/{organizationId}/camera/detections/history/
+      byBoundary/byInterval` in pkg/meraki/timerange.go (check docs for
+     MaxTimespan — typically 31 days — and allowed intervals).
+  4. Delete:
+       - pkg/meraki/camera.go funcs GetDeviceCameraAnalyticsOverview/Live/
+         Zones/ZoneHistory + their request types
+       - timerange.go entry for `devices/{serial}/camera/analytics/overview`
+       - the matching query kinds in pkg/plugin/query/ and
+         src/datasource/types.ts
+       - panels in src/pages/Cameras/panels.ts that consumed them
+  5. Replace those panels with boundary-based equivalents (in/out per
+     person+vehicle stacked by boundary + a by-camera overview stat).
+  6. Update src/pages/Cameras/panels.test.ts fixtures.
+  7. Run: `npm run typecheck`, `npm run test:ci`, `go test ./pkg/...`.
+
+Testing:
+  - Requires a camera with at least one area + one line boundary in a
+    real org to validate shape. Suggest plumbing a stub in
+    pkg/plugin/query/dispatch_test.go that serves canned JSON from
+    Meraki's docs example payload.
+
+Priority: HIGH. Meraki has not yet announced a sunset date for the
+deprecated endpoints but has said "replaced by newer 'boundaries'
+operations" — they will remove them eventually. Also, the boundaries
+endpoints return richer data, so we get a product win alongside the fix.
+
+
+==============================================================================
+§2  Valid but strongly dominated by a newer endpoint — HIGH-VALUE MIGRATION
+==============================================================================
+
+§2.1 Per-AP client list → org-level AP client counts
+------------------------------------------------------------------------------
+[DONE — commit 540fe1f] GetOrganizationWirelessClientsOverviewByDevice wrapper
++ KindWirelessApClientCounts + handleWirelessApClientCounts + apClientsByDeviceTable()
+panel wired into AccessPoints overview. Per-AP fan-out retained as a
+drill-down for the client-list panel.
+------------------------------------------------------------------------------
+Currently used:
+  - GET devices/{serial}/clients
+    (pkg/meraki/wireless.go L266, wrapper GetApClients; used by the
+     AccessPoints page in src/pages/AccessPoints/panels.ts)
+
+Status: VALID (reaffirmed in v1.44.0 with an added `properties` field).
+Problem: for an N-AP network we have to fan out N requests to build
+"clients per AP" panels. That's expensive on rate-limit budget and
+serialises badly at scale. Meraki added an org-level one-shot endpoint
+specifically for this visualisation.
+
+Proposed replacement / augmentation:
+  - GET organizations/{organizationId}/wireless/clients/overview/byDevice
+    (added v1.51.1, GA)
+    Returns `{items:[{network:{id},serial,counts:{byStatus:{online}}}]}`
+    — one API call returns the current online-client count for every AP
+    in the org.
+
+Rationale:
+  - 1 API call replaces N calls for the "clients per AP" panel.
+  - Lower latency, far lower rate-limit pressure.
+  - Org-scoped payload — pairs nicely with our existing
+    `organizations/{organizationId}/devices` call for AP metadata.
+
+Caveats:
+  - This endpoint only returns client *counts*, not the full client
+    list (MAC, SSID, usage, etc.). Panels that need per-client detail
+    (e.g. the current "Top clients on AP" panel) must keep using
+    `devices/{serial}/clients` — or switch to the org-level
+    `organizations/{organizationId}/clients/search` / `clients/overview`
+    for org-wide client aggregates.
+  - Use it for count-only panels. Keep `devices/{serial}/clients`
+    available for drill-down views but plumb it through a dashboard
+    variable so we only fetch when the user selects a specific AP.
+
+Implementation steps:
+  1. Add GetOrganizationWirelessClientsOverviewByDevice wrapper in
+     pkg/meraki/wireless.go (paginated with Link header).
+  2. New query kind (e.g. `wirelessApClientCounts`) in
+     src/datasource/types.ts + pkg/plugin/query/switches.go-style
+     handler under pkg/plugin/query/.
+  3. Rewrite the "clients per AP" panel in src/pages/AccessPoints/panels.ts
+     to consume the new kind; demote the per-AP `devices/{serial}/clients`
+     call to a row-drill-down only (fetched on row click).
+  4. Keep timerange wrapper for the new endpoint — it's a snapshot, no
+     KnownEndpointRanges entry needed.
+  5. Add unit test in wireless_test.go (if absent, create) mocking the
+     v1.51.1 example payload.
+
+Priority: HIGH. Near-term efficiency win; no data-model migration cost.
+
+
+§2.2 Per-device uplink loss/latency with longer history
+------------------------------------------------------------------------------
+[DONE — commit 591fedb] Augmenting (not replacing) the existing 5-minute
+org-wide snapshot. GetDeviceUplinksLossAndLatencyHistory wrapper, 31-day
+MaxTimespan entry in timerange.go, KindDeviceUplinksLossLatencyHistory
+handler, uplinkLossLatencyHistoryTimeseries() panel on applianceUplinksScene
+using a new $mx single-select variable.
+------------------------------------------------------------------------------
+Currently used:
+  - GET organizations/{organizationId}/devices/uplinksLossAndLatency
+    (pkg/meraki/appliance.go L368, wrapper GetOrganizationDevicesUplinksLossAndLatency,
+     timerange.go L145 entry: **MaxTimespan = 5 minutes** — anything longer
+     is a 400)
+
+Status: VALID but fundamentally a "last 5 minutes" snapshot. Time-series
+panels on this are always stuck at 5 min regardless of what the user
+selects in the dashboard time picker.
+
+Proposed augmentation (not replacement):
+  - GET devices/{serial}/uplinks/lossAndLatencyHistory
+    Returns per-device loss + latency time-series for up to 31 days,
+    with configurable `interval` (60, 600, 3600, 86400 s depending on
+    timespan).
+
+Rationale:
+  - Allows panels like "MX WAN latency over the last 24h" or
+    "packet loss trend for device XYZ this week" — today we cannot build
+    these at all.
+  - Pairs with the existing org-level snapshot for a two-tier view:
+    org overview for "who's hot right now" + per-device drill-down
+    with full history.
+
+Caveats:
+  - Per-device endpoint → fan-out risk. Restrict via Grafana variable
+    (e.g. template a single device serial) rather than auto-fetching
+    all MXs on an org.
+
+Implementation steps:
+  1. Add GetDeviceUplinksLossAndLatencyHistory wrapper in
+     pkg/meraki/appliance.go.
+  2. Add KnownEndpointRanges entry in timerange.go:
+     `devices/{serial}/uplinks/lossAndLatencyHistory`:
+       MaxTimespan: 31 * 24h,
+       AllowedResolutions: [60, 600, 3600, 86400] (verify via docs).
+  3. Add query kind in dispatch layer; require a `serial` variable in
+     the scene.
+  4. Add a panel on the MX / Appliance page: "Uplink latency history"
+     with a device-selector variable at the top.
+
+Priority: MEDIUM-HIGH. Unblocks a real user need (historical WAN
+visibility) that the current snapshot cannot answer.
+
+
+==============================================================================
+§3  New endpoints we should ADD (net-new panels, no migration required)
+==============================================================================
+
+All GA today. Each adds a dimension we currently don't expose. For each, the
+follow-up LLM should:
+  - add a wrapper in pkg/meraki/ (appropriate file by product)
+  - add a query kind + dispatch handler
+  - add a KnownEndpointRanges entry if the endpoint is a time-series
+  - add a panel in the corresponding src/pages/<Area>/panels.ts
+
+§3.1 Switches — org-wide port visibility                              [DONE e23b0c8]
+     GetOrganizationSwitchPortsOverview + GetOrganizationSwitchPortsUsageHistory
+     wrappers, KindSwitchPortsOverviewBySpeed + KindSwitchPortsUsageHistory
+     kinds, switchPortsBySpeedStatPanel + switchPortsUsageHistoryTimeseries
+     panels wired into switchesScene.
+  - GET organizations/{organizationId}/switch/ports/overview
+      Port counts by speed (active/inactive/total) across the org —
+      great single-stat panel for the Switches page.
+  - GET organizations/{organizationId}/switch/ports/usage/history/
+        byDevice/byInterval
+      Historical port traffic per-switch-per-interval. Timeseries with
+      valid intervals 300/1200/14400/86400 and max timespan 31d.
+      KnownEndpointRanges entry required.
+
+§3.2 Wireless — health signals we don't expose                        [DONE 540fe1f]
+     Three wrappers + kinds + panels: wirelessPacketLossByNetwork (90d),
+     wirelessDevicesEthernetStatuses (snapshot), wirelessDevicesCpuLoadHistory
+     (1d). Panels on AccessPoints overview scene.
+  - GET organizations/{organizationId}/wireless/devices/packetLoss/byNetwork
+      Packet loss % per network per band, 90d max lookback.
+      KnownEndpointRanges entry required.
+  - GET organizations/{organizationId}/wireless/devices/ethernet/statuses
+      Per-AP uplink Ethernet status (speed, duplex, PoE mode). Snapshot.
+  - GET organizations/{organizationId}/wireless/devices/system/cpu/load/history
+      Per-AP CPU load time-series (max 1 day, per docs).
+      KnownEndpointRanges entry required.
+
+§3.3 System health — device memory                                   [DONE 02faff0]
+     GetOrganizationDevicesMemoryUsageHistoryByInterval wrapper, 31d entry in
+     KnownEndpointRanges, KindDeviceMemoryHistory kind, and a
+     deviceMemoryPressureTimeseries() panel on the Home scene.
+  - GET organizations/{organizationId}/devices/system/memory/usage/history/
+        byInterval
+      Org-wide memory use history per device, any productType.
+      Intervals 300/1200/3600/14400, 31d max.
+      KnownEndpointRanges entry required.
+      Panel: "Device memory pressure" on Home or a new System Health page.
+
+§3.4 Alerts — richer alert overviews                                  [DONE f589122]
+     GetOrganizationAssuranceAlertsOverviewByNetwork and
+     ...OverviewHistorical wrappers, 31d historical entry in
+     KnownEndpointRanges, two new kinds + handlers, alertsByNetworkTable()
+     and alertsHistoricalTimeseries() panels wired into the Alerts scene.
+  - GET organizations/{organizationId}/assurance/alerts/overview/byNetwork
+      Alert counts grouped by network + severity. Added v1.46.0. Today
+      we only group by type.
+  - GET organizations/{organizationId}/assurance/alerts/overview/historical
+      Historical alert counts (trend line). We cannot build an alert
+      trend panel today without this.
+      KnownEndpointRanges entry required (check docs for interval set).
+
+§3.5 MX uplinks — aggregate history                                   [DONE 673a5b8]
+     GetNetworkApplianceUplinksUsageHistory (31d, per-network) and
+     GetOrganizationApplianceUplinksUsageByNetwork (org-wide snapshot)
+     wrappers, two new kinds, mxUplinksUsageHistoryTimeseries() and
+     mxUplinksUsageByNetworkTable() panels.
+  - GET networks/{networkId}/appliance/uplinks/usageHistory
+      Per-network MX uplink usage history (sent/recv on wan1/wan2).
+      KnownEndpointRanges entry required.
+  - GET organizations/{organizationId}/appliance/uplinks/usage/byNetwork
+      Usage summary (no history) across all MXs in the org — single-stat
+      / table panel.
+
+§3.6 Subscription licensing                                           [DONE 591fedb]
+     pkg/meraki/administered.go created with
+     GetAdministeredLicensingSubscriptions + IsSubscriptionLicensingError +
+     SummariseSeats. handleLicensesOverview / handleLicensesList in
+     pkg/plugin/query/insights.go now fall back to the administered endpoint
+     when /licenses[/overview] returns 400 with a subscription-model body.
+     No new query kinds — existing KindLicensesOverview / KindLicensesList
+     absorb the fallback. Coterm-model wrapper omitted (existing handlers
+     already cover that model via /licenses/overview coterm branch).
+  - GET /administered/licensing/subscription/subscriptions
+      Our current `organizations/{id}/licenses` + `/licenses/overview`
+      endpoints only work for **per-device licensed (PDL)** orgs. Orgs
+      on the newer **subscription** licensing model get a 400 from
+      `/licenses`. Add this path with productType-aware dispatch: use
+      `/licenses/overview` first; if Meraki returns the
+      subscription-model error, fall through to
+      `/administered/licensing/subscription/subscriptions` with
+      `organizationIds=<orgId>`. Also add
+      `/organizations/{id}/licensing/coterm/licenses` for the coterm
+      (hybrid) model.
+
+Priority for §3: MEDIUM. All additive; defer until §1 is done.
+
+
+==============================================================================
+§4  Things we WANT to keep as-is (verified current, no action required)
+==============================================================================
+
+All paths below were checked against the v1 OpenAPI spec as of 2026-04-18
+and remain the canonical route for their purpose. Recording here so a
+future review doesn't re-verify:
+
+Organizations
+  - organizations
+  - organizations/{organizationId}
+
+Networks / Devices
+  - organizations/{organizationId}/networks
+  - organizations/{organizationId}/devices
+  - organizations/{organizationId}/devices/statuses/overview
+      (Note: the sibling `/devices/statuses` (without `/overview`) is
+       deprecated — we do not call it. `/statuses/overview` is the
+       current aggregate-by-status endpoint and is NOT in the
+       deprecation list.)
+  - organizations/{organizationId}/devices/availabilities
+  - organizations/{organizationId}/devices/availabilities/changeHistory
+
+Sensors (MT)
+  - organizations/{organizationId}/sensor/readings/latest
+  - organizations/{organizationId}/sensor/readings/history
+
+Wireless (MR)
+  - organizations/{organizationId}/wireless/devices/channelUtilization/
+      history/byDevice/byInterval
+  - networks/{networkId}/wireless/usageHistory
+  - networks/{networkId}/wireless/ssids
+  - devices/{serial}/clients  (§2.1 recommends augmenting, not replacing)
+
+Switches (MS)
+  - organizations/{organizationId}/switch/ports/statuses/bySwitch
+  - devices/{serial}/switch/ports
+  - devices/{serial}/switch/ports/statuses/packets
+
+Appliance (MX)
+  - organizations/{organizationId}/appliance/uplink/statuses
+      (singular "uplink" — canonical path per the v1 spec; the
+       sibling `/appliance/uplinks/statuses` without `/overview` does
+       NOT exist in the spec, only `/appliance/uplinks/statuses/overview`)
+  - organizations/{organizationId}/appliance/uplinks/statuses/overview
+  - organizations/{organizationId}/appliance/vpn/statuses
+  - organizations/{organizationId}/appliance/vpn/stats
+  - organizations/{organizationId}/devices/uplinksLossAndLatency
+      (§2.2 recommends augmenting with the per-device history endpoint)
+  - networks/{networkId}/appliance/firewall/portForwardingRules
+  - networks/{networkId}/appliance/settings
+
+Cellular (MG)
+  - organizations/{organizationId}/cellularGateway/uplink/statuses
+  - devices/{serial}/cellularGateway/portForwardingRules
+  - devices/{serial}/cellularGateway/lan
+  - networks/{networkId}/cellularGateway/connectivityMonitoringDestinations
+
+Camera (MV)
+  - organizations/{organizationId}/camera/onboarding/statuses
+  - networks/{networkId}/camera/qualityRetentionProfiles
+  - (analytics/* endpoints — see §1.1)
+
+Alerts / Events
+  - organizations/{organizationId}/assurance/alerts
+  - organizations/{organizationId}/assurance/alerts/overview/byType
+      (§3.4 recommends also adding /overview/byNetwork and /historical)
+  - networks/{networkId}/events
+
+Insights
+  - organizations/{organizationId}/licenses
+      (§3.6 recommends fallback to subscription licensing endpoint)
+  - organizations/{organizationId}/licenses/overview  (see §3.6)
+  - organizations/{organizationId}/apiRequests/overview
+  - organizations/{organizationId}/apiRequests/overview/responseCodes/
+      byInterval
+  - organizations/{organizationId}/clients/overview
+  - organizations/{organizationId}/summary/top/clients/byUsage
+  - organizations/{organizationId}/summary/top/devices/byUsage
+  - organizations/{organizationId}/summary/top/devices/models/byUsage
+  - organizations/{organizationId}/summary/top/ssids/byUsage
+  - organizations/{organizationId}/summary/top/switches/byEnergyUsage
+  - organizations/{organizationId}/summary/top/networks/byStatus
+
+Configuration
+  - organizations/{organizationId}/configurationChanges
+
+
+==============================================================================
+§5  Endpoints we do NOT currently call but probably should plumb for CheckHealth
+==============================================================================
+[DONE — commit 591fedb] /administered/identities/me is now probed in parallel
+with GET /organizations; the owner's email is surfaced in the AppConfig
+"Connection" card via CheckHealthResult.JSONDetails (a structured
+{email, name, twoFactorEnabled, samlEnabled, organizationCount} payload).
+Identity-probe failures are non-fatal — the org probe remains the authoritative
+health signal. /earlyAccess/features/optIns intentionally NOT plumbed because
+every endpoint recommended in §2 / §3 is GA.
+
+Optional, low priority. `CheckHealth` today calls `GET /organizations` to
+validate the API key. We could additionally probe:
+
+  - GET /administered/identities/me
+      Returns info about the API key's owner — confirms the key is valid
+      and surfaces the user's email in the AppConfig "Connection" row.
+      Useful when a user pastes someone else's key and is confused
+      about which org they're reading.
+  - GET /organizations/{organizationId}/earlyAccess/features/optIns
+      Once we call EA-gated endpoints (if we ever do), probe this to
+      warn the operator if a required opt-in is missing. NOT needed
+      today because every endpoint recommended above is GA.
+
+Priority: LOW. Nice-to-have UX polish.
+
+
+==============================================================================
+§6  Early Access API — summary for reviewer
+==============================================================================
+
+The Meraki Early Access API is not a different base URL, API version, or
+OpenAPI spec. It's a per-org opt-in gate that enables certain beta
+endpoints (or new response fields on existing endpoints) for participating
+organizations. All paths recommended in §2 and §3 are GA and do not
+require opting in.
+
+If we later want to use a specifically EA-gated endpoint, the pattern is:
+
+  1. Call GET /organizations/{organizationId}/earlyAccess/features to
+     list what's offered.
+  2. Call POST /organizations/{organizationId}/earlyAccess/features/
+       optIns with {featureId} to opt-in (requires write scope on
+     the key — the plugin currently uses read-only scopes as much as
+     possible; do NOT auto-opt-in an org from this plugin, just warn).
+  3. Once opted in, the endpoint appears normally on the same
+     `/api/v1/...` path.
+
+In the absence of a specific EA-gated endpoint we actually want, no work
+is required here. This section exists so future contributors do not
+spend time looking for a phantom "early-access base URL" that does not
+exist.
+
+
+==============================================================================
+Suggested execution order for the LLM consuming this file
+==============================================================================
+
+  1. §1.1  camera boundaries migration  (deprecation risk)
+  2. §2.1  org-level AP client counts   (rate-limit + UX win)
+  3. §2.2  per-device uplink loss/latency history  (new user-visible feature)
+  4. §3.4  assurance alert byNetwork + historical  (easy win, richer alerts)
+  5. §3.1  switch port overview + usage history
+  6. §3.5  MX uplinks usage history
+  7. §3.2  wireless packetLoss/byNetwork + CPU + ethernet
+  8. §3.3  device memory history
+  9. §3.6  subscription licensing fallback  (only if user reports 4xx on
+           /licenses — otherwise defer until we see an affected org)
+ 10. §5    CheckHealth polish
+
+Each bullet above is independent of the others; feel free to pair up
+related migrations into a single PR, but do NOT bundle §1.1 with anything
+else because the Camera page panels are being reworked from scratch and
+that blast radius needs its own review.
