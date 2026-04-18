@@ -61,4 +61,12 @@ test.describe('Meraki app navigation', () => {
     await gotoPage(`/${ROUTES.Events}`);
     await expect(page.getByRole('heading', { name: 'Events' })).toBeVisible();
   });
+
+  test('Traffic page renders device-type selector', async ({ gotoPage, page }) => {
+    await gotoPage(`/${ROUTES.Traffic}`);
+    await expect(page.getByRole('heading', { name: 'Traffic' })).toBeVisible();
+    await expect(
+      page.getByLabel('Device type').or(page.getByText('Device type'))
+    ).toBeVisible();
+  });
 });

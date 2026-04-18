@@ -96,6 +96,13 @@
     },
     {
       "type": "page",
+      "name": "Traffic",
+      "path": "/a/%PLUGIN_ID%/traffic",
+      "addToNav": true,
+      "icon": "chart-line"
+    },
+    {
+      "type": "page",
       "name": "Audit Log",
       "path": "/a/%PLUGIN_ID%/audit-log",
       "addToNav": true,

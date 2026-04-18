@@ -15,6 +15,9 @@ export enum ROUTES {
   Insights = 'insights',
   Events = 'events',
   Alerts = 'alerts',
+  // §4.4.4-C — Traffic Analytics page (L7 application + category breakdown
+  // with per-network traffic-analysis guard banner).
+  Traffic = 'traffic',
   AuditLog = 'audit-log',
   Configuration = 'configuration',
 }

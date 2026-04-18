@@ -312,4 +312,22 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 			86400 * time.Second,
 		},
 	},
+
+	// §4.4.4-C — Per-network L7 traffic analysis. Meraki's documented cap is
+	// 30 days; no resolution parameter (the response is a flat row list, not
+	// a timeseries). Resolve() will surface a "window truncated" annotation
+	// if a wider range is requested.
+	"networks/{networkId}/traffic": {
+		MaxTimespan: 30 * 24 * time.Hour,
+	},
+
+	// §4.4.4-C — Org-level top-N application + category aggregates. Both
+	// summary endpoints share the same 186-day cap and require ≥ 25-min
+	// timespan. No resolution parameter — single aggregate per row.
+	"organizations/{organizationId}/summary/top/applications/byUsage": {
+		MaxTimespan: 186 * 24 * time.Hour,
+	},
+	"organizations/{organizationId}/summary/top/applications/categories/byUsage": {
+		MaxTimespan: 186 * 24 * time.Hour,
+	},
 }

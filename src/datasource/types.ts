@@ -148,6 +148,18 @@ export enum QueryKind {
    * networkEvents for the Home "what just changed in 24h" tile. Always a
    * fixed 24h lookback regardless of dashboard time range. */
   OrgChangeFeed = 'orgChangeFeed',
+
+  /* §4.4.4-C — Traffic Analytics page (L7 application breakdown).
+   *  - NetworkTraffic:                 per-network L7 row table from
+   *                                    /networks/{id}/traffic.
+   *  - TopApplicationsByUsage:         org-wide top-N applications.
+   *  - TopApplicationCategoriesByUsage: org-wide top-N categories.
+   *  - NetworkTrafficAnalysisMode:     per-network analysis mode lookup,
+   *                                    feeding the TrafficGuard banner. */
+  NetworkTraffic = 'networkTraffic',
+  TopApplicationsByUsage = 'topApplicationsByUsage',
+  TopApplicationCategoriesByUsage = 'topApplicationCategoriesByUsage',
+  NetworkTrafficAnalysisMode = 'networkTrafficAnalysisMode',
 }
 
 export interface MerakiQuery extends DataQuery {

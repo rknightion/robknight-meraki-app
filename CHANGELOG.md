@@ -8,6 +8,8 @@ top-level pages.
 
 ### Added
 
+- New Traffic Analytics page — L7 app and category breakdown with per-network traffic analysis guard (v0.5 §4.4.4-C).
+
 - **Cross-cutting panels — v0.5 §4.4.3-1f.**
   - New `orgChangeFeed` query kind: server-side union of
     `GetOrganizationConfigurationChanges` + `GetNetworkEvents` over the
