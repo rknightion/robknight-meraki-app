@@ -13,6 +13,7 @@ import (
 	"github.com/grafana/grafana-plugin-sdk-go/backend/resource/httpadapter"
 
 	"github.com/robknight/grafana-meraki-plugin/pkg/meraki"
+	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/alerts"
 )
 
 var (
@@ -36,6 +37,24 @@ type App struct {
 	// alerts-bundle states (ready / toggle-off / unreachable) without an
 	// httptest server. Production path is set in NewApp.
 	newGrafanaProber func(cfg *backend.GrafanaCfg) (GrafanaProber, error)
+
+	// newGrafanaAPI constructs a full alerts.GrafanaAPI CRUD client from
+	// the per-request cfg. Kept separate from newGrafanaProber because the
+	// alerts resource handlers need the full CRUD surface, not just Probe.
+	// Overridable from tests so /alerts/{status,reconcile,uninstall-all}
+	// can exercise happy + failure paths against a fake.
+	newGrafanaAPI func(cfg *backend.GrafanaCfg) (alerts.GrafanaAPI, error)
+
+	// alertsRegistry is the loaded-once bundled alert-rule registry. It is
+	// populated at App startup; alerts handlers read it under a read lock
+	// (the registry is immutable post-load).
+	alertsRegistry *alerts.Registry
+
+	// alertsStore persists the last reconcile summary to the plugin data
+	// dir so /alerts/status can answer "when did the last run happen" after
+	// a Grafana restart. Nil-safe: if the store failed to init we still
+	// serve status with a zero-valued summary.
+	alertsStore *alertsStore
 }
 
 // LabelMode controls how per-device series are labeled on timeseries panels
@@ -64,11 +83,35 @@ type Settings struct {
 
 // appJSONData mirrors src/types.ts AppJsonData.
 type appJSONData struct {
-	BaseURL         string    `json:"baseUrl,omitempty"`
-	SharedFraction  float64   `json:"sharedFraction,omitempty"`
-	IsAPIKeySet     bool      `json:"isApiKeySet,omitempty"`
-	LabelMode       LabelMode `json:"labelMode,omitempty"`
-	EnableIPLimiter bool      `json:"enableIPLimiter,omitempty"`
+	BaseURL         string        `json:"baseUrl,omitempty"`
+	SharedFraction  float64       `json:"sharedFraction,omitempty"`
+	IsAPIKeySet     bool          `json:"isApiKeySet,omitempty"`
+	LabelMode       LabelMode     `json:"labelMode,omitempty"`
+	EnableIPLimiter bool          `json:"enableIPLimiter,omitempty"`
+	// Alerts carries the bundled alert-rule install state (group toggles,
+	// per-template toggles, threshold overrides, last-reconcile telemetry).
+	// Mirrors src/types.ts AlertsConfig. The runtime reconcile summary is
+	// ALSO persisted out-of-band by alertsStore so it survives restarts
+	// even if Grafana hasn't pushed fresh jsonData yet (§4.5.5 decision
+	// log — dataPath persistence avoids an extra Grafana HTTP round trip
+	// on every reconcile).
+	Alerts *appAlertsConfig `json:"alerts,omitempty"`
+}
+
+// appAlertsConfig mirrors src/types.ts AlertsConfig. Both sides are
+// independently free to add fields; any omitempty JSON tag preserves wire
+// compatibility as the shape grows.
+type appAlertsConfig struct {
+	Groups               map[string]appAlertsGroupState       `json:"groups,omitempty"`
+	Thresholds           map[string]map[string]map[string]any `json:"thresholds,omitempty"`
+	LastReconciledAt     *time.Time                           `json:"lastReconciledAt,omitempty"`
+	LastReconcileSummary *AlertsReconcileSummary              `json:"lastReconcileSummary,omitempty"`
+}
+
+// appAlertsGroupState mirrors src/types.ts AlertsGroupState.
+type appAlertsGroupState struct {
+	Installed    bool            `json:"installed"`
+	RulesEnabled map[string]bool `json:"rulesEnabled,omitempty"`
 }
 
 // NewApp is the factory invoked by Grafana for each plugin instance.
@@ -87,11 +130,29 @@ func NewApp(_ context.Context, s backend.AppInstanceSettings) (instancemgmt.Inst
 		}
 	}
 
+	// Load the bundled alerts registry once per plugin instance. A load
+	// failure is NOT fatal to the whole plugin — other endpoints (/query,
+	// /metricFind, /ping) should still work. The alerts handlers will
+	// short-circuit with a 503 when the registry is nil.
+	registry, rerr := alerts.LoadRegistry()
+	if rerr != nil {
+		logger.Warn("alerts registry failed to load", "err", rerr)
+	}
+	store, serr := newAlertsStore(alertsDataDir())
+	if serr != nil {
+		logger.Warn("alerts store unavailable, continuing without persistence", "err", serr)
+	}
+
 	app := &App{
-		settings: settings,
-		client:   client,
-		logger:   logger,
+		settings:       settings,
+		client:         client,
+		logger:         logger,
+		alertsRegistry: registry,
+		alertsStore:    store,
 		newGrafanaProber: func(cfg *backend.GrafanaCfg) (GrafanaProber, error) {
+			return NewGrafanaClient(cfg)
+		},
+		newGrafanaAPI: func(cfg *backend.GrafanaCfg) (alerts.GrafanaAPI, error) {
 			return NewGrafanaClient(cfg)
 		},
 	}
