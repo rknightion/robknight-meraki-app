@@ -29,3 +29,7 @@ services:
       GF_LOG_LEVEL: debug
       GF_DATAPROXY_LOGGING: 1
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: robknight-meraki-app
+      # externalServiceAccounts is required for plugin IAM → service-account
+      # provisioning (v0.6 bundled alert rules, todos.txt §4.5.2). Grafana
+      # Cloud has this enabled by default; local dev must opt in.
+      GF_FEATURE_TOGGLES_ENABLE: externalServiceAccounts

@@ -29,6 +29,13 @@ type App struct {
 	settings Settings
 	client   *meraki.Client
 	logger   log.Logger
+
+	// newGrafanaProber constructs a GrafanaProber from the per-request
+	// backend.GrafanaCfg (AppURL + plugin-app client secret live in there).
+	// Overridable from tests so CheckHealth can exercise the three
+	// alerts-bundle states (ready / toggle-off / unreachable) without an
+	// httptest server. Production path is set in NewApp.
+	newGrafanaProber func(cfg *backend.GrafanaCfg) (GrafanaProber, error)
 }
 
 // LabelMode controls how per-device series are labeled on timeseries panels
@@ -84,6 +91,9 @@ func NewApp(_ context.Context, s backend.AppInstanceSettings) (instancemgmt.Inst
 		settings: settings,
 		client:   client,
 		logger:   logger,
+		newGrafanaProber: func(cfg *backend.GrafanaCfg) (GrafanaProber, error) {
+			return NewGrafanaClient(cfg)
+		},
 	}
 	mux := http.NewServeMux()
 	app.registerRoutes(mux)
@@ -239,6 +249,11 @@ func (a *App) CheckHealth(ctx context.Context, _ *backend.CheckHealthRequest) (*
 		message = fmt.Sprintf("Connected to Meraki as %s; %d organization%s visible.", identity.identity.Email, len(orgs.orgs), pluralSuffix(len(orgs.orgs)))
 	}
 
+	// Alerts-bundle probe is opt-in — a cold plugin install without the
+	// externalServiceAccounts toggle still passes health. Failures become
+	// informational suffixes on the existing message (§4.5.2 Phase 0).
+	message += " " + a.alertsBundleStatus(ctx)
+
 	type healthDetails struct {
 		Email             string `json:"email,omitempty"`
 		Name              string `json:"name,omitempty"`
@@ -284,4 +299,30 @@ func pluralSuffix(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// alertsBundleStatus runs the v0.6 alert-provisioning probe and returns a
+// human-readable status suffix. Never errors — a missing config, absent
+// factory, or transport failure all degrade to "Alerts bundle: unavailable".
+// CheckHealth concatenates the result onto the Meraki-connectivity message
+// so operators see both signals in a single line.
+func (a *App) alertsBundleStatus(ctx context.Context) string {
+	if a.newGrafanaProber == nil {
+		return "Alerts bundle: unavailable — plugin app client not wired."
+	}
+	cfg := backend.GrafanaConfigFromContext(ctx)
+	prober, err := a.newGrafanaProber(cfg)
+	if err != nil {
+		a.logger.Debug("alerts bundle prober unavailable", "err", err)
+		return "Alerts bundle: unavailable — enable externalServiceAccounts feature toggle or upgrade Grafana build."
+	}
+	ready, reason, err := prober.Probe(ctx)
+	if err != nil {
+		a.logger.Debug("alerts bundle probe failed", "err", err)
+		return "Alerts bundle: unavailable — could not reach Grafana alert provisioning API."
+	}
+	if ready {
+		return "Alerts bundle: ready."
+	}
+	return "Alerts bundle: " + reason + "."
 }

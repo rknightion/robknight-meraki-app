@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 (Unreleased)
+
+Bundled alert-rules roadmap — todos.txt §4.5. Phase 0 wires the plugin IAM
+plumbing so Grafana issues an externalServiceAccounts token on install;
+subsequent phases add the rule-template registry, reconciler, and install
+UX.
+
+### Added
+
+- Plugin IAM block granting alert.provisioning read/write + folders
+  create/write/read, enabling the v0.6 bundled alert rules install UX
+  (§4.5.2).
+- CheckHealth now probes Grafana's alert provisioning API and reports the
+  externalServiceAccounts feature-toggle state.
+
+### Developer
+
+- docker-compose-base.yaml enables externalServiceAccounts feature toggle
+  for local dev.
+
 ## 0.5.0 (Unreleased)
 
 V0.5 panels + pages roadmap — todos.txt §4.4. Additive scene work with no
