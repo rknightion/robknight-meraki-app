@@ -1,0 +1,59 @@
+kind: alert_rule_template
+id: vpn-peer-down
+group: wan
+display_name: Site-to-site VPN peer unreachable
+severity: critical
+thresholds:
+  - key: for_duration
+    type: duration
+    default: 3m
+    label: Grace period before alerting
+    help: Peer must be unreachable for this duration before the rule fires.
+  - key: count_gt
+    type: int
+    default: 0
+    label: Unreachable peer count threshold
+    help: Fire when more than this many VPN peers report non-reachable status.
+rule:
+  title: "Meraki site-to-site VPN peer unreachable — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: applianceVpnStatuses
+    params:
+      orgId: "<% .OrgID %>"
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: applianceVpnStatuses
+        orgId: "<% .OrgID %>"
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [<% .Thresholds.count_gt %>] }
+        expression: B
+  annotations:
+    summary: "Site-to-site VPN peer(s) unreachable in Meraki org <% .OrgID %>"
+    description: "One or more site-to-site VPN peers are reporting a non-reachable status. Open the plugin VPN scene for peer-by-peer detail."
+  labels:
+    severity: critical
+    meraki_group: wan
+    meraki_product: appliance
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: vpn-peer-down
+    managed_by: meraki-plugin

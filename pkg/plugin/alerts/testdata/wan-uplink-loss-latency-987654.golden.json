@@ -1,0 +1,74 @@
+{
+  "uid": "meraki-wan-uplink-loss-latency-987654",
+  "title": "Meraki MX uplink loss/latency degraded — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "deviceUplinksLossLatency",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "mean",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                2
+              ],
+              "type": "gt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "5m",
+  "annotations": {
+    "description": "One or more MX uplinks are reporting elevated loss or latency. Drill into the Uplinks scene for per-interface history.",
+    "summary": "MX uplink loss/latency degraded in Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wan",
+    "meraki_org": "987654",
+    "meraki_product": "appliance",
+    "meraki_rule": "uplink-loss-latency",
+    "severity": "warning"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "wan"
+}
