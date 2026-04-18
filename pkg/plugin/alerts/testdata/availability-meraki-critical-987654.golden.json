@@ -1,0 +1,74 @@
+{
+  "uid": "meraki-availability-meraki-critical-987654",
+  "title": "Meraki critical alerts — 987654",
+  "condition": "C",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "alertsOverview",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 600,
+        "to": 0
+      }
+    },
+    {
+      "refId": "B",
+      "datasourceUid": "__expr__",
+      "model": {
+        "expression": "A",
+        "reducer": "last",
+        "refId": "B",
+        "type": "reduce"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    },
+    {
+      "refId": "C",
+      "datasourceUid": "__expr__",
+      "model": {
+        "conditions": [
+          {
+            "evaluator": {
+              "params": [
+                0
+              ],
+              "type": "gt"
+            }
+          }
+        ],
+        "expression": "B",
+        "refId": "C",
+        "type": "threshold"
+      },
+      "relativeTimeRange": {
+        "from": 0,
+        "to": 0
+      }
+    }
+  ],
+  "noDataState": "NoData",
+  "execErrState": "Error",
+  "for": "1m",
+  "annotations": {
+    "description": "Meraki reports one or more active critical-severity alerts. Open the plugin Alerts page for details.",
+    "summary": "Meraki Assurance is reporting critical alerts in org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "availability",
+    "meraki_org": "987654",
+    "meraki_product": "",
+    "meraki_rule": "meraki-critical",
+    "severity": "critical"
+  },
+  "folderUID": "meraki-bundled-folder",
+  "ruleGroup": "availability"
+}

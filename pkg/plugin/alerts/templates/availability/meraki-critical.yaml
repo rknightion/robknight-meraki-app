@@ -1,0 +1,59 @@
+kind: alert_rule_template
+id: meraki-critical
+group: availability
+display_name: Meraki critical alerts
+severity: critical
+thresholds:
+  - key: critical_count_gt
+    type: int
+    default: 0
+    label: Critical alert count threshold
+    help: Fire when the Meraki Assurance critical-severity alert count exceeds this value.
+  - key: for_duration
+    type: duration
+    default: 1m
+    label: Grace period before alerting
+    help: Critical count must stay above threshold for this duration before firing.
+rule:
+  title: "Meraki critical alerts — <% .OrgID %>"
+  for: "<% .Thresholds.for_duration %>"
+  query:
+    kind: alertsOverview
+    params:
+      orgId: "<% .OrgID %>"
+  condition: "C"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 600, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: alertsOverview
+        orgId: "<% .OrgID %>"
+    - refId: B
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+    - refId: C
+      relativeTimeRange: { from: 0, to: 0 }
+      datasourceUid: "__expr__"
+      model:
+        refId: C
+        type: threshold
+        conditions:
+          - evaluator: { type: gt, params: [<% .Thresholds.critical_count_gt %>] }
+        expression: B
+  annotations:
+    summary: "Meraki Assurance is reporting critical alerts in org <% .OrgID %>"
+    description: "Meraki reports one or more active critical-severity alerts. Open the plugin Alerts page for details."
+  labels:
+    severity: critical
+    meraki_group: availability
+    meraki_product: ""
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: meraki-critical
+    managed_by: meraki-plugin

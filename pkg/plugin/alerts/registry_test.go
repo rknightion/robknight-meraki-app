@@ -7,26 +7,37 @@ import (
 )
 
 // TestLoadRegistry confirms the production embedded FS parses cleanly and
-// exposes exactly the templates we've shipped. When §4.5.7 lands the 12
-// remaining templates this test moves to asserting `>=` counts — for now
-// tight equality keeps the seed honest.
+// that the availability/device-offline seed template is always present.
+// The stricter per-template render contract is enforced by the
+// golden-fixture suite (templates_test.go); this test guards against
+// structural regressions (the FS fails to load, groups go missing) only.
 func TestLoadRegistry(t *testing.T) {
 	reg, err := LoadRegistry()
 	if err != nil {
 		t.Fatalf("LoadRegistry: %v", err)
 	}
 	groups := reg.Groups()
-	if len(groups) != 1 {
-		t.Fatalf("expected 1 group, got %d (%v)", len(groups), groups)
+	if len(groups) == 0 {
+		t.Fatalf("expected at least 1 group, got 0")
 	}
-	if groups[0].ID != "availability" {
-		t.Fatalf("expected group availability, got %q", groups[0].ID)
+	tpl, ok := reg.Template("availability", "device-offline")
+	if !ok {
+		t.Fatalf("Template(availability, device-offline): not found (groups=%v)", groups)
 	}
-	if len(groups[0].Templates) != 1 {
-		t.Fatalf("expected 1 template in availability, got %d", len(groups[0].Templates))
+	if tpl.Severity != "critical" {
+		t.Fatalf("device-offline severity = %q, want critical", tpl.Severity)
 	}
-	if groups[0].Templates[0].ID != "device-offline" {
-		t.Fatalf("expected template device-offline, got %q", groups[0].Templates[0].ID)
+	// Every loaded template must advertise a non-empty group and ID, and
+	// a non-empty severity — guards the YAML-schema contract.
+	for _, g := range groups {
+		for _, t2 := range g.Templates {
+			if t2.GroupID == "" || t2.ID == "" {
+				t.Errorf("group %q: template with empty ID/GroupID: %+v", g.ID, t2)
+			}
+			if t2.Severity == "" {
+				t.Errorf("%s/%s: empty severity", g.ID, t2.ID)
+			}
+		}
 	}
 }
 

@@ -367,8 +367,19 @@ func TestHandleAlertsTemplates_ReturnsRegistry(t *testing.T) {
 	if avail == nil {
 		t.Fatalf("availability group missing; got %+v", body.Groups)
 	}
-	if len(avail.Templates) != 1 || avail.Templates[0].ID != "device-offline" {
-		t.Fatalf("availability templates = %+v, want [device-offline]", avail.Templates)
+	// device-offline is the Phase 1 seed. §4.5.7 added further templates
+	// across multiple groups; assert device-offline is still present
+	// under availability without pinning the full list (that's the job of
+	// pkg/plugin/alerts/registry_test.go).
+	found := false
+	for _, tpl := range avail.Templates {
+		if tpl.ID == "device-offline" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("availability templates = %+v, want device-offline present", avail.Templates)
 	}
 }
 
