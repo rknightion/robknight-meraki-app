@@ -125,6 +125,16 @@ const (
 	KindAlertsOverviewByNetwork  QueryKind = "alertsOverviewByNetwork"
 	KindAlertsOverviewHistorical QueryKind = "alertsOverviewHistorical"
 
+	// §4.4.3-1c — MX traffic shaping snapshot + uplink failover event timeline.
+	// applianceVpnHeatmap is a reshape of the existing applianceVpnStatuses
+	// feed into a (peerNetworkName, sourceNetworkName, value) long-format
+	// table the Grafana heatmap viz can consume; kept as a new kind rather
+	// than reshaping applianceVpnStatuses in place because the existing
+	// flattened table is also used by a tests / a future follow-up panel.
+	KindApplianceTrafficShaping  QueryKind = "applianceTrafficShaping"
+	KindApplianceFailoverEvents  QueryKind = "applianceFailoverEvents"
+	KindApplianceVpnHeatmap      QueryKind = "applianceVpnHeatmap"
+
 	// §4.4.2 — v0.5 Phase 0 plumbing. configurationChangesAnnotation reshapes
 	// the configurationChanges feed into a Grafana annotation frame for
 	// data-layer overlay. alertsMttrSummary aggregates alert resolution times
@@ -301,6 +311,11 @@ var handlers = map[QueryKind]handlerFn{
 	// §4.4.2 — v0.5 Phase 0 plumbing.
 	KindConfigurationChangesAnnotation: handleConfigurationChangesAnnotation,
 	KindAlertsMttrSummary:              handleAlertsMttrSummary,
+
+	// §4.4.3-1c — MX panels.
+	KindApplianceTrafficShaping: handleApplianceTrafficShaping,
+	KindApplianceFailoverEvents: handleApplianceFailoverEvents,
+	KindApplianceVpnHeatmap:     handleApplianceVpnHeatmap,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

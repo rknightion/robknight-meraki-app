@@ -623,3 +623,106 @@ func (c *Client) GetNetworkApplianceSettings(ctx context.Context, networkID stri
 	return &out, nil
 }
 
+// Phase v0.5 §4.4.3-1c additions — MX traffic shaping snapshots.
+//
+// Endpoint paths + response shapes verified via ctx7 against the canonical
+// /openapi/api_meraki_api_v1_openapispec dataset on 2026-04-18. Both endpoints
+// are per-network snapshots (no pagination, no timespan) and share a 5-minute
+// TTL in the handler — they describe admin-authored config which rarely
+// changes inside a single dashboard refresh.
+
+// ApplianceTrafficShaping is the response shape of
+// `GET /networks/{networkId}/appliance/trafficShaping`. Fields follow the
+// v1 OpenAPI example: a default-enabled flag and a nested globalBandwidthLimits
+// block with per-uplink up/down caps in kbps.
+type ApplianceTrafficShaping struct {
+	DefaultRulesEnabled    *bool                             `json:"defaultRulesEnabled,omitempty"`
+	GlobalBandwidthLimits  *ApplianceTrafficShapingBandwidth `json:"globalBandwidthLimits,omitempty"`
+}
+
+// ApplianceTrafficShapingBandwidth is the nested global bandwidth block.
+// limitUp / limitDown are kbps; Meraki returns them as integers.
+type ApplianceTrafficShapingBandwidth struct {
+	LimitUp   *int64 `json:"limitUp,omitempty"`
+	LimitDown *int64 `json:"limitDown,omitempty"`
+}
+
+// GetNetworkApplianceTrafficShaping returns the per-network traffic shaping
+// default-rules + global bandwidth snapshot. Not paginated.
+func (c *Client) GetNetworkApplianceTrafficShaping(ctx context.Context, networkID string, ttl time.Duration) (*ApplianceTrafficShaping, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/appliance/trafficShaping", Message: "missing network id"}}
+	}
+	var out ApplianceTrafficShaping
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/appliance/trafficShaping",
+		"", nil, ttl, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ApplianceTrafficShapingUplinkSelection is the response shape of
+// `GET /networks/{networkId}/appliance/trafficShaping/uplinkSelection`. The
+// schema mirrors the v1 OpenAPI PUT example (responses are documented only by
+// example, not by an explicit schema in the spec).
+type ApplianceTrafficShapingUplinkSelection struct {
+	ActiveActiveAutoVpnEnabled bool                                                `json:"activeActiveAutoVpnEnabled,omitempty"`
+	DefaultUplink              string                                              `json:"defaultUplink,omitempty"`
+	LoadBalancingEnabled       bool                                                `json:"loadBalancingEnabled,omitempty"`
+	FailoverAndFailback        *ApplianceTrafficShapingFailoverAndFailback         `json:"failoverAndFailback,omitempty"`
+	WanTrafficUplinkPrefs      []ApplianceTrafficShapingWanTrafficUplinkPreference `json:"wanTrafficUplinkPreferences,omitempty"`
+	VpnTrafficUplinkPrefs      []ApplianceTrafficShapingVpnTrafficUplinkPreference `json:"vpnTrafficUplinkPreferences,omitempty"`
+}
+
+// ApplianceTrafficShapingFailoverAndFailback captures the immediate-failover
+// toggle. Meraki nests it under `immediate.enabled`.
+type ApplianceTrafficShapingFailoverAndFailback struct {
+	Immediate *ApplianceTrafficShapingImmediate `json:"immediate,omitempty"`
+}
+
+// ApplianceTrafficShapingImmediate is the nested immediate failover toggle.
+type ApplianceTrafficShapingImmediate struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ApplianceTrafficShapingWanTrafficUplinkPreference is one WAN preference.
+// The `trafficFilters` array is complex and schema-free in the OpenAPI; we
+// decode it as a JSON array we surface as a count in the flattened handler
+// rather than exposing the nested filter model verbatim.
+type ApplianceTrafficShapingWanTrafficUplinkPreference struct {
+	PreferredUplink string                                    `json:"preferredUplink,omitempty"`
+	TrafficFilters  []ApplianceTrafficShapingFilter `json:"trafficFilters,omitempty"`
+}
+
+// ApplianceTrafficShapingVpnTrafficUplinkPreference is one VPN preference.
+// Adds the `failOverCriterion` + optional `performanceClass` block on top of
+// the WAN preference shape.
+type ApplianceTrafficShapingVpnTrafficUplinkPreference struct {
+	PreferredUplink   string                                    `json:"preferredUplink,omitempty"`
+	FailOverCriterion string                                    `json:"failOverCriterion,omitempty"`
+	TrafficFilters    []ApplianceTrafficShapingFilter `json:"trafficFilters,omitempty"`
+}
+
+// ApplianceTrafficShapingFilter is the common traffic-filter shape. We capture
+// only `type` so the flattened handler can summarise preferences without
+// dragging the full filter schema through Go types.
+type ApplianceTrafficShapingFilter struct {
+	Type string `json:"type,omitempty"`
+}
+
+// GetNetworkApplianceTrafficShapingUplinkSelection returns the per-network
+// uplink-selection policy snapshot. Not paginated.
+func (c *Client) GetNetworkApplianceTrafficShapingUplinkSelection(ctx context.Context, networkID string, ttl time.Duration) (*ApplianceTrafficShapingUplinkSelection, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/appliance/trafficShaping/uplinkSelection", Message: "missing network id"}}
+	}
+	var out ApplianceTrafficShapingUplinkSelection
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/appliance/trafficShaping/uplinkSelection",
+		"", nil, ttl, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
