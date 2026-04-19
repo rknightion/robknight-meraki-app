@@ -2,27 +2,35 @@
 
 TypeScript + React + `@grafana/scenes`. Two plugins live here:
 
-- **App plugin** (`module.tsx`, `plugin.json` id `robknight-meraki-app`) — the top-level entry. Mounts a `SceneApp` with the Home/Organizations/AccessPoints/Switches/Sensors/Alerts/Configuration pages.
+- **App plugin** (`module.tsx`, `plugin.json` id `robknight-meraki-app`) — the top-level entry. Mounts a `SceneApp`. Current pages (source of truth: `src/components/App/App.tsx` + `plugin.json` includes): Home, Organizations, Appliances, AccessPoints, Switches, Cameras, CellularGateways, Sensors, Insights, Events, Alerts, Traffic, Topology, AuditLog, Clients, Firmware, Configuration.
 - **Nested data source** (`datasource/` id `robknight-meraki-datasource`) — frontend-only. Proxies every `query()` and `metricFindQuery()` to the app's resource endpoints via `getBackendSrv().fetch`.
 
 ## Layout
 
 ```
-module.tsx               App entry — returns <App/> wrapped in PluginPropsContext
-plugin.json              App manifest (id, includes, backend: true, executable: gpx_meraki)
-constants.ts             PLUGIN_ID, ROUTES enum, DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS
-types.ts                 AppJsonData, AppSecureJsonData, DeviceLabelMode, MerakiProductType, SensorMetric
+module.tsx                            App entry — returns <App/> wrapped in PluginPropsContext
+plugin.json                           App manifest (id, includes, backend: true, executable: gpx_meraki)
+constants.ts                          PLUGIN_ID, ROUTES enum, DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS
+types.ts                              AppJsonData, AppSecureJsonData, RecordingsConfig, DeviceLabelMode,
+                                      MerakiProductType, SensorMetric
 components/
-  App/App.tsx            SceneApp factory + page list
-  AppConfig/AppConfig.tsx Config form (API key, region, base URL, shared fraction, label mode)
-  testIds.ts             data-testid constants for Playwright
-pages/<Area>/            Scene pages (one directory per Area) — see src/pages/CLAUDE.md
-scene-helpers/           Shared variables, panels, links, ConfigGuard, sensor metric metadata
-datasource/              Nested DS — see src/datasource/CLAUDE.md
+  App/App.tsx                         SceneApp factory + page list (source of truth)
+  AppConfig/AppConfig.tsx             Config form (API key, region, base URL, shared fraction, label mode,
+                                      recordings target DS + per-group toggles)
+  AppConfig/AlertRulesPanel.tsx       Operator UI for the v0.6 alert bundle
+  AppConfig/RecordingsPanel.tsx       Operator UI for the v0.7 recording bundle
+  AppConfig/RuleBundlePanel/          Shared group/threshold primitives used by both panels above
+  AppConfig/use{Alerts,Recordings}{Status,Templates}.ts  Data hooks wrapping the resource endpoints
+  testIds.ts                          data-testid constants for Playwright
+pages/<Area>/                         Scene pages (one directory per Area) — see src/pages/CLAUDE.md
+scene-helpers/                        Shared variables, panels, links, config/traffic/family gates,
+                                      sensor-metric metadata, recording-rule trend/fallback helpers
+datasource/                           Nested DS — see src/datasource/CLAUDE.md
 utils/
-  utils.plugin.ts        PluginPropsContext (gives scenes access to AppRootProps)
-  utils.routing.ts       prefixRoute(ROUTES.Foo) — returns `/a/<pluginId>/foo`
-img/                     logo.svg + screenshots/
+  utils.plugin.ts                     PluginPropsContext (gives scenes access to AppRootProps); also
+                                      exports usePluginMeta() used by family-gated layouts
+  utils.routing.ts                    prefixRoute(ROUTES.Foo) — returns `/a/<pluginId>/foo`
+img/                                  logo.svg + screenshots/
 ```
 
 ## Query-kind contract

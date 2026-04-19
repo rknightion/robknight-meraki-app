@@ -32,26 +32,47 @@ type SwitchWithPorts struct {
 }
 
 // SwitchPortStatus is one entry in the `ports` array embedded per switch by
-// the org-level `statuses/bySwitch` endpoint. The shape combines port config
-// (enabled, vlan) with live status (status, duplex, speed) and link-diagnostic
-// fields (errors, warnings, clientCount, powerUsageInWatts).
+// the org-level `statuses/bySwitch` endpoint, AND one entry of the
+// device-scoped `/devices/{serial}/switch/ports/statuses` response.
+//
+// The two endpoints return DIFFERENT subsets of fields:
+//   - **Org-level `statuses/bySwitch`** — minimal shape. Returns portId,
+//     enabled, status, speed, duplex, poe.isAllocated, spanningTree,
+//     errors/warnings, isUplink. Does NOT return clientCount,
+//     powerUsageInWh, usageInKb, trafficInKbps, or vlan/allowedVlans.
+//   - **Device-scoped `/devices/{serial}/switch/ports/statuses`** — rich
+//     shape. Adds clientCount, powerUsageInWh, usageInKb, trafficInKbps on
+//     top of the org-level fields, but STILL omits the config fields
+//     (vlan, voiceVlan, allowedVlans) which only come from the config
+//     endpoint `/devices/{serial}/switch/ports`.
+//
+// So for per-switch detail views we fetch the device-scoped statuses AND
+// merge the device-scoped config by portId — the helper that does this
+// lives in `pkg/plugin/query/switches.go:handleSwitchPorts`.
+//
+// Units: powerUsageInWh is what the API returns literally — interpret as
+// energy-per-sampling-window (roughly watts when summed across a 1h
+// period). Downstream panels display it with the "watt" unit for
+// operator familiarity even though the name says Wh.
 type SwitchPortStatus struct {
-	PortID            string   `json:"portId"`
-	Enabled           bool     `json:"enabled"`
-	Status            string   `json:"status,omitempty"`
-	Errors            []string `json:"errors,omitempty"`
-	Warnings          []string `json:"warnings,omitempty"`
+	PortID   string   `json:"portId"`
+	Enabled  bool     `json:"enabled"`
+	Status   string   `json:"status,omitempty"`
+	Errors   []string `json:"errors,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
 	// Speed is surfaced as a human-readable string like "10 Gbps" in some
 	// responses and a numeric Mbps value in others (the v1 spec is string).
 	// We keep a string copy and derive Mbps in the handler via parseSpeedMbps
 	// so callers get a stable numeric column.
-	Speed             string   `json:"speed,omitempty"`
-	Duplex            string   `json:"duplex,omitempty"`
-	ClientCount       int64    `json:"clientCount,omitempty"`
-	PowerUsageInWatts float64  `json:"powerUsageInWatts,omitempty"`
-	TrafficInKbps     *SwitchPortTrafficKbps `json:"trafficInKbps,omitempty"`
-	UsageInKb         *SwitchPortUsageKb     `json:"usageInKb,omitempty"`
-	// Config fields that the bySwitch endpoint echoes.
+	Speed          string                 `json:"speed,omitempty"`
+	Duplex         string                 `json:"duplex,omitempty"`
+	ClientCount    int64                  `json:"clientCount,omitempty"`
+	PowerUsageInWh float64                `json:"powerUsageInWh,omitempty"`
+	TrafficInKbps  *SwitchPortTrafficKbps `json:"trafficInKbps,omitempty"`
+	UsageInKb      *SwitchPortUsageKb     `json:"usageInKb,omitempty"`
+	// Config fields — ONLY populated when merged from the device-scoped
+	// `/devices/{serial}/switch/ports` config feed by the caller. The
+	// statuses endpoints themselves do NOT echo VLAN config.
 	Vlan         int    `json:"vlan,omitempty"`
 	VoiceVlan    int    `json:"voiceVlan,omitempty"`
 	AllowedVlans string `json:"allowedVlans,omitempty"`
@@ -170,6 +191,38 @@ func (c *Client) GetDeviceSwitchPorts(ctx context.Context, serial string, ttl ti
 	if err := c.Get(ctx,
 		"devices/"+url.PathEscape(serial)+"/switch/ports",
 		"", nil, ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetDeviceSwitchPortStatuses returns the live per-port statuses for one
+// switch. The shape is the `SwitchPortStatus` rich variant — clientCount,
+// powerUsageInWh, usageInKb, and trafficInKbps are populated, unlike the
+// minimal shape returned by the org-level `statuses/bySwitch` endpoint.
+//
+// Units / timespan: `powerUsageInWh` is **energy** accumulated over the
+// request's timespan (Meraki default: 1 day). To make the value
+// numerically equal to average watts we pass `timespan=3600` — energy
+// consumed in one hour, measured in watt-hours, equals the average power
+// in watts (dimensionally Wh/h = W). Without this, a port pulling ~3 W
+// reads as ~72 Wh per day and the UI "PoE draw" stat hits absurd totals.
+// Verified 2026-04-19 against org 1019781: default → 231.9 Wh total;
+// `timespan=3600` → 7.8 W total on the same switch.
+//
+// Used by the per-switch detail page so the Port map / PoE / Clients KPIs
+// actually surface data. For fleet-wide (org-level) queries we keep using
+// the aggregated endpoint to avoid paying N device calls per panel load —
+// except for the PoE aggregator which fans out with a cap (see
+// handleSwitchPortsOverview).
+func (c *Client) GetDeviceSwitchPortStatuses(ctx context.Context, serial string, ttl time.Duration) ([]SwitchPortStatus, error) {
+	if serial == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "devices/{serial}/switch/ports/statuses", Message: "missing serial"}}
+	}
+	var out []SwitchPortStatus
+	if err := c.Get(ctx,
+		"devices/"+url.PathEscape(serial)+"/switch/ports/statuses",
+		"", url.Values{"timespan": []string{"3600"}}, ttl, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -376,7 +429,11 @@ type SwitchPortsUsageHistoryOptions struct {
 }
 
 func (o SwitchPortsUsageHistoryOptions) values() url.Values {
-	v := url.Values{"perPage": []string{"1000"}}
+	// perPage: the usage-history endpoint caps at 50 — not 1000 like the
+	// sibling bySwitch statuses/config feeds. HTTP 400 from Meraki if
+	// exceeded. Verified 2026-04-19; keep this at 50 and rely on Link
+	// pagination in GetAll for estates with >50 switches.
+	v := url.Values{"perPage": []string{"50"}}
 	for _, id := range o.NetworkIDs {
 		v.Add("networkIds[]", id)
 	}
@@ -435,11 +492,10 @@ type switchPortUsageIntervalData struct {
 // §4.4.3-1b — switchPoe / switchStp / switchMacTable / switchVlansSummary
 // ---------------------------------------------------------------------------
 
-// SwitchPortPoeStatus is a per-port PoE draw entry. Sourced by reusing the
-// existing org-level `statuses/bySwitch` endpoint (which already carries
-// `powerUsageInWatts` per port); we shape it per-port rather than per-switch
-// so callers can render a per-port PoE distribution without an expand
-// transform.
+// SwitchPortPoeStatus is a per-port PoE draw entry. Sourced from the
+// device-scoped statuses feed (which carries `powerUsageInWh` per port);
+// we shape it per-port rather than per-switch so callers can render a
+// per-port PoE distribution without an expand transform.
 type SwitchPortPoeStatus struct {
 	Serial      string  `json:"serial"`
 	SwitchName  string  `json:"switchName,omitempty"`
@@ -567,21 +623,24 @@ type SwitchBySwitchPort struct {
 }
 
 // GetOrganizationSwitchPortsBySwitch fetches the config-feed variant of the
-// bySwitch endpoint (distinct from `/switch/ports/statuses/bySwitch`). The
-// response wraps items in an `items` object like the statuses variant.
+// bySwitch endpoint (distinct from `/switch/ports/statuses/bySwitch`).
+//
+// Shape difference from the statuses sibling — this endpoint returns a
+// BARE JSON ARRAY at the top level, NOT the `{items: [...]}` envelope used
+// by `statuses/bySwitch`. Verified against api.meraki.com 2026-04-19;
+// previously decoded as an `{items}` wrapper which always yielded an
+// empty slice and silently blanked the switchVlansSummary panel.
 func (c *Client) GetOrganizationSwitchPortsBySwitch(ctx context.Context, orgID string, opts SwitchBySwitchPortsOptions, ttl time.Duration) ([]SwitchBySwitch, error) {
 	if orgID == "" {
 		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/switch/ports/bySwitch", Message: "missing organization id"}}
 	}
-	var wrapper struct {
-		Items []SwitchBySwitch `json:"items"`
-	}
+	var out []SwitchBySwitch
 	if err := c.Get(ctx,
 		"organizations/"+url.PathEscape(orgID)+"/switch/ports/bySwitch",
-		orgID, opts.values(), ttl, &wrapper); err != nil {
+		orgID, opts.values(), ttl, &out); err != nil {
 		return nil, err
 	}
-	return wrapper.Items, nil
+	return out, nil
 }
 
 // GetOrganizationSwitchPortsUsageHistory paginates through the switch ports

@@ -35,6 +35,13 @@ const (
 	networkTrafficEndpoint      = "networks/{networkId}/traffic"
 	topAppsByUsageEndpoint      = "organizations/{organizationId}/summary/top/applications/byUsage"
 	topAppCategoriesByUsageEnd  = "organizations/{organizationId}/summary/top/applications/categories/byUsage"
+	// topAppsMinWindow is the smallest window the /summary/top/applications
+	// endpoints consistently return data for. Empirical check against a live
+	// org (2026-04-19): 1h/2h/6h → 0 rows; 8h/12h → populated. Meraki
+	// pre-aggregates this summary on coarse buckets server-side, so windows
+	// shorter than ~8h align to an empty bucket. Clamp to 12h and attach a
+	// notice so operators understand why.
+	topAppsMinWindow = 12 * time.Hour
 )
 
 // handleNetworkTraffic emits a single long-format table frame with one row
@@ -230,15 +237,19 @@ func handleTopApplicationsByUsage(ctx context.Context, client *meraki.Client, q 
 		return nil, fmt.Errorf("topApplicationsByUsage: orgId is required")
 	}
 
-	opts := buildTopApplicationsOptions(q, tr)
+	opts, extended := buildTopApplicationsOptions(q, tr)
 	rows, err := client.GetOrganizationTopApplicationsByUsage(ctx, q.OrgID, opts, topAppsTTL)
 	if err != nil {
 		return nil, err
 	}
 
+	// The /summary/top/applications/byUsage endpoint does NOT return a
+	// category column per row — the category breakdown lives on the sibling
+	// /applications/categories/byUsage endpoint. We intentionally do not emit
+	// a `category` field here; the panel's `setNoValue()` text would otherwise
+	// fill every empty cell.
 	var (
 		names       []string
-		categories  []string
 		totals      []float64
 		downstream  []float64
 		upstream    []float64
@@ -247,7 +258,6 @@ func handleTopApplicationsByUsage(ctx context.Context, client *meraki.Client, q 
 	)
 	for _, r := range rows {
 		names = append(names, r.Application)
-		categories = append(categories, r.Category)
 		totals = append(totals, r.Total)
 		downstream = append(downstream, r.Downstream)
 		upstream = append(upstream, r.Upstream)
@@ -261,13 +271,15 @@ func handleTopApplicationsByUsage(ctx context.Context, client *meraki.Client, q 
 
 	frame := data.NewFrame("top_applications_by_usage",
 		data.NewField("name", nil, names),
-		data.NewField("category", nil, categories),
 		data.NewField("totalMb", nil, totals),
 		data.NewField("downstreamMb", nil, downstream),
 		data.NewField("upstreamMb", nil, upstream),
 		data.NewField("percentage", nil, percentages),
 		data.NewField("clientCount", nil, clientCount),
 	)
+	if extended {
+		frame.AppendNotices(topAppsExtensionNotice())
+	}
 	return []*data.Frame{frame}, nil
 }
 
@@ -281,7 +293,7 @@ func handleTopApplicationCategoriesByUsage(ctx context.Context, client *meraki.C
 		return nil, fmt.Errorf("topApplicationCategoriesByUsage: orgId is required")
 	}
 
-	opts := buildTopApplicationsOptions(q, tr)
+	opts, extended := buildTopApplicationsOptions(q, tr)
 	rows, err := client.GetOrganizationTopApplicationCategoriesByUsage(ctx, q.OrgID, opts, topAppsTTL)
 	if err != nil {
 		return nil, err
@@ -316,6 +328,9 @@ func handleTopApplicationCategoriesByUsage(ctx context.Context, client *meraki.C
 		data.NewField("percentage", nil, percentages),
 		data.NewField("clientCount", nil, clientCount),
 	)
+	if extended {
+		frame.AppendNotices(topAppsExtensionNotice())
+	}
 	return []*data.Frame{frame}, nil
 }
 
@@ -386,8 +401,11 @@ func handleNetworkTrafficAnalysisMode(ctx context.Context, client *meraki.Client
 //     accepts one networkId per request).
 //   - q.Metrics[0], if numeric, sets the result quantity (Meraki cap: 50).
 //   - The window is derived from the panel range and clamped via
-//     KnownEndpointRanges (186-day cap).
-func buildTopApplicationsOptions(q MerakiQuery, tr TimeRange) meraki.TopApplicationsOptions {
+//     KnownEndpointRanges (186-day cap) AND extended to topAppsMinWindow
+//     on the low side so sub-hour picker ranges return data instead of 0.
+//     The second return value is true when the window was extended so the
+//     handler can surface a panel-level notice.
+func buildTopApplicationsOptions(q MerakiQuery, tr TimeRange) (meraki.TopApplicationsOptions, bool) {
 	opts := meraki.TopApplicationsOptions{}
 	if len(q.NetworkIDs) > 0 {
 		opts.NetworkID = q.NetworkIDs[0]
@@ -395,10 +413,18 @@ func buildTopApplicationsOptions(q MerakiQuery, tr TimeRange) meraki.TopApplicat
 	if q.TimespanSeconds > 0 {
 		opts.TimespanSeconds = q.TimespanSeconds
 	}
+	extended := false
 	if etr, ok := meraki.KnownEndpointRanges[topAppsByUsageEndpoint]; ok {
 		from := toRFCTime(tr.From)
 		to := toRFCTime(tr.To)
 		if !from.IsZero() && !to.IsZero() && from.Before(to) {
+			// Extend short windows up to topAppsMinWindow BEFORE Resolve so
+			// the downstream annotations (e.g. 186-day truncation) still see
+			// the adjusted range.
+			if to.Sub(from) < topAppsMinWindow {
+				from = to.Add(-topAppsMinWindow)
+				extended = true
+			}
 			if w, err := etr.Resolve(from, to, tr.MaxDataPoints, nil); err == nil {
 				opts.Window = &w
 				// Window wins over TimespanSeconds — clear so the URL
@@ -410,7 +436,20 @@ func buildTopApplicationsOptions(q MerakiQuery, tr TimeRange) meraki.TopApplicat
 	if qty := parseQuantity(q.Metrics); qty > 0 {
 		opts.Quantity = qty
 	}
-	return opts
+	return opts, extended
+}
+
+// topAppsExtensionNotice builds the data.Notice emitted when a panel's time
+// range was widened to `topAppsMinWindow` to satisfy Meraki's minimum. Kept as
+// a helper so both handlers emit the same wording.
+func topAppsExtensionNotice() data.Notice {
+	return data.Notice{
+		Severity: data.NoticeSeverityInfo,
+		Text: fmt.Sprintf(
+			"Panel window extended to %s — Meraki's top-applications summary only returns data for windows of at least ~12h.",
+			topAppsMinWindow,
+		),
+	}
 }
 
 // parseQuantity reads q.Metrics[0] as a positive integer quantity override.

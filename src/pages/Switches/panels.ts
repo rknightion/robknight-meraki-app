@@ -175,13 +175,44 @@ export function switchPortMap(serial: string): VizPanel {
     kind: QueryKind.SwitchPorts,
     serials: [serial],
   });
+  // Hide the stackId column for the common-case non-stacked deployment
+  // (users historically saw "No port status reported for this switch." in
+  // every row of the stackId column because the field-level `noValue` leaks
+  // into empty strings). The backend still emits the column so fleet-wide
+  // panels can group by stack; hiding it here keeps the detail view clean.
+  const organized = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: {
+            // networkId/networkName are redundant on a single-switch view —
+            // every row shares the same value. Keep switchName for clarity
+            // but drop the noise.
+            networkId: true,
+            networkName: true,
+            // stackId is empty for standalone switches (the majority of
+            // deployments). Removing the column avoids the "No port
+            // status..." noValue leaking into every cell.
+            stackId: true,
+          },
+          renameByName: {},
+        },
+      },
+    ],
+  });
   return PanelBuilders.table()
     .setTitle('Port map')
     .setDescription(
-      'Per-port status for this switch. Click a port ID to open packet counters and config.'
+      'Per-port status for this switch — link speed, client count, PoE draw, configured VLAN, and allowed trunk VLANs. Click a port ID to open packet counters and config.'
     )
-    .setData(runner)
-    .setNoValue('No port status reported for this switch.')
+    .setData(organized)
+    // Cell-level "missing value" placeholder. Previously this was a long
+    // sentence that leaked into every empty string cell (vlan, allowedVlans)
+    // even when the frame had rows — confusing operators into thinking the
+    // whole panel had no data. An em-dash is the least-surprising stand-in.
+    .setNoValue('—')
     .setOverrides((b) => {
       // Colour-coded link speed: red (down) → orange (10M) → yellow (100M) → green (1G+).
       b.matchFieldsWithName('speedMbps').overrideThresholds({
@@ -211,6 +242,7 @@ export function switchPortMap(serial: string): VizPanel {
       b.matchFieldsWithName('speedMbps').overrideCustomFieldConfig('width', 120);
       b.matchFieldsWithName('clientCount').overrideCustomFieldConfig('width', 110);
       b.matchFieldsWithName('poePowerW').overrideCustomFieldConfig('width', 110);
+      b.matchFieldsWithName('poePowerW').overrideUnit('watt');
       b.matchFieldsWithName('vlan').overrideCustomFieldConfig('width', 80);
     })
     .build();
@@ -401,22 +433,26 @@ export function switchPortsBySpeedStatPanel(): VizPanel {
     kind: QueryKind.SwitchPortsOverviewBySpeed,
   });
 
+  // Backend emits a wide one-row frame where each field is a (speed, media)
+  // bucket (e.g. "1 Gbps (RJ45)"). Bar gauge picks each field up as a
+  // separate bar using the field name as the label — no display-name
+  // template hacks needed. Previously the handler emitted long format
+  // (media/speed/active columns) and the `${__data.fields.X}` template
+  // didn't interpolate per-row on bar gauge, so every bar shared the same
+  // blank caption and Grafana fell through to the panel's noValue text.
   return PanelBuilders.bargauge()
     .setTitle('Ports by speed')
     .setDescription('Active port counts broken down by media type and link speed.')
     .setData(runner)
     .setNoValue('No port speed data available.')
     .setOption('orientation', 'horizontal' as any)
+    .setOption('displayMode', 'gradient' as any)
     .setOption('reduceOptions', {
-      values: true,
-      calcs: ['sum'],
-      fields: 'active',
+      values: false,
+      calcs: ['lastNotNull'],
+      fields: '/.*/',
     } as any)
-    .setOverrides((b) => {
-      b.matchFieldsWithName('active')
-        .overrideColor({ mode: FieldColorModeId.PaletteClassic })
-        .overrideDisplayName('${__field.labels.speed} (${__field.labels.media})');
-    })
+    .setColor({ mode: FieldColorModeId.PaletteClassic })
     .build();
 }
 
@@ -589,20 +625,42 @@ export function switchMacAddressTable(serial: string): VizPanel {
  * feed. We reduce with `sum` across matching rows so the donut slice is the
  * total port count for that VLAN regardless of how many switches carry it.
  */
-export function switchVlanDistributionDonut(): VizPanel {
+export function switchVlanDistributionDonut(serial?: string): VizPanel {
+  // Per-switch detail scenes scope the donut to one serial; the fleet page
+  // omits the serial for an org-wide view. Scoping server-side keeps the
+  // aggregation lossless (no client-side filter chain) and matches the
+  // convention used by the other per-switch panels.
   const runner = oneQuery({
     kind: QueryKind.SwitchVlansSummary,
+    ...(serial ? { serials: [serial] } : {}),
   });
+  // Backend emits a wide one-row frame with one numeric field per VLAN
+  // (e.g. "VLAN 25", "VLAN 100 (voice)"). Each field becomes one slice;
+  // slice labels come from the field name directly — no per-row template.
+  // Previously we tried long format with `vlan` + `portCount` columns and
+  // a `${__data.fields.vlan}` display-name override on portCount, but
+  // Grafana's piechart couldn't disambiguate the slice label among the
+  // multiple string columns and threw "Cannot visualize data". Same class
+  // of bug as the bar-gauge ports-by-speed — wide format sidesteps it.
   return PanelBuilders.piechart()
     .setTitle('VLAN distribution')
-    .setDescription('Configured port counts per VLAN across the switches in scope.')
+    .setDescription(
+      serial
+        ? 'Configured port counts per VLAN on this switch. Voice VLANs appear as a separate "(voice)" slice.'
+        : 'Configured port counts per VLAN across the switches in scope.'
+    )
     .setData(runner)
-    .setNoValue('No VLANs reported across the switches in scope.')
+    .setNoValue(
+      serial
+        ? 'No VLANs configured on this switch.'
+        : 'No VLANs reported across the switches in scope.'
+    )
     .setOption('pieType', 'donut' as any)
     .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'right' } as any)
-    .setOption('reduceOptions', { values: true, calcs: ['sum'], fields: 'portCount' } as any)
-    .setOverrides((b) => {
-      b.matchFieldsWithName('portCount').overrideDisplayName('${__data.fields.vlan}');
-    })
+    .setOption('reduceOptions', {
+      values: false,
+      calcs: ['lastNotNull'],
+      fields: '/.*/',
+    } as any)
     .build();
 }

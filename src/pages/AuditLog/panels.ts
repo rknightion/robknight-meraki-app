@@ -19,8 +19,14 @@ interface AuditLogQueryOpts {
  * Build a `SceneQueryRunner` for the ConfigurationChanges kind. Variables
  * are baked in so both panels in this file share exactly the same shape:
  *   - orgId: `$org`
- *   - networkIds: `['$network']`
  *   - metrics: `['$admin']` — admin-id filter (empty string → no filter)
+ *
+ * Deliberately NO network filter: Meraki's /configurationChanges endpoint
+ * treats `networkId=…` as "show only network-scoped changes for this
+ * network", which excludes org-level changes entirely. Most audit entries
+ * in a typical org are org-level (`networkId: null`), so filtering by any
+ * specific network on a single-network org returns zero rows. Keeping the
+ * page org-scoped matches Meraki Dashboard's own audit view.
  *
  * Backend frame shape (documented):
  *   (ts, adminName, adminEmail, adminId, page, label, networkId,
@@ -35,7 +41,6 @@ function configurationChangesQuery(opts: AuditLogQueryOpts = {}): SceneQueryRunn
         refId,
         kind: QueryKind.ConfigurationChanges,
         orgId: '$org',
-        networkIds: ['$network'],
         metrics: ['$admin'],
       },
     ],

@@ -1,21 +1,28 @@
 import { CustomVariable } from '@grafana/scenes';
 
 /**
- * `$productType` — static product-type filter for the Events scene. The
- * Meraki `/networks/{id}/events` endpoint requires a productType when the
- * target network spans multiple families, so we do NOT include an "All"
- * sentinel here: there's no sensible default value the API would accept.
+ * `$productType` — product-type filter for the Events scene. The Meraki
+ * `/networks/{id}/events` endpoint requires a productType when the target
+ * network spans multiple families, so the "All" sentinel here (allValue:
+ * '') is expanded server-side: when the backend sees an empty productType
+ * it fans out one events call per family that the network actually has,
+ * merges the results, and returns a single frame. That keeps the cost
+ * bounded (N families per network, sequential under the rate-limiter)
+ * while giving operators a single "show me everything" option.
  *
- * The six families match `MerakiProductType` in `src/types.ts`.
+ * The seven families match Meraki's full product-type vocabulary
+ * (superset of `MerakiProductType` in `src/types.ts` — events scenes also
+ * cover Systems Manager, which has its own event codes).
  */
 export function productTypeVariable(): CustomVariable {
   return new CustomVariable({
     name: 'productType',
     label: 'Product type',
-    query: 'wireless,appliance,switch,camera,cellularGateway,systemsManager',
-    value: 'wireless',
-    text: 'wireless',
-    includeAll: false,
+    query: 'wireless,appliance,switch,camera,cellularGateway,sensor,systemsManager',
+    value: '',
+    text: 'All',
+    includeAll: true,
+    allValue: '',
     isMulti: false,
   });
 }

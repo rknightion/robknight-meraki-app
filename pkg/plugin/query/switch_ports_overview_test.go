@@ -22,13 +22,13 @@ func TestHandle_SwitchPortsOverview(t *testing.T) {
 	// Wire shape matches the Meraki bySwitch endpoint: {items: [...]} wrapper.
 	const payload = `{"items":[
 	  {"serial":"A","ports":[
-	    {"portId":"1","enabled":true,"status":"Connected","clientCount":2,"powerUsageInWatts":5.5},
-	    {"portId":"2","enabled":true,"status":"Connected","clientCount":1,"powerUsageInWatts":2.25},
-	    {"portId":"3","enabled":false,"status":"Disconnected","clientCount":0,"powerUsageInWatts":0}
+	    {"portId":"1","enabled":true,"status":"Connected","clientCount":2,"powerUsageInWh":5.5},
+	    {"portId":"2","enabled":true,"status":"Connected","clientCount":1,"powerUsageInWh":2.25},
+	    {"portId":"3","enabled":false,"status":"Disconnected","clientCount":0,"powerUsageInWh":0}
 	  ]},
 	  {"serial":"B","ports":[
-	    {"portId":"1","enabled":true,"status":"Connected","clientCount":4,"powerUsageInWatts":7.0},
-	    {"portId":"2","enabled":true,"status":"Disconnected","clientCount":0,"powerUsageInWatts":0}
+	    {"portId":"1","enabled":true,"status":"Connected","clientCount":4,"powerUsageInWh":7.0},
+	    {"portId":"2","enabled":true,"status":"Disconnected","clientCount":0,"powerUsageInWh":0}
 	  ]}
 	]}`
 

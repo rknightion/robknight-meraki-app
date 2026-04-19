@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,9 @@ import (
 //
 //   - **Co-termination** orgs: `{status, expirationDate, licensedDeviceCounts}`
 //     where `licensedDeviceCounts` is a map of device model or SKU → count.
+//     Note: `expirationDate` is a **human-readable string** like
+//     `"Mar 13, 2027 UTC"` — NOT RFC3339 like everywhere else in the API.
+//     See UnmarshalJSON below for the tolerant parser.
 //   - **Per-device** orgs: `{states: {active, expired, expiring, recentlyQueued,
 //     unused, unusedActive}}` with per-bucket `{count}` entries.
 //
@@ -28,12 +32,49 @@ import (
 // `IsCoterm()` to pick which shape to report.
 type LicensesOverview struct {
 	// Co-term fields.
-	Status               string            `json:"status,omitempty"`
-	ExpirationDate       *time.Time        `json:"expirationDate,omitempty"`
-	LicensedDeviceCounts map[string]int64  `json:"licensedDeviceCounts,omitempty"`
+	Status               string           `json:"status,omitempty"`
+	ExpirationDate       *time.Time       `json:"-"`
+	LicensedDeviceCounts map[string]int64 `json:"licensedDeviceCounts,omitempty"`
 
 	// Per-device fields.
 	States *LicensesStates `json:"states,omitempty"`
+}
+
+// UnmarshalJSON handles both RFC3339 and Meraki's co-term-only
+// `"Mar 13, 2027 UTC"` string shape for `expirationDate`. Older per-device
+// orgs (and newer subscription fallback paths) emit RFC3339; co-term orgs
+// emit the human-readable form. When neither format parses we leave the
+// pointer nil rather than erroring — downstream panels already tolerate a
+// nil expiration by rendering `—`.
+func (o *LicensesOverview) UnmarshalJSON(data []byte) error {
+	type alias LicensesOverview
+	aux := struct {
+		ExpirationDate *string `json:"expirationDate,omitempty"`
+		*alias
+	}{alias: (*alias)(o)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.ExpirationDate == nil || *aux.ExpirationDate == "" {
+		return nil
+	}
+	s := *aux.ExpirationDate
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		t = t.UTC()
+		o.ExpirationDate = &t
+		return nil
+	}
+	// Meraki co-term shape: "Mar 13, 2027 UTC". Strip the trailing " UTC"
+	// and parse with Go's reference layout.
+	trimmed := strings.TrimSpace(strings.TrimSuffix(s, " UTC"))
+	for _, layout := range []string{"Jan 2, 2006", "2 Jan 2006", "2006-01-02"} {
+		if t, err := time.Parse(layout, trimmed); err == nil {
+			t = t.UTC()
+			o.ExpirationDate = &t
+			return nil
+		}
+	}
+	return nil
 }
 
 // LicensesStates is the per-device bucket breakdown. Each bucket carries a
@@ -278,9 +319,48 @@ type ClientsOverviewCounts struct {
 }
 
 // ClientsOverviewUsage is the overall and average usage breakdown.
+//
+// Shape variance: when the request is sent with a `resolution` parameter,
+// Meraki returns `average` as a **scalar float** instead of the documented
+// `{total, downstream, upstream}` object. Confirmed against api.meraki.com
+// 2026-04-19 for org 1019781 with `resolution=86400` — the response is
+// `"average": 5428.95`. The custom UnmarshalJSON below treats a scalar as
+// the `total` field and zero-fills the other bands so downstream KPI tiles
+// still render (total is what `clientsOverviewKpiRow` reads).
 type ClientsOverviewUsage struct {
 	Overall ClientsOverviewUsageBand `json:"overall"`
-	Average ClientsOverviewUsageBand `json:"average"`
+	Average ClientsOverviewUsageBand `json:"-"`
+}
+
+// UnmarshalJSON accepts both the object form `{total, downstream, upstream}`
+// and the scalar-float variant that Meraki returns when `resolution` is set.
+// Neither form is a hard error — if decode fails entirely we leave Average
+// zero-valued so panels display `0` rather than blanking the whole frame.
+func (u *ClientsOverviewUsage) UnmarshalJSON(data []byte) error {
+	var aux struct {
+		Overall ClientsOverviewUsageBand `json:"overall"`
+		Average json.RawMessage          `json:"average"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	u.Overall = aux.Overall
+	if len(aux.Average) == 0 || string(aux.Average) == "null" {
+		return nil
+	}
+	// Prefer the documented object shape.
+	var band ClientsOverviewUsageBand
+	if err := json.Unmarshal(aux.Average, &band); err == nil {
+		u.Average = band
+		return nil
+	}
+	// Fallback: scalar float (the `resolution`-present variant).
+	var scalar float64
+	if err := json.Unmarshal(aux.Average, &scalar); err == nil {
+		u.Average = ClientsOverviewUsageBand{Total: scalar}
+		return nil
+	}
+	return nil
 }
 
 // ClientsOverviewUsageBand is one (total, downstream, upstream) triple.

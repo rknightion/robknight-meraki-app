@@ -153,7 +153,7 @@ jobs:
     needs: [resolve-versions, build]
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write
       id-token: write
       pull-requests: write
     strategy:
@@ -208,7 +208,7 @@ jobs:
         uses: grafana/plugin-actions/playwright-gh-pages/upload-report-artifacts@fa3356df288e68f5e900ab466e98b0bf9bad3118 # upload-report-artifacts/v1.0.1
         if: ${{ always() && !cancelled() }}
         with:
-          upload-report: false
+          upload-report: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
           test-outcome: ${{ steps.run-tests.outcome }}
 

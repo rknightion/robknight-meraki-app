@@ -58,6 +58,26 @@ export function networkGeomapPanel(): VizPanel {
     )
     .setData(runner)
     .setNoValue('No networks have geo-tagged devices yet.')
+    // Explicit markers layer — PanelBuilders.geomap() ships no data layers
+    // by default, so without this the map renders but no points appear.
+    // `mode: 'coords'` points the viz at the `lat`/`lng` numeric fields
+    // the networkGeo handler emits; `name` is what shows in the layer list.
+    .setOption('layers', [
+      {
+        type: 'markers',
+        name: 'Networks',
+        config: {},
+        location: {
+          mode: 'coords',
+          latitude: 'lat',
+          longitude: 'lng',
+        },
+        tooltip: true,
+      },
+    ] as any)
+    // Auto-fit the view around the marker layer so an operator with
+    // networks spread across continents isn't stuck at the zero meridian.
+    .setOption('view', { id: 'fit', allLayers: true, padding: 5 } as any)
     .build();
 }
 

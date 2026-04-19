@@ -55,10 +55,11 @@ func TestHandle_NetworkEventsTimeline(t *testing.T) {
 	resp, err := Handle(context.Background(), client, &QueryRequest{
 		Range: TimeRange{From: from.UnixMilli(), To: to.UnixMilli()},
 		Queries: []MerakiQuery{{
-			RefID:      "A",
-			Kind:       KindNetworkEventsTimeline,
-			OrgID:      "o1",
-			NetworkIDs: []string{"N1"},
+			RefID:        "A",
+			Kind:         KindNetworkEventsTimeline,
+			OrgID:        "o1",
+			NetworkIDs:   []string{"N1"},
+			ProductTypes: []string{"wireless"}, // explicit so no fan-out
 		}},
 	}, Options{})
 	if err != nil {

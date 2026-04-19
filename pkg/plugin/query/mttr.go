@@ -41,6 +41,14 @@ func handleAlertsMttrSummary(ctx context.Context, client *meraki.Client, q Merak
 	// is active=true only — that silently excludes the resolved rows MTTR needs
 	// to compute anything, leaving mean/p50/p95 permanently 0. Explicitly opt
 	// into every status so the aggregate is honest.
+	//
+	// IMPORTANT: we do NOT push tsStart/tsEnd to Meraki. The endpoint's
+	// ts-filter acts on `alert.startedAt`, but MTTR's semantic is "incidents
+	// that resolved in the picker window" — with a 24h picker that excludes
+	// alerts that started earlier but were resolved within the window
+	// (observed: 24h picker returned 0 resolved on an org with 36 resolutions
+	// inside the window because every alert started >24h ago). We fetch
+	// everything and filter client-side on `resolvedAt` below.
 	trueP := true
 	reqOpts := meraki.AlertsOptions{
 		SortOrder: "descending",
@@ -52,16 +60,27 @@ func handleAlertsMttrSummary(ctx context.Context, client *meraki.Client, q Merak
 		reqOpts.NetworkID = q.NetworkIDs[0]
 	}
 	reqOpts.Serials = q.Serials
-	if from := toRFCTime(tr.From); !from.IsZero() {
-		reqOpts.TSStart = &from
-	}
-	if to := toRFCTime(tr.To); !to.IsZero() {
-		reqOpts.TSEnd = &to
-	}
 
 	alerts, err := client.GetOrganizationAssuranceAlerts(ctx, q.OrgID, reqOpts, alertsMttrSummaryTTL)
 	if err != nil {
 		return nil, err
+	}
+
+	// Client-side window on resolvedAt. When the picker is unset we treat
+	// the full feed as in-scope so the KPIs always populate.
+	windowFrom := toRFCTime(tr.From)
+	windowTo := toRFCTime(tr.To)
+	resolvedInWindow := func(t time.Time) bool {
+		if windowFrom.IsZero() && windowTo.IsZero() {
+			return true
+		}
+		if !windowFrom.IsZero() && t.Before(windowFrom) {
+			return false
+		}
+		if !windowTo.IsZero() && t.After(windowTo) {
+			return false
+		}
+		return true
 	}
 
 	var (
@@ -74,7 +93,14 @@ func handleAlertsMttrSummary(ctx context.Context, client *meraki.Client, q Merak
 		// (operator acknowledged, but underlying condition wasn't fixed) and
 		// is intentionally not treated as "resolved" here.
 		if a.ResolvedAt == nil || a.ResolvedAt.IsZero() {
+			if a.DismissedAt != nil && !a.DismissedAt.IsZero() {
+				continue // dismissed alerts don't belong in open OR resolved counts
+			}
 			openCount++
+			continue
+		}
+		// Client-side window: only count resolutions that landed in the picker.
+		if !resolvedInWindow(a.ResolvedAt.UTC()) {
 			continue
 		}
 		// A resolved alert without a startedAt is degenerate (shouldn't happen

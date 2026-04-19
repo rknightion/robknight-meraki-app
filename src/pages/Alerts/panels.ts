@@ -71,18 +71,22 @@ function alertsQuery(opts: AlertsQueryOpts): SceneQueryRunner {
     maxDataPoints,
   } = opts;
 
-  // metrics[0] = severity, metrics[1] = status sentinel. Omitting the
-  // second slot lets the backend fall through to its default ("active").
-  const metrics = status ? [...severity, status] : severity;
-
+  // Severity goes through the `metrics` slot so the CSV interpolation
+  // in `applyTemplateVariables` can expand `$severity` like every other
+  // template var. Status uses a DEDICATED field (`alertStatus`) —
+  // previously we packed it into `metrics[1]`, but `splitMulti` drops
+  // empty CSV entries, so when $severity resolved to the "All" sentinel
+  // (`''`) the status value shifted into metrics[0] and Meraki rejected
+  // `severity=all` with HTTP 500.
   const query: Record<string, unknown> & { refId: string } = {
     refId,
     kind,
     orgId: orgId ?? '$org',
-    // Severity filter — see the file-level comment for why this uses
-    // `metrics` instead of a dedicated `severity` field.
-    metrics,
+    metrics: severity,
   };
+  if (status) {
+    query.alertStatus = status;
+  }
 
   return new SceneQueryRunner({
     datasource: MERAKI_DS_REF,
@@ -104,7 +108,13 @@ function alertsQuery(opts: AlertsQueryOpts): SceneQueryRunner {
  * resolver" URL exists (tracked in the Phase 7 plan), swap this to that.
  */
 export function alertsTable(orgId?: string): VizPanel {
-  const runner = alertsQuery({ kind: QueryKind.Alerts, orgId });
+  // Show ALL alert states (active + resolved + dismissed) so operators see
+  // the full picture. Resolved / dismissed alerts are colour-coded in the
+  // status column (green / grey) so they're visually distinct from active
+  // rows. The status: 'all' sentinel tells the backend to apply the picker
+  // window via tsStart/tsEnd — users narrow to "what fired recently" by
+  // shortening the time picker rather than by the status filter.
+  const runner = alertsQuery({ kind: QueryKind.Alerts, orgId, status: 'all' });
 
   // Drop verbose columns from the table but keep them available for
   // tooltips / drilldowns. Description stays hidden because it's long
@@ -130,9 +140,15 @@ export function alertsTable(orgId?: string): VizPanel {
 
   return PanelBuilders.table()
     .setTitle('Alerts')
-    .setDescription('Currently firing Meraki alerts for the selected organization and severity. Switch the time picker to a longer window for historical views.')
+    .setDescription('All Meraki alerts for the selected organization and severity — active rows in red, resolved in green, dismissed in grey.')
     .setData(organized)
-    .setNoValue('No active alerts for the selected severity.')
+    // Cell-level placeholder for missing values (network-wide alerts have no
+    // device_serial / device_name, and `setNoValue` in Grafana applies per
+    // EMPTY CELL rather than per empty panel). A sentence-length message
+    // bled into every device column — an em-dash is the least surprising
+    // stand-in. The panel shows headers-without-rows when the frame itself
+    // is empty, which is sufficient signal to the operator.
+    .setNoValue('—')
     .setOverrides((b) => {
       // Cross-family drilldown: the backend emits one URL per row keyed on the
       // alert's device.productType, so a table spanning MR/MS/MX/MV/MG/MT
@@ -171,51 +187,46 @@ export function alertsTable(orgId?: string): VizPanel {
 }
 
 /**
- * Alerts timeline — bar chart of alert counts bucketed by time. Driven
- * by the same Alerts query runner as the table; a `groupingToMatrix`
- * transform pivots the (time, severity, count) shape into one field
- * per severity so the bar chart stacks naturally.
+ * Alerts timeline — bar chart of alert counts bucketed by time, backed by
+ * the server-side `AlertsOverviewHistorical` kind which emits one frame
+ * per severity with the counts pre-bucketed by `segmentDuration`.
  *
- * Note: if the backend later switches to emitting pre-bucketed counts
- * from `AlertsOverview`, drop the transform and point `$data` at the
- * overview runner instead.
+ * Historically this used the `Alerts` list + a `groupingToMatrix` transform
+ * with `valueField: 'severity'` — the transform emits string cells for a
+ * string valueField, which bar/timeseries vizes render as empty. Combined
+ * with Meraki's `tsStart` filter on `startedAt` (hiding active+resolved
+ * alerts that started before the picker window), the panel read "No alerts
+ * in the selected range" even when the table below had data. Swapping to
+ * `AlertsOverviewHistorical` fixes both at once: numeric values per bucket
+ * and the endpoint's own time-filter semantics, which are `segmentStart`-
+ * based rather than startedAt-based.
  */
 export function alertsTimelineBarChart(orgId?: string): VizPanel {
-  // `status: 'all'` bypasses the backend's "active" default — the timeline
-  // is historical context (how much fired when?), so it needs every alert
-  // status with the picker window applied. The backend honours tsStart/tsEnd
-  // only when the sentinel is non-"active".
-  const runner = alertsQuery({ kind: QueryKind.Alerts, orgId, status: 'all' });
-
-  // Pivot into a matrix: row = occurredAt bucket, columns = severity.
-  // The `groupingToMatrix` transform does this in one step. We give it
-  // a placeholder value column (`severity`) and reduce by count — but
-  // because `groupingToMatrix` emits NULL for empty cells, the bar
-  // chart renders each severity as its own stackable series.
-  const pivoted = new SceneDataTransformer({
-    $data: runner,
-    transformations: [
+  const runner = new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [
       {
-        id: 'groupingToMatrix',
-        options: {
-          columnField: 'severity',
-          rowField: 'occurredAt',
-          valueField: 'severity',
-          emptyValue: 'null',
-        },
+        refId: 'A',
+        kind: QueryKind.AlertsOverviewHistorical,
+        orgId: orgId ?? '$org',
       },
     ],
   });
 
   return PanelBuilders.barchart()
     .setTitle('Alerts timeline')
-    .setDescription('Alert volume over the selected time range, stacked by severity.')
-    .setData(pivoted)
+    .setDescription('Alert volume over the selected time range, stacked by severity. One bucket per segment returned by the `/assurance/alerts/overview/historical` endpoint.')
+    .setData(runner)
     .setNoValue('No alerts in the selected range.')
     .setOption('stacking', 'normal' as any)
     .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
     .setCustomFieldConfig('fillOpacity', 80)
     .setCustomFieldConfig('lineWidth', 0)
+    .setOverrides((b) => {
+      b.matchFieldsWithName('critical').overrideColor({ fixedColor: 'red', mode: FieldColorModeId.Fixed });
+      b.matchFieldsWithName('warning').overrideColor({ fixedColor: 'orange', mode: FieldColorModeId.Fixed });
+      b.matchFieldsWithName('informational').overrideColor({ fixedColor: 'blue', mode: FieldColorModeId.Fixed });
+    })
     .build();
 }
 
@@ -345,6 +356,10 @@ export function recentAlertsTile(orgId?: string): VizPanel {
     // Force "All" severity for the Home tile — we want the headline
     // view, not whatever the user last filtered on another page.
     severity: [''],
+    // Show all lifecycle states so freshly-resolved alerts still land
+    // on the tile (users otherwise see a blank tile the moment an
+    // incident clears, which is surprising).
+    status: 'all',
   });
 
   const trimmed = new SceneDataTransformer({
@@ -381,7 +396,11 @@ export function recentAlertsTile(orgId?: string): VizPanel {
     .setTitle('Recent alerts')
     .setDescription('The five most recent Meraki alerts across the selected organization.')
     .setData(trimmed)
-    .setNoValue('No recent alerts.')
+    // See alertsTable for why this is an em-dash rather than a sentence —
+    // Grafana applies noValue per empty CELL, not per empty panel, so
+    // network-wide alerts (no device) would otherwise bleed the message
+    // into every device column.
+    .setNoValue('—')
     .setOverrides((b) => {
       // Per-row cross-family drilldown (see alertsTable for why).
       b.matchFieldsWithName('device_serial').overrideLinks([
@@ -488,7 +507,7 @@ export function alertsByNetworkTable(orgId?: string): VizPanel {
     .setTitle('Alerts by network')
     .setDescription('Alert severity counts per network across the selected organization.')
     .setData(runner)
-    .setNoValue('No alerts by network data available.')
+    .setNoValue('—')
     .setOverrides((b) => {
       b.matchFieldsWithName('critical')
         .overrideColor({ mode: FieldColorModeId.Thresholds })

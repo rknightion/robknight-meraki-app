@@ -55,11 +55,12 @@ export function switchOverviewScene(serial: string): EmbeddedScene {
             children: kpiItems,
           }),
         }),
-        // VLAN distribution donut below the KPI row. Width is flex so it
-        // fills the page; height 320 matches other donut panels.
+        // VLAN distribution donut below the KPI row. Scoped to this switch
+        // via the serial — the org-wide default aggregates every switch in
+        // the estate, which isn't what an operator on the detail page wants.
         new SceneFlexItem({
           minHeight: 320,
-          body: switchVlanDistributionDonut(),
+          body: switchVlanDistributionDonut(serial),
         }),
       ],
     }),

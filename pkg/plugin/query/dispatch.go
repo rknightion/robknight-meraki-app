@@ -245,6 +245,13 @@ type MerakiQuery struct {
 	Metrics         []string  `json:"metrics,omitempty"`
 	TimespanSeconds int       `json:"timespanSeconds,omitempty"`
 	Hide            bool      `json:"hide,omitempty"`
+	// AlertStatus is an alerts-only filter — "active" | "resolved" |
+	// "dismissed" | "all". Separate from Metrics because the CSV-split
+	// template interpolation on the frontend drops empty values, shifting
+	// the old positional metrics[1]-as-status encoding and turning
+	// severity=$severity=empty into severity="all" → Meraki HTTP 500.
+	// Single-valued, never interpolated as a template.
+	AlertStatus string `json:"alertStatus,omitempty"`
 }
 
 // TimeRange is Grafana's panel time range in unix milliseconds (same encoding

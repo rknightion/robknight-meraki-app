@@ -415,7 +415,7 @@ func TestHandle_SwitchPorts_GroupsByStack(t *testing.T) {
 	    "model": "MS120-8",
 	    "network": {"id": "N1", "name": "Lab"},
 	    "ports": [
-	      {"portId": "1", "enabled": true, "status": "Connected", "speed": "1 Gbps", "duplex": "full", "clientCount": 3, "powerUsageInWatts": 4.2, "vlan": 10, "allowedVlans": "10,20"}
+	      {"portId": "1", "enabled": true, "status": "Connected", "speed": "1 Gbps", "duplex": "full", "clientCount": 3, "powerUsageInWh": 4.2, "vlan": 10, "allowedVlans": "10,20"}
 	    ]
 	  },
 	  {

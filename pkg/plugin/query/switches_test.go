@@ -18,23 +18,45 @@ import (
 
 // TestHandle_SwitchPoe_FlattensPerPort verifies the PoE handler emits one row
 // per port across every switch, with the expected columns.
+//
+// Two paths exercised:
+//  1. Fleet (no serial) — reads the org-level `bySwitch/statuses` feed.
+//  2. Per-switch (Serials set) — reads the device-scoped
+//     `/devices/{serial}/switch/ports/statuses` feed (richer shape;
+//     required because the org-level feed no longer returns per-port
+//     `powerUsageInWh` per the Meraki v1 API behaviour observed 2026-04-19).
 func TestHandle_SwitchPoe_FlattensPerPort(t *testing.T) {
-	const payload = `{"items":[
+	const orgPayload = `{"items":[
 	  {"serial":"Q2SW-0001","name":"sw-a","network":{"id":"N1","name":"HQ"},"ports":[
-	    {"portId":"1","enabled":true,"powerUsageInWatts":7.5},
-	    {"portId":"2","enabled":true,"powerUsageInWatts":0}
+	    {"portId":"1","enabled":true,"powerUsageInWh":7.5},
+	    {"portId":"2","enabled":true,"powerUsageInWh":0}
 	  ]},
 	  {"serial":"Q2SW-0002","name":"sw-b","network":{"id":"N1","name":"HQ"},"ports":[
-	    {"portId":"1","enabled":false,"powerUsageInWatts":0}
+	    {"portId":"1","enabled":false,"powerUsageInWh":0}
 	  ]}
 	]}`
+	// Device-scoped statuses payload used by the per-serial path.
+	const devStatusesPayload = `[
+	  {"portId":"1","enabled":true,"powerUsageInWh":7.5},
+	  {"portId":"2","enabled":true,"powerUsageInWh":0}
+	]`
+	// Device-scoped config payload (empty — VLAN merging not asserted here).
+	const devConfigPayload = `[
+	  {"portId":"1","enabled":true},
+	  {"portId":"2","enabled":true}
+	]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "/switch/ports/statuses/bySwitch") {
-			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(payload))
+		switch {
+		case strings.Contains(r.URL.Path, "/switch/ports/statuses/bySwitch"):
+			_, _ = w.Write([]byte(orgPayload))
+		case strings.HasSuffix(r.URL.Path, "/switch/ports/statuses"):
+			_, _ = w.Write([]byte(devStatusesPayload))
+		case strings.HasSuffix(r.URL.Path, "/switch/ports"):
+			_, _ = w.Write([]byte(devConfigPayload))
+		default:
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -64,8 +86,9 @@ func TestHandle_SwitchPoe_FlattensPerPort(t *testing.T) {
 			t.Fatalf("missing column %q; fields=%v", col, frame.Fields)
 		}
 	}
-	// Verify serial filter applies client-side. Use fresh client to avoid
-	// hitting the TTL cache from the previous call.
+	// Per-serial path — device-scoped statuses endpoint. Two rows for ports
+	// 1 and 2 of Q2SW-0001. Fresh client to avoid TTL cache from the prior
+	// call.
 	client2, _ := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
 	resp, err = Handle(context.Background(), client2, &QueryRequest{
 		Queries: []MerakiQuery{{RefID: "A", Kind: KindSwitchPoe, OrgID: "o1", Serials: []string{"Q2SW-0001"}}},
@@ -168,17 +191,20 @@ func TestHandle_SwitchMacTable_PerClientRows(t *testing.T) {
 }
 
 // TestHandle_SwitchVlansSummary_AggregatesPortCount verifies the VLAN-summary
-// handler aggregates enabled ports per (switch, vlan) and includes voice VLANs
-// as a separate synthetic row.
+// handler aggregates enabled ports per VLAN across every switch in scope
+// and emits a wide one-row frame with one numeric field per VLAN label.
+// Voice VLANs get the `(voice)` suffix so they render as distinct slices.
 func TestHandle_SwitchVlansSummary_AggregatesPortCount(t *testing.T) {
-	const payload = `{"items":[
+	// /switch/ports/bySwitch (config feed) returns a BARE array — no
+	// `{items: [...]}` envelope, unlike its `statuses/bySwitch` sibling.
+	const payload = `[
 	  {"serial":"Q2SW-0001","name":"sw-a","network":{"id":"N1"},"ports":[
 	    {"portId":"1","enabled":true,"vlan":10},
 	    {"portId":"2","enabled":true,"vlan":10,"voiceVlan":100},
 	    {"portId":"3","enabled":true,"vlan":20},
 	    {"portId":"4","enabled":false,"vlan":10}
 	  ]}
-	]}`
+	]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/switch/ports/bySwitch") {
 			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
@@ -204,44 +230,39 @@ func TestHandle_SwitchVlansSummary_AggregatesPortCount(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	rows, _ := frame.RowLen()
+	// Wide one-row frame — one int64 field per VLAN label.
+	if rows != 1 {
+		t.Fatalf("got %d rows, want 1 (wide frame)", rows)
+	}
 	// Expected: vlan 10 → 2 ports (1 & 2; port 4 disabled), vlan 20 → 1,
-	// voice:100 → 1. That's 3 rows.
-	if rows != 3 {
-		t.Fatalf("got %d rows, want 3", rows)
+	// voice vlan 100 → 1. Three VLAN fields.
+	want := map[string]int64{
+		"VLAN 10":         2,
+		"VLAN 20":         1,
+		"VLAN 100 (voice)": 1,
 	}
-	for _, col := range []string{"serial", "vlan", "portCount"} {
-		if f, _ := frame.FieldByName(col); f == nil {
-			t.Fatalf("missing column %q", col)
+	for label, expected := range want {
+		f, _ := frame.FieldByName(label)
+		if f == nil {
+			t.Fatalf("missing VLAN field %q; fields=%v", label, frame.Fields)
 		}
-	}
-	vlanField, _ := frame.FieldByName("vlan")
-	countField, _ := frame.FieldByName("portCount")
-	found10, foundVoice := false, false
-	for i := 0; i < rows; i++ {
-		v, _ := vlanField.ConcreteAt(i)
-		c, _ := countField.ConcreteAt(i)
-		if v == "10" && c.(int64) == 2 {
-			found10 = true
+		got, _ := f.ConcreteAt(0)
+		if got != expected {
+			t.Errorf("%s = %v, want %d", label, got, expected)
 		}
-		if v == "voice:100" && c.(int64) == 1 {
-			foundVoice = true
-		}
-	}
-	if !found10 {
-		t.Errorf("vlan=10 row with count=2 not found")
-	}
-	if !foundVoice {
-		t.Errorf("voice:100 row with count=1 not found")
 	}
 }
 
 // §3.1 — Switch ports overview by speed + usage history handler tests.
 
 // TestHandle_SwitchPortsOverviewBySpeed_Table verifies the handler emits a
-// single table frame with the expected columns and one row per speed bucket.
+// wide one-row frame with one numeric field per non-zero (media, speed)
+// bucket. Field names are human-readable link speeds ("1 Gbps (RJ45)")
+// so the bar gauge can use the field name as each bar's label without
+// per-row template hacks.
 func TestHandle_SwitchPortsOverviewBySpeed_Table(t *testing.T) {
 	// The overview endpoint returns a nested object; we check that the
-	// handler flattens it into one row per (media × speed).
+	// handler flattens it into one column per (media × speed) bucket.
 	const payload = `{
 		"counts": {
 			"total": 96,
@@ -294,33 +315,31 @@ func TestHandle_SwitchPortsOverviewBySpeed_Table(t *testing.T) {
 		t.Fatalf("decode frame: %v (body=%s)", err, string(resp.Frames[0]))
 	}
 
-	// Expect 4 rows: rj45/1000, rj45/100, sfp/10000 (active) + rj45/inactive + sfp/inactive
-	rows, _ := frame.RowLen()
-	if rows < 3 {
-		t.Fatalf("got %d rows, want >= 3 (at least 3 active speed buckets)", rows)
+	// Expected active buckets: rj45/100=8, rj45/1000=48, sfp/10000=4.
+	// Inactive buckets (Active=0) are pre-filtered out to keep the bar
+	// gauge from drawing a wall of empty bars.
+	wantCols := map[string]int64{
+		"100 Mbps (RJ45)": 8,
+		"1 Gbps (RJ45)":   48,
+		"10 Gbps (SFP)":   4,
 	}
-	for _, col := range []string{"media", "speed", "active"} {
-		if f, _ := frame.FieldByName(col); f == nil {
-			t.Fatalf("frame missing %q column; fields=%v", col, frame.Fields)
+	for name, want := range wantCols {
+		f, _ := frame.FieldByName(name)
+		if f == nil {
+			t.Fatalf("frame missing %q column; fields=%v", name, frame.Fields)
+		}
+		got, _ := f.ConcreteAt(0)
+		if got != want {
+			t.Errorf("%s = %v, want %d", name, got, want)
+		}
+	}
+	// Inactive buckets must NOT show up as columns.
+	for _, unwanted := range []string{"Inactive (RJ45)", "Inactive (SFP)"} {
+		if f, _ := frame.FieldByName(unwanted); f != nil {
+			t.Errorf("frame unexpectedly has %q column (inactive rows should be elided)", unwanted)
 		}
 	}
 
-	// Verify that the active count for rj45/1000 is 48.
-	mediaField, _ := frame.FieldByName("media")
-	speedField, _ := frame.FieldByName("speed")
-	activeField, _ := frame.FieldByName("active")
-	for i := 0; i < rows; i++ {
-		media, _ := mediaField.ConcreteAt(i)
-		speed, _ := speedField.ConcreteAt(i)
-		active, _ := activeField.ConcreteAt(i)
-		if media == "rj45" && speed == "1000" {
-			if active.(int64) != 48 {
-				t.Errorf("rj45/1000 active count = %v, want 48", active)
-			}
-			return
-		}
-	}
-	t.Errorf("no row with media=rj45 speed=1000 found; got %d rows", rows)
 }
 
 // TestHandle_SwitchPortsUsageHistory_EmitsPerSerialFrames verifies one frame

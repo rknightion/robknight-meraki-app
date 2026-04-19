@@ -11,8 +11,10 @@ App plugin (robknight-meraki-app)             Nested DS (robknight-meraki-dataso
   ├─ Go backend (gpx_meraki)                    ├─ Frontend only — NO backend binary
   ├─ Owns meraki.Client (rate limiter + cache)  ├─ DataSourceApi.query() posts to app's
   ├─ API key in secureJsonData.merakiApiKey     │   /resources/{query,metricFind}
-  ├─ Resource endpoints: /ping, /query,         └─ Variable hydration via same path
-  │   /metricFind
+  ├─ Resource endpoints:                        └─ Variable hydration via same path
+  │   /ping, /query, /metricFind
+  │   /alerts/{templates,status,reconcile,uninstall-all}     (§1.13, v0.6)
+  │   /recordings/{templates,status,reconcile,uninstall-all} (§1.14, v0.7)
   └─ CheckHealth → GET /organizations
 ```
 
@@ -55,6 +57,17 @@ The v0.6 alert bundle (§4.5) installs Grafana-managed alert rules into the fold
 - **Template delimiters**: `<% ... %>` in template YAMLs (NOT `{{ }}` — avoids collision with YAML flow-mapping syntax).
 - **Full invariants**: see `pkg/plugin/alerts/CLAUDE.md`.
 
+## §1.14 Recording-bundle UID + label invariants (v0.7)
+
+The v0.7 recording bundle (§4.6) installs Grafana-managed **recording** rules into the folder `Meraki (bundled recordings)`. Two use cases: (1) long-term trend history for Meraki's snapshot-only endpoints, (2) API-rate-limit relief by centralising timeseries fetches. Coexists with the alert bundle — the two reconcilers MUST NOT touch each other's rules.
+
+- **UID**: `meraki-rec-<groupId>-<templateId>-<orgId>` — `-rec-` infix disjoints from alert UIDs.
+- **Kind gate**: recording reconciler filters on `managed_by=meraki-plugin` AND `meraki_kind=recording`. Alert reconciler's filter must remain tight enough not to match `meraki_kind=recording`.
+- **Metric-name contract**: every recording rule emits one metric matching `^meraki_[a-z][a-z0-9_]*$`. Mirror exports live at `src/scene-helpers/recording-metrics.ts` so panel fallback logic references the same literal.
+- **Target datasource**: `targetDsUID` is required — the resource handler 412s if `jsonData.recordings.targetDatasourceUid` isn't set.
+- **Frontend fallback**: panels use `trendQueryRunner()` from `src/scene-helpers/trend-query.ts` — when the rule is disabled or the target DS isn't picked, it transparently falls back to the existing Meraki query-kind. Users always see data.
+- **Full invariants**: see `pkg/plugin/recordings/CLAUDE.md`.
+
 ## Repo layout
 
 ```
@@ -66,7 +79,9 @@ tests/              Playwright e2e
 todos.txt           Full handoff doc: architecture, phase plan, gotchas, acceptance criteria
 ```
 
-Sub-directory CLAUDE.md files exist for the most common edit surfaces — `src/`, `src/pages/`, `src/datasource/`, `src/scene-helpers/`, `pkg/`, `pkg/meraki/`, `pkg/plugin/`, `pkg/plugin/query/`.
+Sub-directory CLAUDE.md files exist for every common edit surface:
+- Frontend: `src/`, `src/pages/`, `src/datasource/`, `src/scene-helpers/`
+- Backend: `pkg/`, `pkg/meraki/`, `pkg/plugin/`, `pkg/plugin/query/`, `pkg/plugin/alerts/`, `pkg/plugin/recordings/`
 
 ## Critical gotchas
 

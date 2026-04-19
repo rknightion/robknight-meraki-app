@@ -25,9 +25,11 @@ const networkEventsTTL = 30 * time.Second
 const networkEventsAllFanoutCap = 25
 
 // handleNetworkEvents emits a single table frame with one row per event.
-// productType defaults to the first entry of q.ProductTypes; on networks
-// with a single product family the endpoint accepts requests without one, so
-// we pass through whatever the caller supplied rather than guessing.
+// productType defaults to the first entry of q.ProductTypes; when empty
+// (the All sentinel from the $productType picker) the handler fans out one
+// call per family the target network actually has — the Meraki /events
+// endpoint requires productType on multi-family networks, so "All" is
+// expanded server-side.
 //
 // q.Metrics is reused as the includedEventTypes[] filter — the same pattern
 // handleAlerts uses to smuggle extra filter slots through MerakiQuery. The
@@ -54,9 +56,6 @@ func handleNetworkEvents(ctx context.Context, client *meraki.Client, q MerakiQue
 	reqOpts := meraki.NetworkEventsOptions{
 		IncludedEventTypes: q.Metrics,
 	}
-	if len(q.ProductTypes) > 0 {
-		reqOpts.ProductType = q.ProductTypes[0]
-	}
 	if len(q.Serials) > 0 {
 		reqOpts.DeviceSerial = q.Serials[0]
 	}
@@ -67,19 +66,57 @@ func handleNetworkEvents(ctx context.Context, client *meraki.Client, q MerakiQue
 		reqOpts.TSEnd = &to
 	}
 
-	var events []meraki.NetworkEvent
-	for _, networkID := range networkIDs {
-		got, err := client.GetNetworkEvents(ctx, networkID, reqOpts, networkEventsTTL)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, got...)
+	// Resolve product types per target network. Empty q.ProductTypes means
+	// the user picked "All" — we need to iterate over the actual families
+	// Meraki knows about for each network, otherwise /events 400s on
+	// multi-family networks.
+	productTypesByNetwork, err := resolveNetworkEventsProductTypes(ctx, client, q, networkIDs)
+	if err != nil {
+		return nil, err
 	}
 
-	fallbackPT := ""
-	if len(q.ProductTypes) > 0 {
-		fallbackPT = q.ProductTypes[0]
+	// eventWithFamily pairs a fetched event with the productType used for the
+	// fan-out call that returned it. Meraki sometimes omits productType on
+	// individual event payloads, so the call-time family is the only reliable
+	// source for the column when the user picked "All" (q.ProductTypes empty)
+	// and we fanned out over multiple families.
+	type eventWithFamily struct {
+		event  meraki.NetworkEvent
+		family string
 	}
+	var (
+		events   []eventWithFamily
+		firstErr error
+	)
+	for _, networkID := range networkIDs {
+		for _, pt := range productTypesByNetwork[networkID] {
+			reqOpts.ProductType = pt
+			got, err := client.GetNetworkEvents(ctx, networkID, reqOpts, networkEventsTTL)
+			if err != nil {
+				// Per-family failures (e.g. a Meraki productType we think is
+				// valid but the endpoint rejects under a specific org's
+				// licensing) must not zero out the whole panel — keep the
+				// first error to surface as a notice and keep merging what
+				// did come back. Only surfaces when productType came from
+				// the "All" fan-out, where losing one family is tolerable.
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			for _, e := range got {
+				events = append(events, eventWithFamily{event: e, family: pt})
+			}
+		}
+	}
+	if firstErr != nil && len(events) == 0 {
+		// Every family failed — preserve the original hard-fail contract
+		// so the scene surfaces a proper error notice instead of silently
+		// rendering an empty frame.
+		return nil, firstErr
+	}
+
+	fallbackPT := firstNonEmpty(q.ProductTypes)
 
 	var (
 		occurredAt  []time.Time
@@ -95,12 +132,19 @@ func handleNetworkEvents(ctx context.Context, client *meraki.Client, q MerakiQue
 		netIDCol    []string
 		drilldown   []string
 	)
-	for _, e := range events {
+	for _, wrapped := range events {
+		e := wrapped.event
 		var ts time.Time
 		if e.OccurredAt != nil {
 			ts = e.OccurredAt.UTC()
 		}
+		// Prefer the event's own productType; fall back to the family used
+		// for the fan-out call (when "All" fans out multiple families); fall
+		// back again to whatever the caller supplied (single-family case).
 		pt := e.ProductType
+		if pt == "" {
+			pt = wrapped.family
+		}
 		if pt == "" {
 			pt = fallbackPT
 		}
@@ -139,6 +183,83 @@ func handleNetworkEvents(ctx context.Context, client *meraki.Client, q MerakiQue
 		})
 	}
 	return []*data.Frame{frame}, nil
+}
+
+// networkEventsProductTypes is the set of product-type values Meraki's
+// /networks/{id}/events endpoint accepts. Kept as a whitelist because
+// `sensor` is a legitimate productType on networks (MT devices) BUT the
+// events endpoint rejects it with a 400, so we must not pass it through
+// during the "All" fan-out. Verified against the 400 body:
+//
+//	"'productType' must be one of: 'appliance', 'camera', 'campusGateway',
+//	 'cellularGateway', 'secureConnect', 'switch', 'systemsManager',
+//	 'wireless' or 'wirelessController'"
+var networkEventsProductTypes = map[string]struct{}{
+	"appliance":         {},
+	"camera":            {},
+	"campusGateway":     {},
+	"cellularGateway":   {},
+	"secureConnect":     {},
+	"switch":            {},
+	"systemsManager":    {},
+	"wireless":          {},
+	"wirelessController": {},
+}
+
+// resolveNetworkEventsProductTypes returns the list of product types to
+// query for each target network ID. When the caller supplied a concrete
+// productType (q.ProductTypes[0] non-empty) every network gets that single
+// value; when the caller passed empty (the "All" sentinel from the scene
+// picker) we look up each network's actual productTypes from the org
+// networks list so we only fan out over families the network has, filtered
+// against the events-endpoint whitelist so MT-bearing networks don't 400
+// on the `sensor` family.
+//
+// Returns an error only when the org networks fetch itself fails; missing
+// networks just get an empty slice so the caller's outer loop skips them.
+// When productTypes is empty on the caller AND orgId is unset we degrade to
+// a nil map — the caller treats that as "no fan-out" and each network
+// yields zero event calls (the legacy behaviour preserves the previous
+// "productType required" contract).
+func resolveNetworkEventsProductTypes(ctx context.Context, client *meraki.Client, q MerakiQuery, networkIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(networkIDs))
+	if pt := firstNonEmpty(q.ProductTypes); pt != "" {
+		for _, id := range networkIDs {
+			out[id] = []string{pt}
+		}
+		return out, nil
+	}
+	if q.OrgID == "" {
+		return out, nil
+	}
+	networks, err := client.GetOrganizationNetworks(ctx, q.OrgID, nil, networksTTL)
+	if err != nil {
+		return nil, fmt.Errorf("networkEvents: resolve productTypes: %w", err)
+	}
+	byID := make(map[string][]string, len(networks))
+	for _, n := range networks {
+		byID[n.ID] = n.ProductTypes
+	}
+	for _, id := range networkIDs {
+		raw := byID[id]
+		filtered := raw[:0:0]
+		for _, pt := range raw {
+			if _, ok := networkEventsProductTypes[pt]; ok {
+				filtered = append(filtered, pt)
+			}
+		}
+		if len(filtered) == 0 {
+			// Network has no event-bearing families (e.g. sensor-only) or
+			// we've never seen it in the org networks list. Fall back to
+			// `wireless` — the most common single-family case — so
+			// single-family wireless networks still render events when the
+			// picker is on All. The per-call 400 guard below tolerates a
+			// miss if this default doesn't apply.
+			filtered = []string{"wireless"}
+		}
+		out[id] = filtered
+	}
+	return out, nil
 }
 
 // resolveNetworkEventsTargets expands the all-networks sentinel (empty /

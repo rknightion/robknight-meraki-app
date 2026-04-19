@@ -225,6 +225,16 @@ export interface MerakiQuery extends DataQuery {
   metrics?: SensorMetric[];
   /** Optional override in seconds; defaults to the panel time range. */
   timespanSeconds?: number;
+  /**
+   * Alerts-only lifecycle filter. One of "active" (currently firing, the
+   * default when omitted), "resolved", "dismissed", or "all" (show every
+   * status clearly marked in the status column). Separate from `metrics`
+   * so the CSV-split template interpolation on $severity can't clobber
+   * it — the old positional encoding `metrics: ['$severity', status]`
+   * broke when $severity resolved to empty and the `all` value shifted
+   * into the severity slot, triggering Meraki HTTP 500.
+   */
+  alertStatus?: 'active' | 'resolved' | 'dismissed' | 'all';
 }
 
 export interface MerakiDSOptions extends DataSourceJsonData {

@@ -263,10 +263,17 @@ func TestHandle_TopApplicationsByUsage_WideRow(t *testing.T) {
 	if rows != 2 {
 		t.Fatalf("got %d rows, want 2", rows)
 	}
-	for _, name := range []string{"name", "category", "totalMb", "downstreamMb", "upstreamMb", "percentage", "clientCount"} {
+	for _, name := range []string{"name", "totalMb", "downstreamMb", "upstreamMb", "percentage", "clientCount"} {
 		if f, _ := frame.FieldByName(name); f == nil {
 			t.Fatalf("frame missing %q column; got fields=%v", name, frame.Fields)
 		}
+	}
+	// byUsage does NOT return a category field on each row (the sibling
+	// /applications/categories/byUsage endpoint is the canonical source).
+	// Emitting empty strings would surface the panel's setNoValue() text
+	// in every cell, so the handler intentionally omits the column.
+	if f, _ := frame.FieldByName("category"); f != nil {
+		t.Fatalf("frame unexpectedly contains category column (should be omitted); fields=%v", frame.Fields)
 	}
 
 	// The `application` wire field must surface in the emitted `name` column —

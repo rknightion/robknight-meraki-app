@@ -33,9 +33,12 @@ describe('Events panels', () => {
     expect(q.metrics).toEqual(['$eventType']);
   });
 
-  it('eventsTimelineBarChart is a bar chart backed by NetworkEventsTimeline', () => {
+  it('eventsTimelineBarChart renders as a timeseries viz (drawStyle=bars) backed by NetworkEventsTimeline', () => {
+    // Historically a barchart; flipped to timeseries so the time axis uses
+    // adaptive tick spacing on multi-hour windows instead of cramming every
+    // bucket label together.
     const panel = eventsTimelineBarChart();
-    expect(panel.state.pluginId).toBe('barchart');
+    expect(panel.state.pluginId).toBe('timeseries');
     const q = firstQuery(panel);
     expect(q.kind).toBe(QueryKind.NetworkEventsTimeline);
     expect(q.productTypes).toEqual(['$productType']);

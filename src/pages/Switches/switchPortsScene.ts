@@ -8,23 +8,21 @@ import {
   SceneTimeRange,
 } from '@grafana/scenes';
 import { orgOnlyVariables } from '../../scene-helpers/variables';
-import {
-  switchMacAddressTable,
-  switchPortMap,
-  switchStpTopologyTable,
-} from './panels';
+import { switchMacAddressTable, switchPortMap } from './panels';
 
 /**
- * Ports tab for a single switch — the port map table, MAC-address table,
- * and a per-network STP topology snapshot. The port-ID column on the port
- * map drilldowns into the per-port detail page (packet counters + config
- * summary + port-error snapshot) via the wildcard route on
- * `switchDetailPage`.
+ * Ports tab for a single switch — the port map table and MAC-address
+ * table. The port-ID column on the port map drilldowns into the per-port
+ * detail page (packet counters + config summary + port-error snapshot)
+ * via the wildcard route on `switchDetailPage`.
  *
- * STP is network-scoped; we pass `$network` so callers must have the
- * network variable in scope (via `orgOnlyVariables()` today the panel will
- * render empty — see panel `setNoValue` copy). Additive in §4.4.3-1b; the
- * port map remains the primary panel.
+ * STP history note: the switchStpTopologyTable panel used to live here,
+ * passing the literal string `$network` as its networkId because the
+ * switch detail page has no network variable in scope — it always
+ * rendered empty with "No STP settings configured for this network"
+ * even on networks that had STP enabled. STP is network-scoped (not
+ * switch-scoped) so the panel belongs on a network detail page; removed
+ * 2026-04-19 after operator feedback flagged it as misleading.
  */
 export function switchPortsScene(serial: string): EmbeddedScene {
   return new EmbeddedScene({
@@ -48,10 +46,6 @@ export function switchPortsScene(serial: string): EmbeddedScene {
         new SceneFlexItem({
           minHeight: 280,
           body: switchMacAddressTable(serial),
-        }),
-        new SceneFlexItem({
-          minHeight: 200,
-          body: switchStpTopologyTable('$network'),
         }),
       ],
     }),

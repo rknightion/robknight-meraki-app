@@ -34,7 +34,7 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 	}
 
 	reqOpts := meraki.AlertsOptions{
-		Severity:  firstNonEmpty(q.Metrics),
+		Severity:  alertsSeverity(q.Metrics),
 		Serials:   q.Serials,
 		SortOrder: "descending",
 	}
@@ -48,15 +48,25 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 	// Status filter — sentinel read from q.Metrics[1]. Values:
 	//   "active" | "resolved" | "dismissed" | "all"
 	// Default is "active" (currently firing). See alertsStatusSentinel.
-	sentinel := alertsStatusSentinel(q.Metrics)
+	sentinel := alertsStatusSentinel(q)
 	applyAlertsStatus(&reqOpts, sentinel)
 
-	// Only apply the picker window when the caller wants historical data.
-	// Meraki's tsStart/tsEnd filter on alert.startedAt, so a long-running
-	// active alert that started before the picker window disappears from an
-	// active-snapshot view — which is exactly the "empty table" bug users
-	// reported. For "active" we deliberately ignore the picker.
-	if sentinel != "active" {
+	// Only apply the picker window for EXPLICITLY time-scoped requests
+	// (resolved or dismissed). Meraki's tsStart/tsEnd filter on
+	// `alert.startedAt`, so narrowing the window hides long-running active
+	// alerts AND recently-resolved alerts whose `startedAt` is outside the
+	// window — that was the "empty table despite KPI=1" bug users reported
+	// twice: 2026-04-18 (active) and 2026-04-19 (all, when applied here
+	// dropped 36 resolved-in-window alerts that started earlier).
+	//
+	// - "active": no time filter — users want live state, not "started in
+	//   window".
+	// - "all":    no time filter — users want the full feed clearly
+	//   marked by status (red/green/grey).
+	// - "resolved" / "dismissed": apply time filter — explicit historical
+	//   scoping is still useful for audit-style views that DO want
+	//   "incidents that started in this period".
+	if sentinel == "resolved" || sentinel == "dismissed" {
 		if from := toRFCTime(tr.From); !from.IsZero() {
 			reqOpts.TSStart = &from
 		}
@@ -127,10 +137,10 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 		networkName = append(networkName, nName)
 
 		var dSerial, dName, dProduct string
-		if a.Device != nil {
-			dSerial = a.Device.Serial
-			dName = a.Device.Name
-			dProduct = a.Device.ProductType
+		if d := a.PrimaryDevice(); d != nil {
+			dSerial = d.Serial
+			dName = d.Name
+			dProduct = d.ProductType
 		}
 		deviceSerial = append(deviceSerial, dSerial)
 		deviceName = append(deviceName, dName)
@@ -191,9 +201,11 @@ func handleAlertsOverview(ctx context.Context, client *meraki.Client, q MerakiQu
 		opts.NetworkID = q.NetworkIDs[0]
 	}
 	opts.Serials = q.Serials
-	sentinel := alertsStatusSentinel(q.Metrics)
+	sentinel := alertsStatusSentinel(q)
 	applyAlertsStatus(&opts, sentinel)
-	if sentinel != "active" {
+	// Apply the picker window only for explicit "resolved" / "dismissed"
+	// views (see handleAlerts for the full rationale — same semantics).
+	if sentinel == "resolved" || sentinel == "dismissed" {
 		if from := toRFCTime(tr.From); !from.IsZero() {
 			opts.TSStart = &from
 		}
@@ -241,6 +253,13 @@ func handleAlertsOverview(ctx context.Context, client *meraki.Client, q MerakiQu
 // firstNonEmpty returns the first non-empty string in the slice, or "".
 // Used to reuse the multi-valued q.Metrics field as a single-valued severity
 // filter until MerakiQuery grows a dedicated field.
+//
+// NOTE: do NOT call this on q.Metrics from alerts handlers — the alerts
+// kind overloads q.Metrics[0] as severity and q.Metrics[1] as the status
+// sentinel, so firstNonEmpty over the full slice would pick the sentinel
+// ("all", "resolved", …) as the severity value and Meraki rejects those
+// with HTTP 500 ("severity" must be one of critical/warning/informational).
+// Use `alertsSeverity` below instead for alerts kinds.
 func firstNonEmpty(ss []string) string {
 	for _, s := range ss {
 		if s != "" {
@@ -250,23 +269,41 @@ func firstNonEmpty(ss []string) string {
 	return ""
 }
 
-// alertsStatusSentinel picks the alerts status filter out of q.Metrics[1:].
-// q.Metrics[0] is the severity; q.Metrics[1] (when present) is one of
-// "active" | "resolved" | "dismissed" | "all".
-//
-// Default is "active" — the plugin's Alerts page is primarily a "what's
-// firing right now?" surface, and users consistently reported empty tables
-// when the default silently filtered by startedAt (Meraki's tsStart/tsEnd
-// cut long-running active alerts out of narrow picker windows). Panels that
-// want historical semantics (timeline bar chart, MTTR) MUST pass an explicit
-// non-"active" sentinel; those paths apply tsStart/tsEnd as before.
-func alertsStatusSentinel(metrics []string) string {
-	if len(metrics) < 2 {
-		return "active"
+// alertsSeverity extracts the severity filter from q.Metrics, reading
+// ONLY the first slot. Returns "" when empty or the slot holds only the
+// All-sentinel. Critical: unlike firstNonEmpty, this never peeks at
+// q.Metrics[1:] because that slot carries the status sentinel and
+// Meraki 500s on `severity=all` / `severity=resolved` / etc.
+func alertsSeverity(metrics []string) string {
+	if len(metrics) == 0 {
+		return ""
 	}
-	switch strings.ToLower(metrics[1]) {
-	case "active", "resolved", "dismissed", "all":
-		return strings.ToLower(metrics[1])
+	return metrics[0]
+}
+
+// alertsStatusSentinel picks the alerts status filter from q.AlertStatus,
+// falling back to q.Metrics[1] for legacy callers that still use the
+// positional overload (kept for wire-format compatibility until every
+// call site migrates). Values: "active" | "resolved" | "dismissed" |
+// "all". Default "active" — see the Alerts page rationale in handleAlerts.
+//
+// Historical note: the positional encoding (metrics[0]=severity,
+// metrics[1]=status) broke when the frontend's CSV-interpolation dropped
+// the empty $severity placeholder and shifted `all` into metrics[0] →
+// Meraki rejected `severity=all` with HTTP 500. AlertStatus is the
+// replacement field.
+func alertsStatusSentinel(q MerakiQuery) string {
+	if q.AlertStatus != "" {
+		switch strings.ToLower(q.AlertStatus) {
+		case "active", "resolved", "dismissed", "all":
+			return strings.ToLower(q.AlertStatus)
+		}
+	}
+	if len(q.Metrics) >= 2 {
+		switch strings.ToLower(q.Metrics[1]) {
+		case "active", "resolved", "dismissed", "all":
+			return strings.ToLower(q.Metrics[1])
+		}
 	}
 	return "active"
 }
@@ -311,9 +348,10 @@ func handleAlertsOverviewByNetwork(ctx context.Context, client *meraki.Client, q
 	// the "alerts by network" table shows currently-firing counts out of
 	// the box and doesn't hide active alerts that started before the
 	// picker window.
-	sentinel := alertsStatusSentinel(q.Metrics)
+	sentinel := alertsStatusSentinel(q)
 	applyAlertsStatus(&opts, sentinel)
-	if sentinel != "active" {
+	// See handleAlerts for the "why skip time filter" rationale.
+	if sentinel == "resolved" || sentinel == "dismissed" {
 		if from := toRFCTime(tr.From); !from.IsZero() {
 			opts.TSStart = &from
 		}

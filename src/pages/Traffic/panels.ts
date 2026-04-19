@@ -85,7 +85,8 @@ export function topApplicationsTable(): VizPanel {
     .setTitle('Top applications by usage')
     .setDescription(
       'Top L7 applications across the organisation, sorted by total usage. ' +
-        'Defaults to the dashboard time range; Meraki caps the lookback at 186 days.'
+        'Meraki caps the lookback at 186 days and requires at least ~12h of ' +
+        'data for the summary — shorter windows render empty.'
     )
     .setData(runner)
     .setNoValue('No application data available for the selected window.')
@@ -95,7 +96,6 @@ export function topApplicationsTable(): VizPanel {
       b.matchFieldsWithName('upstreamMb').overrideUnit('decmbytes');
       b.matchFieldsWithName('percentage').overrideUnit('percent');
       b.matchFieldsWithName('name').overrideCustomFieldConfig('width', 200);
-      b.matchFieldsWithName('category').overrideCustomFieldConfig('width', 160);
     })
     .build();
 }

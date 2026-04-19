@@ -22,25 +22,47 @@ import (
 // list as a top-level JSON array (Link-header paginated), so the surrounding
 // wrapper uses c.GetAll() to collect pages.
 //
-// The `Scope` payload carries device-type-specific detail the UI renders as
-// free-form JSON; we retain it as json.RawMessage to avoid coupling the wire
-// struct to every product family.
+// Device location: the top-level `device` field is ALWAYS null on this
+// endpoint as of 2026-04. Per-device context lives inside the `scope`
+// object at `scope.devices[]` — verified against api.meraki.com for org
+// 1019781 on 2026-04-19. The handler reads the first scope device into
+// the convenience Device field via `PrimaryDevice()`; callers that want
+// the full list (multi-device alerts) can iterate `Scope.Devices`.
 type AssuranceAlert struct {
-	ID             string                  `json:"id"`
-	CategoryType   string                  `json:"categoryType,omitempty"`
-	AlertType      string                  `json:"type,omitempty"`
-	AlertTypeID    string                  `json:"alertTypeId,omitempty"`
-	Severity       string                  `json:"severity,omitempty"`
-	DismissedAt    *time.Time              `json:"dismissedAt,omitempty"`
-	ResolvedAt     *time.Time              `json:"resolvedAt,omitempty"`
-	StartedAt      *time.Time              `json:"startedAt,omitempty"`
-	OccurredAt     *time.Time              `json:"occurredAt,omitempty"`
-	Title          string                  `json:"title,omitempty"`
-	Description    string                  `json:"description,omitempty"`
-	Network        *AssuranceAlertNetwork  `json:"network,omitempty"`
-	Device         *AssuranceAlertDevice   `json:"device,omitempty"`
-	DeviceTags     []string                `json:"deviceTags,omitempty"`
-	Scope          json.RawMessage         `json:"scope,omitempty"`
+	ID           string                 `json:"id"`
+	CategoryType string                 `json:"categoryType,omitempty"`
+	AlertType    string                 `json:"type,omitempty"`
+	AlertTypeID  string                 `json:"alertTypeId,omitempty"`
+	Severity     string                 `json:"severity,omitempty"`
+	// DeviceType is the product family abbreviation the assurance endpoint
+	// emits at top level ("MS", "MR", "MX", "MG", "MV", "MT"). It's what
+	// the UI should bind to for cross-family drilldown when scope.devices
+	// omits productType.
+	DeviceType  string                 `json:"deviceType,omitempty"`
+	DismissedAt *time.Time             `json:"dismissedAt,omitempty"`
+	ResolvedAt  *time.Time             `json:"resolvedAt,omitempty"`
+	StartedAt   *time.Time             `json:"startedAt,omitempty"`
+	OccurredAt  *time.Time             `json:"occurredAt,omitempty"`
+	Title       string                 `json:"title,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	Network     *AssuranceAlertNetwork `json:"network,omitempty"`
+	// Device preserved for wire back-compat — the v1 spec still describes
+	// it, but every response observed since the 2026-04 schema change has
+	// had this null. Prefer `PrimaryDevice()`.
+	Device     *AssuranceAlertDevice `json:"device,omitempty"`
+	DeviceTags []string              `json:"deviceTags,omitempty"`
+	Scope      *AssuranceAlertScope  `json:"scope,omitempty"`
+}
+
+// AssuranceAlertScope is the `scope` payload carried on each alert. In
+// practice only `Devices` is populated; the other arrays stay empty on
+// this org. We model it as a typed struct so the handler can read
+// `scope.devices[0]` without another layer of JSON decoding.
+type AssuranceAlertScope struct {
+	Devices      []AssuranceAlertDevice `json:"devices,omitempty"`
+	Applications []json.RawMessage      `json:"applications,omitempty"`
+	Peers        []json.RawMessage      `json:"peers,omitempty"`
+	Others       []json.RawMessage      `json:"others,omitempty"`
 }
 
 // AssuranceAlertNetwork is the compact network reference embedded on each
@@ -53,11 +75,57 @@ type AssuranceAlertNetwork struct {
 
 // AssuranceAlertDevice is the compact device reference embedded on each
 // alert. For network-wide alerts that don't tie back to a specific device the
-// whole field can be nil.
+// whole field can be nil / the scope.devices list empty.
 type AssuranceAlertDevice struct {
 	Serial      string `json:"serial"`
 	Name        string `json:"name,omitempty"`
 	ProductType string `json:"productType,omitempty"`
+}
+
+// PrimaryDevice returns the best-effort "primary device" for this alert.
+// Preference order: top-level `Device` (legacy spec shape), then
+// `Scope.Devices[0]` (actual 2026-04 shape), then nil. Callers should
+// check for nil — network-wide alerts (e.g. Meraki cloud connectivity
+// events with no device attached) legitimately have no device.
+func (a *AssuranceAlert) PrimaryDevice() *AssuranceAlertDevice {
+	if a.Device != nil && a.Device.Serial != "" {
+		return a.Device
+	}
+	if a.Scope != nil && len(a.Scope.Devices) > 0 {
+		d := a.Scope.Devices[0]
+		// Backfill ProductType from the alert's top-level deviceType when
+		// the scope entry omits it (e.g. older schema variants). Meraki
+		// abbreviations ("MS" / "MR" / "MX" / "MG" / "MV" / "MT") map 1:1
+		// to the productType strings the drilldown URL helper expects.
+		if d.ProductType == "" {
+			d.ProductType = productTypeFromAbbrev(a.DeviceType)
+		}
+		return &d
+	}
+	return nil
+}
+
+// productTypeFromAbbrev maps the top-level `deviceType` abbreviation the
+// assurance alerts endpoint emits ("MS", "MR", …) to the full productType
+// string the rest of the plugin uses for drilldown routing. Empty input
+// or an unrecognised abbreviation returns "" — the drilldown helper
+// already tolerates an empty productType by emitting a no-op link.
+func productTypeFromAbbrev(s string) string {
+	switch s {
+	case "MS":
+		return "switch"
+	case "MR":
+		return "wireless"
+	case "MX":
+		return "appliance"
+	case "MG":
+		return "cellularGateway"
+	case "MV":
+		return "camera"
+	case "MT":
+		return "sensor"
+	}
+	return ""
 }
 
 // AssuranceAlertsOverview is the response shape of
@@ -359,9 +427,13 @@ func (o AlertsOverviewHistoricalOptions) values() url.Values {
 	if o.Serial != "" {
 		v.Set("serial", o.Serial)
 	}
+	// Historical endpoint uses tsStart/tsEnd, NOT t0/t1 like most
+	// timeseries endpoints — verified 2026-04-19 against api.meraki.com;
+	// the other names return HTTP 400 "The following required parameters
+	// are missing: 'tsStart'".
 	if o.Window != nil {
-		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
-		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
+		v.Set("tsStart", o.Window.T0.UTC().Format(time.RFC3339))
+		v.Set("tsEnd", o.Window.T1.UTC().Format(time.RFC3339))
 	}
 	if o.Segment > 0 {
 		v.Set("segmentDuration", strconv.Itoa(int(o.Segment.Seconds())))

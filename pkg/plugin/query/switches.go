@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,69 +32,38 @@ const (
 	switchVlansSummaryTTL = 5 * time.Minute
 )
 
-// handleSwitchPorts emits one row per port across every switch in the org.
-// The source endpoint (`/organizations/{orgId}/switch/ports/statuses/bySwitch`)
-// already returns one entry per switch with a nested `ports` array; we flatten
-// that into a single table-shaped frame so the UI's port map panel can render
-// it directly without a client-side expand transform.
+// handleSwitchPorts emits one row per port across every switch in scope.
 //
-// Stack handling: the endpoint returns one entry per stack-member device, so
-// a 2-member stack produces two `SwitchWithPorts` entries both carrying the
-// same `switchStackId`. The emitted frame has a `stackId` column so the UI
-// can group by stack when grouping is desired — empty string means the device
-// is standalone.
+// Two endpoint paths:
+//
+//  1. **Per-switch (detail page)** — when `q.Serials` names specific switches,
+//     fan out to the **device-scoped** `/devices/{serial}/switch/ports/statuses`
+//     endpoint per serial and merge in the device-scoped `/devices/{serial}/
+//     switch/ports` config feed for VLAN columns. The org-level
+//     `bySwitch/statuses` endpoint returns a MINIMAL port shape without
+//     clientCount / powerUsageInWh / usageInKb / trafficInKbps, which is why
+//     the switch-detail Port map rendered zeros + noValue text on every
+//     detail row before this branch existed. Verified 2026-04-19 against
+//     org 1019781.
+//
+//  2. **Fleet (no serial filter)** — use the org-level aggregated
+//     `/organizations/{orgId}/switch/ports/statuses/bySwitch` feed. Fields
+//     we can't populate from that endpoint (clientCount, poePowerW,
+//     vlan, allowedVlans) stay zero/empty; the fleet inventory panel
+//     doesn't expose those columns so it doesn't matter there.
+//
+// Stack handling: each SwitchWithPorts entry carries `switchStackId`; a
+// 2-member stack produces two entries both sharing the stack id. Output
+// frame has a `stackId` column so the UI can group by stack when desired
+// — empty string means the device is standalone (the common case).
 func handleSwitchPorts(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("switchPorts: orgId is required")
 	}
-	// NOTE: we intentionally DON'T forward q.Serials / q.NetworkIDs to the
-	// Meraki API — pushing them server-side shards the cache key per serial,
-	// so every per-switch detail panel pays a fresh round-trip. Fetching the
-	// whole-fleet payload once and filtering client-side lets the detail page
-	// reuse the fleet query's cache entry. The `bySwitch` endpoint also has
-	// historically inconsistent behaviour when mixing `serials` filters with
-	// pagination (empty results despite valid serials), so filtering
-	// client-side sidesteps that too.
-	opts := meraki.SwitchPortStatusOptions{}
-	switches, err := client.GetOrganizationSwitchPortStatuses(ctx, q.OrgID, opts, switchPortsTTL)
+
+	switches, err := fetchSwitchesForPorts(ctx, client, q)
 	if err != nil {
 		return nil, err
-	}
-
-	var serialFilter map[string]struct{}
-	if len(q.Serials) > 0 {
-		serialFilter = make(map[string]struct{}, len(q.Serials))
-		for _, s := range q.Serials {
-			if s != "" {
-				serialFilter[s] = struct{}{}
-			}
-		}
-	}
-	var networkFilter map[string]struct{}
-	if len(q.NetworkIDs) > 0 {
-		networkFilter = make(map[string]struct{}, len(q.NetworkIDs))
-		for _, n := range q.NetworkIDs {
-			if n != "" {
-				networkFilter[n] = struct{}{}
-			}
-		}
-	}
-	if serialFilter != nil || networkFilter != nil {
-		filtered := switches[:0:0]
-		for _, sw := range switches {
-			if serialFilter != nil {
-				if _, ok := serialFilter[sw.Serial]; !ok {
-					continue
-				}
-			}
-			if networkFilter != nil {
-				if _, ok := networkFilter[sw.Network.ID]; !ok {
-					continue
-				}
-			}
-			filtered = append(filtered, sw)
-		}
-		switches = filtered
 	}
 
 	var (
@@ -128,7 +98,7 @@ func handleSwitchPorts(ctx context.Context, client *meraki.Client, q MerakiQuery
 			duplexes = append(duplexes, p.Duplex)
 			speedsMbps = append(speedsMbps, parseSpeedMbps(p.Speed))
 			clientCounts = append(clientCounts, p.ClientCount)
-			poePowerW = append(poePowerW, p.PowerUsageInWatts)
+			poePowerW = append(poePowerW, p.PowerUsageInWh)
 			vlans = append(vlans, vlanString(p.Vlan))
 			allowedVlans = append(allowedVlans, p.AllowedVlans)
 		}
@@ -153,6 +123,173 @@ func handleSwitchPorts(ctx context.Context, client *meraki.Client, q MerakiQuery
 			data.NewField("allowedVlans", nil, allowedVlans),
 		),
 	}, nil
+}
+
+// fleetFanoutCap bounds the number of switches we'll fan out per-device
+// requests for during fleet-wide aggregation. The fleet KPI row sums
+// clientCount + poePowerW across the org, which the org-level
+// statuses/bySwitch endpoint no longer populates — so we hit each
+// device's /switch/ports/statuses feed individually. At the Meraki
+// per-org default of 10 req/s the cap keeps one panel refresh under a
+// second even on cold caches; larger estates get a partial sum plus a
+// truncation notice so the number isn't silently wrong.
+const fleetFanoutCap = 25
+
+// fetchSwitchesForPorts resolves q.Serials / q.NetworkIDs to a unified
+// `[]SwitchWithPorts` slice. When specific serials are requested the call
+// uses the device-scoped statuses feed (richer shape) plus the device-scoped
+// config feed merged by portId so VLAN columns populate. For the fleet
+// case (no serials) we use the org-level statuses feed — it has every
+// switch's basic port info which is all the fleet inventory / port-map
+// panels need. The richer fields (clientCount / powerUsageInWh) only
+// populate when callers opt into device fan-out via
+// `fetchSwitchesForAggregate`.
+func fetchSwitchesForPorts(ctx context.Context, client *meraki.Client, q MerakiQuery) ([]meraki.SwitchWithPorts, error) {
+	if len(q.Serials) > 0 {
+		return fetchPerSwitchPortStatuses(ctx, client, q)
+	}
+	// Fleet-wide path: org-level aggregation with optional networkId filter.
+	switches, err := client.GetOrganizationSwitchPortStatuses(ctx, q.OrgID, meraki.SwitchPortStatusOptions{}, switchPortsTTL)
+	if err != nil {
+		return nil, err
+	}
+	networkFilter := stringSetOrNil(q.NetworkIDs)
+	if networkFilter == nil {
+		return switches, nil
+	}
+	filtered := switches[:0:0]
+	for _, sw := range switches {
+		if _, ok := networkFilter[sw.Network.ID]; ok {
+			filtered = append(filtered, sw)
+		}
+	}
+	return filtered, nil
+}
+
+// fetchSwitchesForAggregate returns switches with the RICH per-port shape
+// (clientCount, powerUsageInWh) even when the caller didn't scope to
+// specific serials. Used by the fleet KPI aggregator so "PoE draw total"
+// and "Clients" tiles on the Switches page sum across the fleet.
+//
+// Strategy: pull the org-level statuses feed for the switch list and
+// basic per-port enabled/status, then fan out to the device-scoped
+// statuses endpoint for up to `fleetFanoutCap` switches to merge in the
+// rich fields. For larger estates we skip the fan-out and return the
+// org-level shape alone — callers emit a truncation notice.
+func fetchSwitchesForAggregate(ctx context.Context, client *meraki.Client, q MerakiQuery) (switches []meraki.SwitchWithPorts, truncated bool, err error) {
+	if len(q.Serials) > 0 {
+		// Serials supplied — reuse the per-serial path which already fans
+		// out to device statuses + config for the full rich shape.
+		switches, err = fetchPerSwitchPortStatuses(ctx, client, q)
+		return switches, false, err
+	}
+
+	orgSwitches, err := client.GetOrganizationSwitchPortStatuses(ctx, q.OrgID, meraki.SwitchPortStatusOptions{}, switchPortsTTL)
+	if err != nil {
+		return nil, false, err
+	}
+	networkFilter := stringSetOrNil(q.NetworkIDs)
+	candidates := orgSwitches[:0:0]
+	for _, sw := range orgSwitches {
+		if networkFilter != nil {
+			if _, ok := networkFilter[sw.Network.ID]; !ok {
+				continue
+			}
+		}
+		candidates = append(candidates, sw)
+	}
+
+	if len(candidates) > fleetFanoutCap {
+		// Estate too large — caller will attach a truncation notice and
+		// use the org-level minimal shape for headline counts.
+		return candidates, true, nil
+	}
+
+	// Fan out to device statuses. Single-threaded because each request
+	// still charges the per-org rate limiter; parallelism without
+	// coordination would just burst-fail at the token bucket.
+	for i := range candidates {
+		got, derr := client.GetDeviceSwitchPortStatuses(ctx, candidates[i].Serial, switchPortsTTL)
+		if derr != nil {
+			// Tolerate a single switch failing — keep the org-level
+			// minimal ports for it so the fleet count still includes it.
+			continue
+		}
+		candidates[i].Ports = got
+	}
+	return candidates, false, nil
+}
+
+// fetchPerSwitchPortStatuses issues per-serial device-scoped calls and
+// merges the config feed in so VLAN/allowedVlans columns populate. The
+// switch's name/model/networkId/networkName come from the org-level
+// statuses feed cache (one call per panel load, shared with the fleet
+// query) so the detail page still feels fast. Errors on a single serial
+// are tolerated — the frame keeps the other serials' rows.
+func fetchPerSwitchPortStatuses(ctx context.Context, client *meraki.Client, q MerakiQuery) ([]meraki.SwitchWithPorts, error) {
+	orgSwitches, err := client.GetOrganizationSwitchPortStatuses(ctx, q.OrgID, meraki.SwitchPortStatusOptions{}, switchPortsTTL)
+	if err != nil {
+		return nil, err
+	}
+	metaBySerial := make(map[string]meraki.SwitchWithPorts, len(orgSwitches))
+	for _, sw := range orgSwitches {
+		metaBySerial[sw.Serial] = sw
+	}
+
+	networkFilter := stringSetOrNil(q.NetworkIDs)
+
+	out := make([]meraki.SwitchWithPorts, 0, len(q.Serials))
+	for _, serial := range q.Serials {
+		if serial == "" {
+			continue
+		}
+		meta, haveMeta := metaBySerial[serial]
+		if networkFilter != nil && haveMeta {
+			if _, ok := networkFilter[meta.Network.ID]; !ok {
+				continue
+			}
+		}
+
+		statuses, err := client.GetDeviceSwitchPortStatuses(ctx, serial, switchPortsTTL)
+		if err != nil {
+			// Tolerate per-serial failures — one bad serial shouldn't
+			// blank the whole panel. The other serials still render.
+			continue
+		}
+		configByPort := map[string]meraki.SwitchPortConfig{}
+		if cfgs, cfgErr := client.GetDeviceSwitchPorts(ctx, serial, switchPortConfigTTL); cfgErr == nil {
+			for _, c := range cfgs {
+				configByPort[c.PortID] = c
+			}
+		}
+		// Merge VLAN config fields (statuses endpoint doesn't echo them).
+		for i := range statuses {
+			cfg, ok := configByPort[statuses[i].PortID]
+			if !ok {
+				continue
+			}
+			if statuses[i].Vlan == 0 {
+				statuses[i].Vlan = cfg.Vlan
+			}
+			if statuses[i].VoiceVlan == 0 {
+				statuses[i].VoiceVlan = cfg.VoiceVlan
+			}
+			if statuses[i].AllowedVlans == "" {
+				statuses[i].AllowedVlans = cfg.AllowedVlans
+			}
+		}
+
+		entry := meraki.SwitchWithPorts{Serial: serial, Ports: statuses}
+		if haveMeta {
+			entry.Name = meta.Name
+			entry.Model = meta.Model
+			entry.MAC = meta.MAC
+			entry.Network = meta.Network
+			entry.StackID = meta.StackID
+		}
+		out = append(out, entry)
+	}
+	return out, nil
 }
 
 // handleSwitchPortConfig emits one row per port per serial. When the query
@@ -370,10 +507,22 @@ func vlanString(v int) string {
 // switchPortsOverviewBySpeedTTL: snapshot; 1m matches other overview kinds.
 const switchPortsOverviewBySpeedTTL = 1 * time.Minute
 
-// handleSwitchPortsOverviewBySpeed emits a table frame with one row per
-// (media × speed) bucket showing the active port count at that speed.
-// Distinct from handleSwitchPortsOverview (the KPI row) — this handler is
-// for bar-chart / stat visualisations showing the speed distribution.
+// handleSwitchPortsOverviewBySpeed emits a **wide one-row** frame with one
+// numeric field per (media, speed) bucket, labelled with a human-readable
+// column name like "1 Gbps (RJ45)". Only non-zero buckets are emitted so
+// the bar-gauge panel doesn't render a wall of empty bars for every speed
+// the Meraki API knows about.
+//
+// Why wide (one col per bucket) rather than long (one row per bucket):
+// Grafana's bar gauge labels each bar off the field's display name, NOT
+// off a sibling string column. A long frame with `media`/`speed`/`active`
+// columns requires row-aware templating (`${__data.fields.X}` inside a
+// `displayName` override), which doesn't interpolate per-row on bar gauge
+// / stat visualisations — every bar ended up with the literal template
+// string or a blank label, and Grafana fell through to the panel's
+// `noValue` text ("No port speed data available"). One-row wide frame
+// sidesteps the template problem: each column becomes one bar with the
+// column name as its label.
 func handleSwitchPortsOverviewBySpeed(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("switchPortsOverviewBySpeed: orgId is required")
@@ -387,24 +536,74 @@ func handleSwitchPortsOverviewBySpeed(ctx context.Context, client *meraki.Client
 		return nil, err
 	}
 
-	var (
-		mediaCol  []string
-		speedCol  []string
-		activeCol []int64
-	)
+	frame := data.NewFrame("switch_ports_overview_by_speed")
+	// Emit in a deterministic order so the bar gauge legend is stable
+	// across refreshes and tests compare reliably.
+	sort.SliceStable(buckets, func(i, j int) bool {
+		if buckets[i].Media != buckets[j].Media {
+			return buckets[i].Media < buckets[j].Media
+		}
+		return speedRank(buckets[i].Speed) < speedRank(buckets[j].Speed)
+	})
 	for _, b := range buckets {
-		mediaCol = append(mediaCol, b.Media)
-		speedCol = append(speedCol, b.Speed)
-		activeCol = append(activeCol, b.Active)
+		if b.Active <= 0 {
+			continue
+		}
+		label := fmt.Sprintf("%s (%s)", formatLinkSpeed(b.Speed), strings.ToUpper(b.Media))
+		frame.Fields = append(frame.Fields, data.NewField(label, nil, []int64{b.Active}))
 	}
+	return []*data.Frame{frame}, nil
+}
 
-	return []*data.Frame{
-		data.NewFrame("switch_ports_overview_by_speed",
-			data.NewField("media", nil, mediaCol),
-			data.NewField("speed", nil, speedCol),
-			data.NewField("active", nil, activeCol),
-		),
-	}, nil
+// formatLinkSpeed turns the numeric string Meraki returns into the
+// human-friendly link speed operators expect on a bar label.
+// `"inactive"` is pre-filtered by the handler (Active <= 0) so we don't
+// need to handle it here — but we do, defensively.
+func formatLinkSpeed(raw string) string {
+	switch raw {
+	case "10":
+		return "10 Mbps"
+	case "100":
+		return "100 Mbps"
+	case "1000":
+		return "1 Gbps"
+	case "2500":
+		return "2.5 Gbps"
+	case "5000":
+		return "5 Gbps"
+	case "10000":
+		return "10 Gbps"
+	case "20000":
+		return "20 Gbps"
+	case "25000":
+		return "25 Gbps"
+	case "40000":
+		return "40 Gbps"
+	case "50000":
+		return "50 Gbps"
+	case "100000":
+		return "100 Gbps"
+	case "inactive":
+		return "Inactive"
+	}
+	return raw
+}
+
+// speedRank orders link-speed strings numerically so the sort in
+// handleSwitchPortsOverviewBySpeed keeps columns in "slowest-first"
+// order. Bar gauge renders columns left-to-right in the order emitted.
+func speedRank(raw string) int {
+	if raw == "inactive" {
+		return 1 << 30
+	}
+	n := 0
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			return 1 << 29
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
 }
 
 // switchPortsUsageHistoryTTL: timeseries; 1m is consistent with other history kinds.
@@ -500,23 +699,27 @@ func handleSwitchPortsUsageHistory(ctx context.Context, client *meraki.Client, q
 // §4.4.3-1b — switchPoe / switchStp / switchMacTable / switchVlansSummary
 // ---------------------------------------------------------------------------
 
-// handleSwitchPoe emits one row per port carrying the PoE draw in watts. We
-// piggyback on the org-level `statuses/bySwitch` endpoint (same source as
-// handleSwitchPorts) — it already surfaces `powerUsageInWatts` per port, so
-// fetching a separate per-device statuses feed would just duplicate work and
-// shard the cache per serial. Serials/networkIds filter applies client-side
-// (see handleSwitchPorts for the rationale on not pushing those server-side).
+// handleSwitchPoe emits one row per port carrying the PoE draw.
+//
+// Data source: same split as handleSwitchPorts — the **device-scoped**
+// `/devices/{serial}/switch/ports/statuses` endpoint when `q.Serials` is
+// set (rich shape includes `powerUsageInWh` per port), or the org-level
+// `bySwitch` feed for fleet-wide queries. The org-level feed returns a
+// MINIMAL port shape that omits `powerUsageInWh`, which is why the
+// per-switch PoE-draw tile showed 0W before this patch.
+//
+// Units: we emit the value under the `poeWatts` column for backward
+// compatibility with the existing panel unit, even though the API field
+// is literally named `powerUsageInWh`. See the header comment on
+// `SwitchPortStatus` for the semantic discussion.
 func handleSwitchPoe(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("switchPoe: orgId is required")
 	}
-	switches, err := client.GetOrganizationSwitchPortStatuses(ctx, q.OrgID, meraki.SwitchPortStatusOptions{}, switchPoeTTL)
+	switches, err := fetchSwitchesForPorts(ctx, client, q)
 	if err != nil {
 		return nil, err
 	}
-
-	serialFilter := stringSetOrNil(q.Serials)
-	networkFilter := stringSetOrNil(q.NetworkIDs)
 
 	var (
 		serials      []string
@@ -528,16 +731,6 @@ func handleSwitchPoe(ctx context.Context, client *meraki.Client, q MerakiQuery, 
 		poeWatts     []float64
 	)
 	for _, sw := range switches {
-		if serialFilter != nil {
-			if _, ok := serialFilter[sw.Serial]; !ok {
-				continue
-			}
-		}
-		if networkFilter != nil {
-			if _, ok := networkFilter[sw.Network.ID]; !ok {
-				continue
-			}
-		}
 		for _, p := range sw.Ports {
 			serials = append(serials, sw.Serial)
 			switchNames = append(switchNames, sw.Name)
@@ -545,7 +738,7 @@ func handleSwitchPoe(ctx context.Context, client *meraki.Client, q MerakiQuery, 
 			networkNames = append(networkNames, sw.Network.Name)
 			portIDs = append(portIDs, p.PortID)
 			enableds = append(enableds, p.Enabled)
-			poeWatts = append(poeWatts, p.PowerUsageInWatts)
+			poeWatts = append(poeWatts, p.PowerUsageInWh)
 		}
 	}
 
@@ -707,12 +900,21 @@ func handleSwitchMacTable(ctx context.Context, client *meraki.Client, q MerakiQu
 	}, nil
 }
 
-// handleSwitchVlansSummary emits one row per (switch, vlan) giving the count
-// of configured ports in that VLAN on that switch. Sourced from
-// `GET /organizations/{orgId}/switch/ports/bySwitch` (the config-feed variant,
-// not the live statuses endpoint) so the port `type` field is authoritative.
-// We include both native and voice VLANs — voice is marked via a synthetic
-// "voice:<n>" prefix to distinguish from untagged VLANs.
+// handleSwitchVlansSummary emits a **wide one-row** frame with one numeric
+// field per VLAN. Field names are human-readable ("VLAN 25",
+// "VLAN 100 (voice)") so the piechart viz can render slices labelled by
+// the column name directly — no fragile `${__data.fields.X}` per-row
+// templating, no organize-transform gymnastics to hide metadata columns.
+// The long-format shape (serial, switchName, networkId, vlan, portCount
+// columns × many rows) confused the piechart into "Cannot visualize
+// data" because it had multiple string columns to choose from for slice
+// labels. Wide format sidesteps that the same way the bar-gauge ports-
+// by-speed fix did.
+//
+// Source: `GET /organizations/{orgId}/switch/ports/bySwitch` (config
+// feed, bare array) — same endpoint as before; only the output shape
+// changed. Voice VLANs are suffixed `(voice)` so they render as a
+// distinct slice from the native VLAN with the same number.
 func handleSwitchVlansSummary(ctx context.Context, client *meraki.Client, q MerakiQuery, _ TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("switchVlansSummary: orgId is required")
@@ -726,55 +928,42 @@ func handleSwitchVlansSummary(ctx context.Context, client *meraki.Client, q Mera
 		return nil, err
 	}
 
-	// Aggregate: (serial, vlan) → port count. Use a stable key so test order is
-	// deterministic-ish (we still sort serials/vlans before emission).
-	type key struct {
-		Serial string
-		Name   string
-		Net    string
-		Vlan   string
+	// Aggregate by VLAN label across every switch in scope. When the caller
+	// filters to one serial (per-switch detail page) this boils down to
+	// per-switch counts; the fleet page without a filter gets org-wide
+	// totals under the same column names.
+	type vlanKey struct {
+		Label string // e.g. "VLAN 25" or "VLAN 100 (voice)"
+		Rank  int    // sort-order hint (numeric VLAN, voice flag)
 	}
-	counts := make(map[key]int64)
+	counts := make(map[vlanKey]int64)
 	for _, sw := range switches {
 		for _, p := range sw.Ports {
 			if !p.Enabled {
 				continue
 			}
 			if p.Vlan != 0 {
-				k := key{sw.Serial, sw.Name, sw.Network.ID, strconv.Itoa(p.Vlan)}
+				k := vlanKey{Label: "VLAN " + strconv.Itoa(p.Vlan), Rank: p.Vlan*10 + 0}
 				counts[k]++
 			}
 			if p.VoiceVlan != 0 {
-				k := key{sw.Serial, sw.Name, sw.Network.ID, "voice:" + strconv.Itoa(p.VoiceVlan)}
+				k := vlanKey{Label: "VLAN " + strconv.Itoa(p.VoiceVlan) + " (voice)", Rank: p.VoiceVlan*10 + 1}
 				counts[k]++
 			}
 		}
 	}
 
-	var (
-		serialsCol  []string
-		switchNames []string
-		networkIDs  []string
-		vlans       []string
-		portCounts  []int64
-	)
-	for k, v := range counts {
-		serialsCol = append(serialsCol, k.Serial)
-		switchNames = append(switchNames, k.Name)
-		networkIDs = append(networkIDs, k.Net)
-		vlans = append(vlans, k.Vlan)
-		portCounts = append(portCounts, v)
+	keys := make([]vlanKey, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
 	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Rank < keys[j].Rank })
 
-	return []*data.Frame{
-		data.NewFrame("switch_vlans_summary",
-			data.NewField("serial", nil, serialsCol),
-			data.NewField("switchName", nil, switchNames),
-			data.NewField("networkId", nil, networkIDs),
-			data.NewField("vlan", nil, vlans),
-			data.NewField("portCount", nil, portCounts),
-		),
-	}, nil
+	frame := data.NewFrame("switch_vlans_summary")
+	for _, k := range keys {
+		frame.Fields = append(frame.Fields, data.NewField(k.Label, nil, []int64{counts[k]}))
+	}
+	return []*data.Frame{frame}, nil
 }
 
 // stringSetOrNil returns a lookup set for non-empty entries or nil when the

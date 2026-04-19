@@ -32,9 +32,6 @@ func handleNetworkEventsTimeline(ctx context.Context, client *meraki.Client, q M
 	reqOpts := meraki.NetworkEventsOptions{
 		IncludedEventTypes: q.Metrics,
 	}
-	if len(q.ProductTypes) > 0 {
-		reqOpts.ProductType = q.ProductTypes[0]
-	}
 	if len(q.Serials) > 0 {
 		reqOpts.DeviceSerial = q.Serials[0]
 	}
@@ -47,13 +44,32 @@ func handleNetworkEventsTimeline(ctx context.Context, client *meraki.Client, q M
 		reqOpts.TSEnd = &to
 	}
 
-	var events []meraki.NetworkEvent
+	productTypesByNetwork, err := resolveNetworkEventsProductTypes(ctx, client, q, networkIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		events   []meraki.NetworkEvent
+		firstErr error
+	)
 	for _, networkID := range networkIDs {
-		got, err := client.GetNetworkEvents(ctx, networkID, reqOpts, networkEventsTTL)
-		if err != nil {
-			return nil, err
+		for _, pt := range productTypesByNetwork[networkID] {
+			reqOpts.ProductType = pt
+			got, err := client.GetNetworkEvents(ctx, networkID, reqOpts, networkEventsTTL)
+			if err != nil {
+				// Mirror handleNetworkEvents — one bad family during the
+				// "All" fan-out shouldn't blank the entire timeline.
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			events = append(events, got...)
 		}
-		events = append(events, got...)
+	}
+	if firstErr != nil && len(events) == 0 {
+		return nil, firstErr
 	}
 
 	// Build bucket list covering the full panel span so the barchart's x-axis

@@ -6,7 +6,21 @@ import {
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
 import { QueryKind } from '../../datasource/types';
-import { urlForClient } from './links';
+import { PLUGIN_BASE_URL, ROUTES } from '../../constants';
+
+// Per-client drilldown URL template used by every `mac` column across the
+// Clients tabs. Deliberately built as a raw string here rather than via
+// `urlForClient` (in ./links.ts) because Grafana data-link URLs are
+// interpolated at RENDER time — wrapping the template in `encodeURIComponent`
+// at JS call time destroys the `${…}` markers (they become `%24%7B…%7D`),
+// which is what caused the empty-filter drilldown bug.
+//
+// `${__value.raw}` expands to the clicked cell's value at render time and
+// `:percentencode` URL-encodes colons so a MAC like `aa:bb:cc:dd:ee:ff`
+// survives the path. `${__url.params}` forwards every `var-*` / time range
+// query-param from the current scene so the detail page inherits `$org`
+// without having to duplicate the wiring.
+const CLIENT_DRILLDOWN_URL = `${PLUGIN_BASE_URL}/${ROUTES.Clients}/\${__value.raw:percentencode}\${__url.params}`;
 
 // Shared query-runner factory ------------------------------------------------
 //
@@ -81,9 +95,7 @@ export function topTalkersTable(): VizPanel {
       b.matchFieldsWithName('mac').overrideLinks([
         {
           title: 'Open client',
-          // urlForClient is built statically here; the scene-time
-          // ${__data.fields.mac} substitution makes the URL dynamic per row.
-          url: urlForClient('${__data.fields.mac}', '${__url_time_range}'),
+          url: CLIENT_DRILLDOWN_URL,
         },
       ]);
       b.matchFieldsWithName('usageTotal').overrideUnit('mbytes');
@@ -130,7 +142,7 @@ export function newClientsTable(): VizPanel {
       b.matchFieldsWithName('mac').overrideLinks([
         {
           title: 'Open client',
-          url: urlForClient('${__data.fields.mac}', '${org}'),
+          url: CLIENT_DRILLDOWN_URL,
         },
       ]);
       b.matchFieldsWithName('mac').overrideCustomFieldConfig('width', 180);
@@ -173,7 +185,7 @@ export function clientSearchTable(): VizPanel {
       b.matchFieldsWithName('mac').overrideLinks([
         {
           title: 'Open client',
-          url: urlForClient('${__data.fields.mac}', '${org}'),
+          url: CLIENT_DRILLDOWN_URL,
         },
       ]);
       b.matchFieldsWithName('usageTotalKb').overrideUnit('kbytes');

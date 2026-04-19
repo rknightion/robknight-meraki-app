@@ -78,11 +78,14 @@ func TestHandle_Alerts_DefaultSentinel_IsActiveAndSkipsTime(t *testing.T) {
 	}
 }
 
-// TestHandle_Alerts_AllSentinel_SendsExplicitBooleansAndTime asserts that
-// an explicit "all" sentinel pushes active=true&resolved=true&dismissed=true
-// AND applies the picker window — this is the historical-data path used by
-// the timeline bar chart.
-func TestHandle_Alerts_AllSentinel_SendsExplicitBooleansAndTime(t *testing.T) {
+// TestHandle_Alerts_AllSentinel_SendsExplicitBooleansAndNoTimeFilter
+// asserts that an explicit "all" sentinel pushes
+// active=true&resolved=true&dismissed=true but does NOT apply the picker
+// window. Rationale: Meraki's tsStart filters on `alert.startedAt`, so
+// narrowing the window hides long-running actives and resolved-in-window
+// alerts whose startedAt is older. User feedback 2026-04-19 flagged the
+// empty table on a 24h window despite MTTR showing 36 resolutions.
+func TestHandle_Alerts_AllSentinel_SendsExplicitBooleansAndNoTimeFilter(t *testing.T) {
 	var captured atomic.Pointer[url.Values]
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -115,11 +118,11 @@ func TestHandle_Alerts_AllSentinel_SendsExplicitBooleansAndTime(t *testing.T) {
 			t.Errorf("query %s = %q, want %q", k, got, "true")
 		}
 	}
-	if qs.Get("tsStart") == "" {
-		t.Error("tsStart empty, want RFC3339 timestamp in historical mode")
+	if got := qs.Get("tsStart"); got != "" {
+		t.Errorf("tsStart = %q, want empty string (all sentinel skips time filter)", got)
 	}
-	if qs.Get("tsEnd") == "" {
-		t.Error("tsEnd empty, want RFC3339 timestamp in historical mode")
+	if got := qs.Get("tsEnd"); got != "" {
+		t.Errorf("tsEnd = %q, want empty string (all sentinel skips time filter)", got)
 	}
 }
 

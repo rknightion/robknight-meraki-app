@@ -107,11 +107,17 @@ export function eventsTable(): VizPanel {
 }
 
 /**
- * Events timeline — a stacked bar chart bucketed by time. Backed by the
- * server-side `NetworkEventsTimeline` aggregator which emits a wide frame
- * `{ts, <category1>, <category2>, ...}` with zero-filled buckets. Previous
- * versions used a client-side `groupingToMatrix` transform that emitted
- * string cells and tripped the barchart viz with "No numeric fields found".
+ * Events timeline — stacked time-bucketed bars. Backed by the server-side
+ * `NetworkEventsTimeline` aggregator which emits a wide frame
+ * `{ts, <category1>, <category2>, ...}` with zero-filled buckets.
+ *
+ * Rendered via `PanelBuilders.timeseries()` with `drawStyle: 'bars'` rather
+ * than `PanelBuilders.barchart()` — the bar-chart viz treats the x-axis as
+ * categorical and crams every bucket label flush, which becomes illegible
+ * once the panel spans 24h+ of hourly buckets (48 overlapping labels).
+ * The timeseries viz uses a true time axis with adaptive tick spacing, so
+ * the same data renders cleanly regardless of window length. Matches the
+ * `auditLogTimelineBarChart` pattern.
  */
 export function eventsTimelineBarChart(): VizPanel {
   const runner = new SceneQueryRunner({
@@ -128,15 +134,16 @@ export function eventsTimelineBarChart(): VizPanel {
     ],
   });
 
-  return PanelBuilders.barchart()
+  return PanelBuilders.timeseries()
     .setTitle('Event timeline')
     .setDescription('Event volume over the selected window, stacked by category.')
     .setData(runner)
     .setNoValue('No events in the selected range.')
-    .setOption('stacking', 'normal' as any)
     .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
     .setColor({ mode: FieldColorModeId.PaletteClassic })
+    .setCustomFieldConfig('drawStyle', 'bars' as any)
     .setCustomFieldConfig('fillOpacity', 80)
     .setCustomFieldConfig('lineWidth', 0)
+    .setCustomFieldConfig('stacking', { mode: 'normal', group: 'A' } as any)
     .build();
 }
