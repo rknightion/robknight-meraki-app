@@ -14,6 +14,9 @@ import {
 import {
   networkVariable,
   orgVariable,
+  sensorNameFilterVariable,
+  sensorSerialFilterVariable,
+  sensorTagFilterVariable,
 } from '../../scene-helpers/variables';
 import {
   ALL_SENSOR_METRICS,
@@ -53,7 +56,13 @@ export function sensorsScene() {
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
     $variables: new SceneVariableSet({
-      variables: [orgVariable(), networkVariable()],
+      variables: [
+        orgVariable(),
+        networkVariable(),
+        sensorNameFilterVariable(),
+        sensorSerialFilterVariable(),
+        sensorTagFilterVariable(),
+      ],
     }),
     controls: [
       new VariableValueSelectors({}),
@@ -106,7 +115,15 @@ export function sensorsScene() {
         }),
         new SceneFlexItem({
           minHeight: 420,
-          body: sensorInventoryTable(),
+          // Filter values come from the text-box variables above. Scenes
+          // interpolates `${sensorName}` / `${sensorSerial}` / `${sensorTag}`
+          // into the filterByValue transform at query time, so an empty
+          // input produces an empty regex that matches every row.
+          body: sensorInventoryTable({
+            name: '${sensorName}',
+            serial: '${sensorSerial}',
+            tag: '${sensorTag}',
+          }),
         }),
       ],
     }),

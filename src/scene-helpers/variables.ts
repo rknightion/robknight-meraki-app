@@ -106,6 +106,42 @@ export function deviceVariable(params: {
 }
 
 /**
+ * Sensor inventory filter bar. Three free-text variables backing the
+ * name/serial/tag search on the Sensors overview page — bound to the
+ * `sensorInventoryTable` via a `filterByValue` regex transform that ANDs
+ * them. Empty values interpolate to an empty regex, which JS's `RegExp`
+ * treats as "matches everything" — so a blank box is a no-op rather than
+ * a zero-result filter. Keeping these three as siblings (rather than a
+ * single compound box) matches the user expectation of filtering on
+ * distinct fields and lets operators clear one input without losing the
+ * others. The picker labels use sentence-case to match the scene's
+ * existing `Organization` / `Network` variables.
+ */
+export function sensorNameFilterVariable(): TextBoxVariable {
+  return new TextBoxVariable({
+    name: 'sensorName',
+    label: 'Name contains',
+    value: '',
+  });
+}
+
+export function sensorSerialFilterVariable(): TextBoxVariable {
+  return new TextBoxVariable({
+    name: 'sensorSerial',
+    label: 'Serial contains',
+    value: '',
+  });
+}
+
+export function sensorTagFilterVariable(): TextBoxVariable {
+  return new TextBoxVariable({
+    name: 'sensorTag',
+    label: 'Tag contains',
+    value: '',
+  });
+}
+
+/**
  * `clientVariable` — free-form text variable used by the Clients page for
  * MAC search and per-client drilldown.
  *

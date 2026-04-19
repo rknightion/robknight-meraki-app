@@ -212,11 +212,27 @@ func handleSensorReadingsHistory(ctx context.Context, client *meraki.Client, q M
 	}
 
 	if len(groups) == 0 {
-		// Return a single empty frame so the panel has something to bind to —
-		// the UI shows "No data" gracefully when the frame has no rows.
+		// Emit a one-row frame with a typed time value and a nullable value
+		// column so Grafana's timeseries + statetimeline vizes can identify
+		// the time field and honour the panel's `noValue` text ("No data in
+		// the selected range.").
+		//
+		// Using a zero-row frame (`data.NewField("ts", nil, []time.Time{})`)
+		// caused Grafana to surface "Data does not have a time field" on
+		// statetimeline vizes for sensors that don't report a given metric —
+		// a common case with the sensor detail page's always-on panel stack
+		// (e.g. water/door panels on an MT14 that only reports environmental
+		// metrics). The one-row-null approach is the cheapest shape Grafana
+		// accepts as a valid-but-empty timeseries on every visualization we
+		// use on this page.
+		anchor := toRFCTime(tr.From)
+		if anchor.IsZero() {
+			anchor = time.Now().UTC()
+		}
+		nullVal := (*float64)(nil)
 		empty := data.NewFrame("sensor_readings_history",
-			data.NewField("ts", nil, []time.Time{}),
-			data.NewField("value", nil, []float64{}),
+			data.NewField("ts", nil, []time.Time{anchor}),
+			data.NewField("value", nil, []*float64{nullVal}),
 		)
 		return []*data.Frame{empty}, nil
 	}

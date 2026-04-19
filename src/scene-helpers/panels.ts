@@ -4,6 +4,7 @@ import {
   SceneDataTransformer,
   SceneDataLayerSet,
   SceneQueryRunner,
+  SceneTimeRange,
   VizPanel,
   dataLayers,
 } from '@grafana/scenes';
@@ -63,16 +64,60 @@ function oneQuery(params: {
  * Wrap a query runner in an organize transformation that drops columns by
  * name. Used by the inventory and device tables to hide low-value fields
  * (mac, lat, lng, raw) without losing them from the underlying frame.
+ *
+ * When `sensorFilters` is supplied, prepends a `filterByValue` transform
+ * that narrows the frame by name / serial / tags. Each filter value is
+ * interpolated from its source text-box variable at query time (scenes
+ * substitutes `${var}` tokens before the transform runs), so the transform
+ * definition itself is static. Empty variables collapse to empty regexes
+ * that match every row — no conditional transform branching required.
  */
-function hideColumns(runner: SceneQueryRunner, columns: string[]): SceneDataTransformer {
+function hideColumns(
+  runner: SceneQueryRunner,
+  columns: string[],
+  sensorFilters?: { name?: string; serial?: string; tag?: string }
+): SceneDataTransformer {
   const excludeByName: Record<string, boolean> = {};
   for (const c of columns) {
     excludeByName[c] = true;
   }
-  return new SceneDataTransformer({
-    $data: runner,
-    transformations: [{ id: 'organize', options: { excludeByName, renameByName: {} } }],
-  });
+  const transformations: Array<{ id: string; options: Record<string, unknown> }> = [];
+  if (sensorFilters) {
+    // `filterByValue` with `match: all` + `type: include` means a row must
+    // satisfy every configured filter. Blank filters resolve to an empty
+    // regex (JS `new RegExp('').test(anything)` returns true), so typing
+    // nothing into a box is equivalent to "match every row". Case-insensitive
+    // substring matching is achieved with a Grafana regex matcher whose value
+    // is wrapped by the template variable itself — blank → `""`, typed →
+    // `"foo"` → matches any field containing `foo`.
+    const filters: Array<{ fieldName: string; config: { id: string; options: { value: string } } }> = [];
+    if (sensorFilters.name !== undefined) {
+      filters.push({
+        fieldName: 'name',
+        config: { id: 'regex', options: { value: sensorFilters.name } },
+      });
+    }
+    if (sensorFilters.serial !== undefined) {
+      filters.push({
+        fieldName: 'serial',
+        config: { id: 'regex', options: { value: sensorFilters.serial } },
+      });
+    }
+    if (sensorFilters.tag !== undefined) {
+      filters.push({
+        fieldName: 'tags',
+        config: { id: 'regex', options: { value: sensorFilters.tag } },
+      });
+    }
+    if (filters.length > 0) {
+      transformations.push({
+        id: 'filterByValue',
+        options: { filters, match: 'all', type: 'include' },
+      });
+    }
+  }
+  transformations.push({ id: 'organize', options: { excludeByName, renameByName: {} } });
+  return new SceneDataTransformer({ $data: runner, transformations });
 }
 
 // Core panels ----------------------------------------------------------------
@@ -451,8 +496,20 @@ export function sensorKpiRow(): VizPanel[] {
 /**
  * Sensor inventory — one row per MT device in the selected org. The `serial`
  * column is a link into the per-sensor detail scene.
+ *
+ * Filtering: when `filters` is provided, adds a `filterByValue` transform
+ * that narrows rows by name / serial / tags using case-insensitive substring
+ * regexes. The transform matcher treats every filter as `include, all`, so
+ * each non-blank filter is ANDed together; blank filters resolve to an empty
+ * regex that matches every row and therefore act as a no-op. Keeping the
+ * filtering client-side lets us cover partial / substring matches that the
+ * Meraki `/organizations/{id}/devices` endpoint does not support.
  */
-export function sensorInventoryTable(): VizPanel {
+export function sensorInventoryTable(filters?: {
+  name?: string;
+  serial?: string;
+  tag?: string;
+}): VizPanel {
   const runner = oneQuery({
     kind: QueryKind.Devices,
     productTypes: ['sensor'],
@@ -460,8 +517,8 @@ export function sensorInventoryTable(): VizPanel {
   return PanelBuilders.table()
     .setTitle('Sensor inventory')
     .setDescription('MT sensor devices in the selected organization. Click a serial to drill in.')
-    .setData(hideColumns(runner, ['lat', 'lng', 'mac']))
-    .setNoValue('No sensor devices found in this organization.')
+    .setData(hideColumns(runner, ['lat', 'lng', 'mac'], filters))
+    .setNoValue('No sensor devices matched the current filter.')
     .setOverrides((b) => {
       b.matchFieldsWithName('serial').overrideLinks([
         {
@@ -664,33 +721,39 @@ export function orgDevicesTable(orgId: string): VizPanel {
  * is a deterministic pivot with no reducer ambiguity, so it is safe here.
  */
 export function sensorAqiCompositeTile(): VizPanel {
+  // Server-side composite (one row per sensor, fields: serial, name, score).
+  // Previously this panel pivoted the latest-readings feed client-side and
+  // rendered each metric column as a separate stat tile, which produced a
+  // grid of unreadable `serial | co2 | tvoc | pm25` cells. The Go handler
+  // applies the same piecewise-linear weights as `aqiCompositeScore` in
+  // `sensorMetrics.ts` (WHO/EPA/ASHRAE/BAuA citations documented there) and
+  // emits a single long frame the bar gauge can render one row at a time.
   const runner = oneQuery({
-    kind: QueryKind.SensorReadingsLatest,
+    kind: QueryKind.SensorAqiComposite,
     networkIds: ['$network'],
-    metrics: ['co2', 'tvoc', 'pm25'],
   });
-  const shaped = new SceneDataTransformer({
-    $data: runner,
-    transformations: [
-      {
-        id: 'groupingToMatrix',
-        options: {
-          rowField: 'serial',
-          columnField: 'metric',
-          valueField: 'value',
-        },
-      },
-    ],
-  });
-  return PanelBuilders.stat()
+  return PanelBuilders.bargauge()
     .setTitle('Air quality index')
     .setDescription(
-      'Composite indoor-air score (0 = hazardous, 100 = excellent). ' +
-        'Weighted combination of CO₂, TVOC and PM2.5. See ' +
-        'scene-helpers/sensorMetrics.ts for the band definitions and ' +
-        'citations (WHO 2021 AQGs, ASHRAE 62.1, BAuA guidance).'
+      'Composite indoor-air score per sensor (0 = hazardous, 100 = excellent). ' +
+        'Weighted mix of CO₂, TVOC and PM2.5; see scene-helpers/sensorMetrics.ts ' +
+        'for the bands and citations (WHO 2021 AQGs, ASHRAE 62.1, BAuA guidance).'
     )
-    .setData(shaped)
+    .setData(
+      new SceneDataTransformer({
+        $data: runner,
+        transformations: [
+          // Drop the raw serial column — the `name` field is the human-friendly
+          // label that bar gauge displays next to each horizontal bar. Sensors
+          // without a configured name still resolve to the serial via the
+          // backend fallback so the bar is never unlabelled.
+          {
+            id: 'organize',
+            options: { excludeByName: { serial: true }, renameByName: { score: 'AQI' } },
+          },
+        ],
+      })
+    )
     .setNoValue('No sensors reporting air-quality metrics.')
     .setUnit('percent')
     .setMin(0)
@@ -704,6 +767,9 @@ export function sensorAqiCompositeTile(): VizPanel {
         { value: 70, color: 'green' },
       ],
     })
+    .setOption('orientation', 'horizontal' as any)
+    .setOption('displayMode', 'gradient' as any)
+    .setOption('showUnfilled', true as any)
     .setOption('reduceOptions', {
       values: true,
       calcs: ['lastNotNull'],
@@ -721,20 +787,37 @@ export function sensorAqiCompositeTile(): VizPanel {
  * `lowBatteryThreshold` in sensor_summary.go).
  */
 export function sensorBatteryTimeline(): VizPanel {
-  const runner = oneQuery({
-    kind: QueryKind.SensorReadingsHistory,
-    networkIds: ['$network'],
-    metrics: ['battery'],
+  // 30-day override: battery is the rarest sensor metric — Meraki's verified
+  // fleet samples showed a typical cadence of "multiple months between
+  // readings", and `timespan=604800` (7d) history queries against
+  // battery-powered MT units returned zero rows in production. A 6h/24h
+  // scene default therefore produced either an unlinked single-dot chart
+  // ("lower refresh rate" in the user report) or the dispatcher's empty-
+  // frame fallback. Pinning the panel to 30d ensures at least one reading
+  // per active sensor lands on the timeline.
+  const runner = new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [
+      {
+        refId: 'A',
+        kind: QueryKind.SensorReadingsHistory,
+        orgId: '$org',
+        networkIds: ['$network'],
+        metrics: ['battery'],
+      },
+    ],
     maxDataPoints: 500,
   });
-  return PanelBuilders.timeseries()
-    .setTitle('Battery')
+  const panel = PanelBuilders.timeseries()
+    .setTitle('Battery (30d)')
     .setDescription(
-      'Sensor battery percentage over the selected range. Sensors below ' +
-        '20% are flagged to match the Meraki low-battery alert threshold.'
+      'Sensor battery percentage over the last 30 days. Overrides the ' +
+        "dashboard time range because Meraki's battery samples are " +
+        'months apart in practice; sensors below 20% are flagged to match ' +
+        'the dashboard low-battery alert threshold.'
     )
     .setData(runner)
-    .setNoValue('No battery readings in the selected range.')
+    .setNoValue('No battery readings in the last 30 days.')
     .setUnit('percent')
     .setMin(0)
     .setMax(100)
@@ -747,13 +830,17 @@ export function sensorBatteryTimeline(): VizPanel {
         { value: 40, color: 'green' },
       ],
     })
-    .setCustomFieldConfig('lineWidth', 1)
+    .setCustomFieldConfig('lineWidth', 2)
     .setCustomFieldConfig('fillOpacity', 10)
     .setCustomFieldConfig('spanNulls', true)
+    .setCustomFieldConfig('showPoints', 'always' as any)
+    .setCustomFieldConfig('pointSize', 5)
     .setCustomFieldConfig('thresholdsStyle', { mode: 'area' } as any)
     .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
     .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
     .build();
+  panel.setState({ $timeRange: new SceneTimeRange({ from: 'now-30d', to: 'now' }) });
+  return panel;
 }
 
 /**

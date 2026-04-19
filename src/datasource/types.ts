@@ -23,6 +23,12 @@ export enum QueryKind {
    * Wide frame; lat/lng are nullable so the panel falls back to a grid
    * layout when a floor plan has no anchor coordinates configured. */
   SensorFloorPlan = 'sensorFloorPlan',
+  /* Composite AQI score per sensor (0–100). Computed server-side from
+   * the latest CO₂/TVOC/PM2.5 readings using the same weights as
+   * `aqiCompositeScore` in scene-helpers/sensorMetrics.ts. Emitted as a
+   * long frame with `serial`, `name`, `score` fields so bar-gauge-style
+   * vizes can render one row per sensor without a client-side pivot. */
+  SensorAqiComposite = 'sensorAqiComposite',
 
   /* Wireless (MR) — phase 5. */
   WirelessChannelUtil = 'wirelessChannelUtil',

@@ -40,6 +40,12 @@ const (
 	// wide frame with nullable lat/lng so the panel can switch to a grid
 	// layout when no anchor coordinates are configured.
 	KindSensorFloorPlan QueryKind = "sensorFloorPlan"
+	// Composite AQI score per sensor (0–100). Aggregates the latest CO₂/
+	// TVOC/PM2.5 readings into a weighted score using the same bands as
+	// aqiCompositeScore in src/scene-helpers/sensorMetrics.ts. Emitted as
+	// one long frame (`serial`, `name`, `score`) so the AQI tile can render
+	// a bar-gauge row per sensor without a client-side pivot.
+	KindSensorAqiComposite QueryKind = "sensorAqiComposite"
 
 	// Wireless (MR) — phase 5.
 	KindWirelessChannelUtil QueryKind = "wirelessChannelUtil"
@@ -364,6 +370,7 @@ var handlers = map[QueryKind]handlerFn{
 	KindSensorReadingsHistory: handleSensorReadingsHistory,
 	KindSensorAlertSummary:    handleSensorAlertSummary,
 	KindSensorFloorPlan:       handleSensorFloorPlan,
+	KindSensorAqiComposite:    handleSensorAqiComposite,
 
 	KindWirelessChannelUtil: handleWirelessChannelUtil,
 	KindWirelessUsage:       handleWirelessUsage,
