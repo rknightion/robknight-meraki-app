@@ -25,10 +25,10 @@ const TID = {
   templateRow: (gid: string, tid: string) => `data-testid rrp-template-${gid}-${tid}`,
 };
 
-// Mirror of the live recordings bundle. Eleven templates across five groups,
-// matching pkg/plugin/recordings/templates/. The Playwright spec only
-// asserts the presence of the testids the panel renders for each group +
-// template, so threshold shape is kept minimal here.
+// Mirror of the live recordings bundle. Fourteen templates across six
+// groups, matching pkg/plugin/recordings/templates/. The Playwright spec
+// only asserts the presence of the testids the panel renders for each
+// group + template, so threshold shape is kept minimal here.
 const DEFAULT_RECORDING_TEMPLATES = {
   groups: [
     {
@@ -238,9 +238,14 @@ test.describe('Bundled recording rules — config UI (v0.7 §4.6.8)', () => {
     await expect(page.getByTestId(TID.datasourcePicker)).toBeVisible();
 
     // Expand every group so the per-template rows render, then count.
-    const groups = ['availability', 'wan', 'wireless', 'switches', 'alerts'];
-    for (const gid of groups) {
-      const toggle = page.getByTestId(TID.groupInstall(gid));
+    // GroupRow only renders the template row when `groupState.installed`
+    // is true (see src/components/AppConfig/RuleBundlePanel/GroupRow.tsx),
+    // so every group in the mock needs its install toggle checked before
+    // the per-template assertions below. Driving from the mock keeps the
+    // spec in lockstep with DEFAULT_RECORDING_TEMPLATES when rules or
+    // groups are added.
+    for (const group of DEFAULT_RECORDING_TEMPLATES.groups) {
+      const toggle = page.getByTestId(TID.groupInstall(group.id));
       await expect(toggle).toBeVisible();
       await toggle.check({ force: true });
     }
