@@ -25,6 +25,16 @@ export interface AppJsonData {
    */
   enableIPLimiter?: boolean;
   /**
+   * Opt-in spine cache warmer. When true, the Go backend launches a
+   * background goroutine that periodically refreshes the `organizations`
+   * and per-org `organizationNetworks` cache entries so first-paint on a
+   * cold page never pays the Meraki round-trip. Default off — small
+   * single-org installs see little benefit. Only safe to enable when the
+   * plugin instance is running with a real Meraki API key (no-op when
+   * unconfigured).
+   */
+  prefetchSpine?: boolean;
+  /**
    * When true, the app shows every device-family nav page even if the
    * selected org has zero devices of that family. Default (undefined/false)
    * hides Appliances / Access Points / Switches / Cameras / Cellular

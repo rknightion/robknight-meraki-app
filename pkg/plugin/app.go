@@ -82,6 +82,13 @@ type App struct {
 	// e2e-mock mode; production path leaves this nil so reconcile fans out
 	// to the live Meraki client as normal.
 	alertsMerakiOverride alerts.MerakiAPI
+
+	// warmer, when non-nil, is the background goroutine refreshing the
+	// org-list + per-org network-list cache entries so first paint on a
+	// cold page is a cache hit. Bound to App lifetime via Dispose().
+	// Only constructed when settings.PrefetchSpine is true AND a Meraki
+	// client is available (i.e. an API key is configured).
+	warmer *meraki.Warmer
 }
 
 // LabelMode controls how per-device series are labeled on timeseries panels
@@ -106,6 +113,12 @@ type Settings struct {
 	// multi-tenant deployments where many orgs egress via a single Grafana IP —
 	// Meraki's per-IP cap is independent of the per-org cap (todos.txt §7.4-G).
 	EnableIPLimiter bool
+	// PrefetchSpine opts into the background spine warmer. When true,
+	// NewApp launches a goroutine that periodically refreshes the
+	// organizations + per-org networks cache so first-paint queries land
+	// on warm cache. Default off; suitable for multi-org deployments
+	// where the cold-start round-trip is felt on every nav.
+	PrefetchSpine bool
 }
 
 // appJSONData mirrors src/types.ts AppJsonData.
@@ -115,6 +128,7 @@ type appJSONData struct {
 	IsAPIKeySet     bool          `json:"isApiKeySet,omitempty"`
 	LabelMode       LabelMode     `json:"labelMode,omitempty"`
 	EnableIPLimiter bool          `json:"enableIPLimiter,omitempty"`
+	PrefetchSpine   bool          `json:"prefetchSpine,omitempty"`
 	// Alerts carries the bundled alert-rule install state (group toggles,
 	// per-template toggles, threshold overrides, last-reconcile telemetry).
 	// Mirrors src/types.ts AlertsConfig. The runtime reconcile summary is
@@ -205,6 +219,11 @@ func NewApp(_ context.Context, s backend.AppInstanceSettings) (instancemgmt.Inst
 		logger.Info("e2e mock mode enabled: /alerts/* handlers are hermetic")
 	}
 
+	if settings.PrefetchSpine && client != nil && !app.e2eMockEnabled {
+		app.warmer = meraki.NewWarmer(client, meraki.WarmerConfig{}, logger)
+		app.warmer.Start(context.Background())
+	}
+
 	mux := http.NewServeMux()
 	app.registerRoutes(mux)
 	app.CallResourceHandler = httpadapter.New(mux)
@@ -252,6 +271,7 @@ func loadSettings(s backend.AppInstanceSettings) (Settings, error) {
 		settings.IsApiKeySet = jd.IsAPIKeySet
 		settings.LabelMode = jd.LabelMode
 		settings.EnableIPLimiter = jd.EnableIPLimiter
+		settings.PrefetchSpine = jd.PrefetchSpine
 	}
 	if settings.LabelMode != LabelModeName {
 		// Default to serial — matches the current shipped behaviour and keeps
@@ -310,7 +330,14 @@ func buildClient(s Settings, logger log.Logger) (*meraki.Client, error) {
 }
 
 // Dispose is called by Grafana when plugin settings change and a new instance replaces this one.
-func (a *App) Dispose() {}
+// Stops the spine warmer (if running) so the goroutine doesn't outlive the
+// App instance and double-spend the per-org rate limiter against the next
+// instance's limiter.
+func (a *App) Dispose() {
+	if a.warmer != nil {
+		a.warmer.Stop()
+	}
+}
 
 // Client exposes the underlying Meraki client so the nested datasource (and resource routes)
 // can share a single rate limiter and cache.

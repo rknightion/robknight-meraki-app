@@ -224,6 +224,13 @@ const (
 	// row per productType so the Home "availability by family" bar can stack
 	// the status buckets. See device_status_by_family.go for the shape.
 	KindDeviceStatusByFamily QueryKind = "deviceStatusByFamily"
+
+	// Single-field offline count, used by the device-offline alert template.
+	// deviceAvailabilityCounts emits five fields and SSE reduce produces one
+	// labelled sample per field, so a `gt 0` threshold against it would always
+	// fire (online > 0 in any healthy fleet). This kind narrows to one int64
+	// `count` field so the standard reduce → threshold chain works.
+	KindDeviceOfflineCount QueryKind = "deviceOfflineCount"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -440,6 +447,9 @@ var handlers = map[QueryKind]handlerFn{
 
 	// §4.4.5 — availability-by-family reshape for the Home stacked bar.
 	KindDeviceStatusByFamily: handleDeviceStatusByFamily,
+
+	// Single-field offline count consumed by the device-offline alert template.
+	KindDeviceOfflineCount: handleDeviceOfflineCount,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

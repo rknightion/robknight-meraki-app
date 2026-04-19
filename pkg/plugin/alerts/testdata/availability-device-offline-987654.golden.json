@@ -7,7 +7,7 @@
       "refId": "A",
       "datasourceUid": "robknight-meraki-ds",
       "model": {
-        "kind": "orgDeviceStatuses",
+        "kind": "deviceOfflineCount",
         "orgId": "987654",
         "productTypes": [
           "appliance",

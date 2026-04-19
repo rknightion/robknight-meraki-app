@@ -205,6 +205,14 @@ export enum QueryKind {
    * online/alerting/offline/dormant/total counts. Feeds the Home stacked-bar
    * panel that replaces the org-wide donut as a family-level breakdown. */
   DeviceStatusByFamily = 'deviceStatusByFamily',
+
+  /* Single-field offline count used by the device-offline alert template.
+   * deviceAvailabilityCounts emits five fields and Grafana's reduce SSE
+   * produces one labelled output per numeric field, so a `gt 0` threshold
+   * against it would always fire (online > 0 in healthy fleets). This kind
+   * narrows to one int64 `count` field so the standard reduce → threshold
+   * chain works. */
+  DeviceOfflineCount = 'deviceOfflineCount',
 }
 
 export interface MerakiQuery extends DataQuery {

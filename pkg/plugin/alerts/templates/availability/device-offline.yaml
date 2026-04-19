@@ -19,7 +19,7 @@ rule:
   title: "Meraki device offline — <% .OrgID %>"
   for: "<% .Thresholds.for_duration %>"
   query:
-    kind: orgDeviceStatuses
+    kind: deviceOfflineCount
     params:
       orgId: "<% .OrgID %>"
       productTypes: <% yamlList .Thresholds.product_types %>
@@ -30,7 +30,7 @@ rule:
       datasourceUid: "robknight-meraki-ds"
       model:
         refId: A
-        kind: orgDeviceStatuses
+        kind: deviceOfflineCount
         orgId: "<% .OrgID %>"
         productTypes: <% yamlList .Thresholds.product_types %>
     - refId: B
