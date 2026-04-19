@@ -808,7 +808,7 @@ export function sensorBatteryTimeline(): VizPanel {
     ],
     maxDataPoints: 500,
   });
-  const panel = PanelBuilders.timeseries()
+  return PanelBuilders.timeseries()
     .setTitle('Battery (30d)')
     .setDescription(
       'Sensor battery percentage over the last 30 days. Overrides the ' +
@@ -816,6 +816,12 @@ export function sensorBatteryTimeline(): VizPanel {
         'months apart in practice; sensors below 20% are flagged to match ' +
         'the dashboard low-battery alert threshold.'
     )
+    // Local time-range override (scenes core-concepts.md, "Configure Global
+    // and Local Time Ranges"): a 30-day window wins over the scene's default
+    // `now-6h` picker, so the query runner below pulls from the last month
+    // and `showPoints: always` surfaces the sparse sample cadence as
+    // dots-on-line rather than dots-in-isolation.
+    .setTimeRange(new SceneTimeRange({ from: 'now-30d', to: 'now' }))
     .setData(runner)
     .setNoValue('No battery readings in the last 30 days.')
     .setUnit('percent')
@@ -839,8 +845,6 @@ export function sensorBatteryTimeline(): VizPanel {
     .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
     .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
     .build();
-  panel.setState({ $timeRange: new SceneTimeRange({ from: 'now-30d', to: 'now' }) });
-  return panel;
 }
 
 /**
