@@ -19,7 +19,7 @@ import (
 // /organizations/{orgId}/devices fetch and only memoise the per-network
 // centroid here. A long TTL is safe because operators don't relocate
 // physical devices on the order of minutes.
-const networkGeoTTL = 1 * time.Hour
+const networkGeoTTL = 1 * time.Hour //nolint:unused // reserved for a future per-network centroid cache wrapper
 
 // deviceLldpCdpTTL — per §4.4.1-g exception. LLDP/CDP neighbour tables
 // stabilise once a topology is wired and rarely flip during the day.

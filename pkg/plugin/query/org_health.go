@@ -46,7 +46,7 @@ func init() {
 // Currently unused because every downstream handler applies its own cache
 // TTL at the meraki.Client layer; left declared so a future caching wrapper
 // around this handler has a single constant to key off.
-const orgHealthSummaryTTL = 30 * time.Second
+const orgHealthSummaryTTL = 30 * time.Second //nolint:unused // reserved for a future caching wrapper around the aggregated Home tile handler
 
 // orgHealthApiErrorWindow is the fixed lookback we use to compute
 // apiErrorPct regardless of the panel time range. The Home tile must be
