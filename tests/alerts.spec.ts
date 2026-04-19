@@ -1,20 +1,34 @@
 import { test, expect, mockAlertsEndpoints, DEFAULT_ALERT_TEMPLATES } from './fixtures';
 import pluginJson from '../src/plugin.json';
+import { ROUTES } from '../src/constants';
+
+// AlertRulesPanel only renders inside the "full" variant of MerakiConfigForm,
+// which is the in-app Configuration page (Apps → Cisco Meraki → Configuration).
+// The plugin catalog page (`/plugins/<id>`) uses the "catalog" variant and does
+// NOT render this panel, so these tests intentionally avoid the
+// `appConfigPage` fixture.
+const CONFIG_PATH = `/${ROUTES.Configuration}`;
 
 // Test-ids are duplicated here (rather than imported from src/components/testIds)
 // so the spec file stays decoupled from the frontend module graph — Playwright
 // only needs the string values. Keep in sync with src/components/testIds.ts.
+//
+// NOTE: Grafana's data-testid convention prefixes the value with the literal
+// "data-testid " string, so the DOM renders
+// `data-testid="data-testid arp-container"`. getByTestId matches the full
+// attribute value, so the strings below must carry the prefix too.
 const TID = {
-  container: 'arp-container',
-  featureToggleBanner: 'arp-feature-toggle-banner',
-  resultBanner: 'arp-result-banner',
-  statusPill: 'arp-status-pill',
-  reconcileButton: 'arp-reconcile',
-  uninstallButton: 'arp-uninstall',
-  groupInstall: (gid: string) => `arp-group-install-${gid}`,
-  templateRow: (gid: string, tid: string) => `arp-template-${gid}-${tid}`,
-  ruleEnabled: (gid: string, tid: string) => `arp-rule-enabled-${gid}-${tid}`,
-  thresholdInput: (gid: string, tid: string, key: string) => `arp-threshold-${gid}-${tid}-${key}`,
+  container: 'data-testid arp-container',
+  featureToggleBanner: 'data-testid arp-feature-toggle-banner',
+  resultBanner: 'data-testid arp-result-banner',
+  statusPill: 'data-testid arp-status-pill',
+  reconcileButton: 'data-testid arp-reconcile',
+  uninstallButton: 'data-testid arp-uninstall',
+  groupInstall: (gid: string) => `data-testid arp-group-install-${gid}`,
+  templateRow: (gid: string, tid: string) => `data-testid arp-template-${gid}-${tid}`,
+  ruleEnabled: (gid: string, tid: string) => `data-testid arp-rule-enabled-${gid}-${tid}`,
+  thresholdInput: (gid: string, tid: string, key: string) =>
+    `data-testid arp-threshold-${gid}-${tid}-${key}`,
 };
 
 // E2E_MOCK_GRAFANA=1 is an opt-in toggle (see .config/AGENTS/e2e-testing.md).
@@ -24,15 +38,15 @@ const TID = {
 const GO_MOCK_ENABLED = process.env.E2E_MOCK_GRAFANA === '1';
 
 test.describe('Bundled alert rules — config UI (v0.6 §4.5.8)', () => {
-  test('renders the panel with groups and per-rule rows', async ({ appConfigPage, page }) => {
+  test('renders the panel with groups and per-rule rows', async ({ gotoPage, page }) => {
     await mockAlertsEndpoints(page, {
       templates: DEFAULT_ALERT_TEMPLATES,
       status: { installed: [], grafanaReady: true },
     });
-    // Re-navigate to the config page so the just-installed routes intercept
-    // the initial /alerts/* fetches. gotoAppConfigPage in fixtures.ts runs
-    // before we can install routes, so a reload is required.
-    await appConfigPage.goto();
+    // Navigate to the in-app Configuration page (full variant) so the
+    // AlertRulesPanel renders. Routes were installed above, so the initial
+    // /alerts/* fetches on mount hit our mocks.
+    await gotoPage(CONFIG_PATH);
 
     const panel = page.getByTestId(TID.container);
     await expect(panel).toBeVisible();
@@ -56,14 +70,14 @@ test.describe('Bundled alert rules — config UI (v0.6 §4.5.8)', () => {
   });
 
   test('shows the feature-toggle banner when grafanaReady=false', async ({
-    appConfigPage,
+    gotoPage,
     page,
   }) => {
     await mockAlertsEndpoints(page, {
       templates: DEFAULT_ALERT_TEMPLATES,
       status: { installed: [], grafanaReady: false },
     });
-    await appConfigPage.goto();
+    await gotoPage(CONFIG_PATH);
 
     const banner = page.getByTestId(TID.featureToggleBanner);
     await expect(banner).toBeVisible();
@@ -85,7 +99,7 @@ test.describe('Bundled alert rules — config UI (v0.6 §4.5.8)', () => {
     const UNINSTALL_URL = `**/api/plugins/${pluginJson.id}/resources/alerts/uninstall-all`;
 
     test('reconcile installs the availability group (created count > 0)', async ({
-      appConfigPage,
+      gotoPage,
       page,
     }) => {
       // Ensure any leftover state from a previous run is cleared. The Go
@@ -100,7 +114,7 @@ test.describe('Bundled alert rules — config UI (v0.6 §4.5.8)', () => {
         .catch(() => null);
       await uninstallResp;
 
-      await appConfigPage.goto();
+      await gotoPage(CONFIG_PATH);
 
       // Toggle the availability group on.
       await page.getByTestId(TID.groupInstall('availability')).check({ force: true });
@@ -121,10 +135,10 @@ test.describe('Bundled alert rules — config UI (v0.6 §4.5.8)', () => {
     });
 
     test('second reconcile with no changes issues no creates (idempotency)', async ({
-      appConfigPage,
+      gotoPage,
       page,
     }) => {
-      await appConfigPage.goto();
+      await gotoPage(CONFIG_PATH);
       await page.getByTestId(TID.groupInstall('availability')).check({ force: true });
 
       const reconcileResp = page.waitForResponse(RECONCILE_URL);
@@ -136,8 +150,8 @@ test.describe('Bundled alert rules — config UI (v0.6 §4.5.8)', () => {
       expect(body.created?.length ?? 0).toBe(0);
     });
 
-    test('uninstall-all clears every managed rule', async ({ appConfigPage, page }) => {
-      await appConfigPage.goto();
+    test('uninstall-all clears every managed rule', async ({ gotoPage, page }) => {
+      await gotoPage(CONFIG_PATH);
 
       const uninstallResp = page.waitForResponse(UNINSTALL_URL);
       await page.getByTestId(TID.uninstallButton).click();

@@ -6,6 +6,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - ./src/module.tsx
+          - ./src/datasource/module.ts
     steps:
       - uses: actions/checkout@v6
         with:
@@ -23,15 +29,9 @@ jobs:
       - name: Build plugin
         run: npm run build
 
-      - name: Find module.ts or module.tsx
-        id: find-module-ts
-        run: |
-          MODULETS="$(find ./src -type f \( -name "module.ts" -o -name "module.tsx" \))"
-          echo "modulets=${MODULETS}" >> $GITHUB_OUTPUT
-
       - name: Compatibility check
         uses: grafana/plugin-actions/is-compatible@is-compatible/v1.0.2
         with:
-          module: ${{ steps.find-module-ts.outputs.modulets }}
+          module: ${{ matrix.module }}
           comment-pr: 'no'
           fail-if-incompatible: 'yes'
