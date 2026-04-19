@@ -229,6 +229,21 @@ jobs:
       #     path: grafana-server.log
       #     retention-days: 5
 
+  e2e-required:
+    name: e2e required
+    if: ${{ always() }}
+    needs: [playwright-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix result
+        run: |
+          result="${{ needs.playwright-tests.result }}"
+          echo "playwright-tests result: $result"
+          if [ "$result" = "success" ]; then
+            exit 0
+          fi
+          exit 1
+
   publish-report:
     if: ${{ always() && !cancelled() }}
     permissions:

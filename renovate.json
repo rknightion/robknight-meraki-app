@@ -7,6 +7,9 @@
   },
   "automergeType": "pr",
   "platformAutomerge": true,
+  "gitIgnoredAuthors": [
+    "268667784+rknightion-renovate[bot]@users.noreply.github.com"
+  ],
   "packageRules": [
     {
       "description": "Never automerge release-please PRs - manual review required",
