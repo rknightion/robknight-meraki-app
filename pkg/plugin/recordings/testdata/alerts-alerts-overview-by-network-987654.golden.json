@@ -1,0 +1,39 @@
+{
+  "uid": "meraki-rec-alerts-alerts-overview-by-network-987654",
+  "title": "Meraki alerts by network — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "groupBy": "network",
+        "kind": "alertsOverview",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Recorded rollup of /organizations/{orgId}/assurance/alerts/overview/byNetwork. Series labelled by network + severity. Powers per-network SLA + MTTR dashboards without polling Meraki per view.",
+    "summary": "Per-network alert counts recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "alerts",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "alerts-overview-by-network"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "alerts",
+  "record": {
+    "metric": "meraki_alerts_by_network_count",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

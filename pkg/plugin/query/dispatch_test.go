@@ -318,9 +318,9 @@ func TestHandle_Alerts_FollowsLinkHeaderPagination(t *testing.T) {
 // emits a single-row wide frame shaped (critical, warning, informational,
 // total) — mirroring the sensor_alert_summary KPI frame shape.
 //
-// Per ctx7, the /overview endpoint returns `counts.bySeverity` as an ARRAY
-// of {type, count} elements, NOT an object map. The stub reflects the real
-// wire shape.
+// The handler calls /assurance/alerts/overview (NOT .../byType); the byType
+// sibling returns an items[] array with no counts.bySeverity aggregate, so
+// using it silently degrades the KPI tiles to total-only.
 func TestHandle_AlertsOverview_ProducesWideRow(t *testing.T) {
 	const payload = `{
 	  "counts": {
@@ -330,16 +330,12 @@ func TestHandle_AlertsOverview_ProducesWideRow(t *testing.T) {
 	      {"type":"warning","count":5},
 	      {"type":"informational","count":1}
 	    ]
-	  },
-	  "items": [
-	    {"type":"unreachable","count":3},
-	    {"type":"high_latency","count":5},
-	    {"type":"firmware_pending","count":1}
-	  ]
+	  }
 	}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "/assurance/alerts/overview/byType") {
+		// Must NOT match /byType — that's the wrong endpoint for this handler.
+		if !strings.HasSuffix(r.URL.Path, "/assurance/alerts/overview") {
 			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
 			return
 		}

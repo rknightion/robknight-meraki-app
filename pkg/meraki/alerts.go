@@ -205,8 +205,14 @@ func (c *Client) GetOrganizationAssuranceAlerts(ctx context.Context, orgID strin
 }
 
 // GetOrganizationAssuranceAlertsOverviewByType returns the summary view used
-// for KPI tiles and the alerts-by-type bar chart. Not paginated — the server
-// returns a single object with `items[]` and/or `counts.bySeverity[]`.
+// for the alerts-by-type bar chart. Not paginated — the server returns a
+// single object with `items[]` (per alert-type counts with severity, category,
+// etc. on each item).
+//
+// For KPI tiles (severity rollup) use GetOrganizationAssuranceAlertsOverview
+// instead — the byType response has NO `counts.bySeverity` aggregate, and
+// summing items[].count over-counts because Meraki emits one item per (type,
+// severity) combination across the full retained history.
 func (c *Client) GetOrganizationAssuranceAlertsOverviewByType(ctx context.Context, orgID string, opts AlertsOptions, ttl time.Duration) (*AssuranceAlertsOverview, error) {
 	if orgID == "" {
 		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/assurance/alerts/overview/byType", Message: "missing organization id"}}
@@ -214,6 +220,26 @@ func (c *Client) GetOrganizationAssuranceAlertsOverviewByType(ctx context.Contex
 	var out AssuranceAlertsOverview
 	if err := c.Get(ctx,
 		"organizations/"+url.PathEscape(orgID)+"/assurance/alerts/overview/byType",
+		orgID, opts.overviewValues(), ttl, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetOrganizationAssuranceAlertsOverview returns the severity-rolled summary
+// used for the KPI tiles: {counts: {total, bySeverity: [{type, count}, ...]}}.
+// This is the correct endpoint for "how many critical / warning /
+// informational alerts match the filter"; its sibling /overview/byType does
+// NOT emit the `counts` block and silently degrades KPI tiles to total-only.
+//
+// Not paginated — the server returns a single summary object.
+func (c *Client) GetOrganizationAssuranceAlertsOverview(ctx context.Context, orgID string, opts AlertsOptions, ttl time.Duration) (*AssuranceAlertsOverview, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/assurance/alerts/overview", Message: "missing organization id"}}
+	}
+	var out AssuranceAlertsOverview
+	if err := c.Get(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/assurance/alerts/overview",
 		orgID, opts.overviewValues(), ttl, &out); err != nil {
 		return nil, err
 	}

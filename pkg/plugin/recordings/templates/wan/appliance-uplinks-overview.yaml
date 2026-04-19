@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: appliance-uplinks-overview
+group: wan
+display_name: Meraki MX uplink inventory by kind
+thresholds: []
+rule:
+  title: "Meraki appliance uplinks overview — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: applianceUplinksOverview
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_appliance_uplinks_active_count"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: wan
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: appliance-uplinks-overview
+  annotations:
+    summary: "Appliance uplink inventory recorded for Meraki org <% .OrgID %>"
+    description: "Recorded rollup of /organizations/{orgId}/appliance/uplinks/overview — series labelled by uplink kind (broadband, cellular, sdwan). Powers backup-link availability dashboards without polling Meraki on every view."

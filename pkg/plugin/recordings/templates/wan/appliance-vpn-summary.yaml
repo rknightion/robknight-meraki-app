@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: appliance-vpn-summary
+group: wan
+display_name: Meraki site-to-site VPN tunnel health
+thresholds: []
+rule:
+  title: "Meraki VPN tunnel summary — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: applianceVpnStatuses
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_appliance_vpn_tunnels_up_pct"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: wan
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: appliance-vpn-summary
+  annotations:
+    summary: "VPN tunnel health recorded for Meraki org <% .OrgID %>"
+    description: "Recorded site-to-site VPN tunnel up-percentage from /organizations/{orgId}/appliance/vpn/statuses. Series labelled by network + peer. Powers 'VPN outage over the last hour' dashboards without polling Meraki per view."

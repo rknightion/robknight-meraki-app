@@ -54,6 +54,16 @@ func handleNetworkTraffic(ctx context.Context, client *meraki.Client, q MerakiQu
 		return nil, fmt.Errorf("networkTraffic: networkIds is required")
 	}
 
+	// Expand the all-networks sentinel (network picker set to "All" —
+	// `allValue: ''` in scene-helpers/variables.ts, which interpolates
+	// to a single empty-string entry) into the concrete org network list.
+	// Without this, the loop below skipped every empty id and the panel
+	// rendered blank whenever the user didn't manually pick a network.
+	targets, truncated, terr := resolveNetworkTrafficTargets(ctx, client, q)
+	if terr != nil {
+		return nil, terr
+	}
+
 	etr, ok := meraki.KnownEndpointRanges[networkTrafficEndpoint]
 	if !ok {
 		return nil, fmt.Errorf("networkTraffic: missing KnownEndpointRanges entry")
@@ -87,10 +97,7 @@ func handleNetworkTraffic(ctx context.Context, client *meraki.Client, q MerakiQu
 		flows        []int64
 	)
 
-	for _, nid := range q.NetworkIDs {
-		if nid == "" {
-			continue
-		}
+	for _, nid := range targets {
 		rows, ferr := client.GetNetworkTraffic(ctx, nid, opts, trafficTTL)
 		if ferr != nil {
 			// Per-network failure: keep going so the table still renders
@@ -146,8 +153,66 @@ func handleNetworkTraffic(ctx context.Context, client *meraki.Client, q MerakiQu
 			frame.AppendNotices(data.Notice{Severity: data.NoticeSeverityInfo, Text: ann})
 		}
 	}
+	if truncated {
+		frame.AppendNotices(data.Notice{
+			Severity: data.NoticeSeverityInfo,
+			Text: fmt.Sprintf(
+				"Per-network traffic truncated: queried only the first %d networks in this organisation. Pick specific networks for the full breakdown.",
+				networkTrafficAllFanoutCap,
+			),
+		})
+	}
 
 	return []*data.Frame{frame}, err
+}
+
+// networkTrafficAllFanoutCap bounds the number of networks a single
+// networkTraffic request can fan out over when the picker resolves to
+// "All". Each target is one Meraki API call; the cap keeps a dashboard
+// refresh from draining the per-org token bucket on very large estates.
+// Matches the cap used by the network-events handlers.
+const networkTrafficAllFanoutCap = 25
+
+// resolveNetworkTrafficTargets expands the "All" sentinel (empty-string
+// entries from `allValue: ''` on the $network picker) into a concrete
+// list of network IDs for the org. When the caller supplied at least
+// one non-empty id we preserve the exact list they gave us (no fanout).
+// Returns the target list plus a flag signalling that we truncated the
+// org-wide list to `networkTrafficAllFanoutCap` entries.
+func resolveNetworkTrafficTargets(ctx context.Context, client *meraki.Client, q MerakiQuery) ([]string, bool, error) {
+	concrete := make([]string, 0, len(q.NetworkIDs))
+	for _, id := range q.NetworkIDs {
+		if id != "" && id != "$__all" && id != "*" {
+			concrete = append(concrete, id)
+		}
+	}
+	if len(concrete) > 0 {
+		return concrete, false, nil
+	}
+
+	if q.OrgID == "" {
+		// No orgId to enumerate against — preserve the legacy contract so
+		// the handler surfaces the same "networkIds is required" error in
+		// this pathological case.
+		return nil, false, fmt.Errorf("networkTraffic: networkIds is required (and orgId missing, cannot expand)")
+	}
+	networks, err := client.GetOrganizationNetworks(ctx, q.OrgID, q.ProductTypes, networksTTL)
+	if err != nil {
+		return nil, false, fmt.Errorf("networkTraffic: expand all-networks: %w", err)
+	}
+	ids := make([]string, 0, len(networks))
+	for _, n := range networks {
+		if n.ID != "" {
+			ids = append(ids, n.ID)
+		}
+	}
+	sort.Strings(ids)
+	truncated := false
+	if len(ids) > networkTrafficAllFanoutCap {
+		ids = ids[:networkTrafficAllFanoutCap]
+		truncated = true
+	}
+	return ids, truncated, nil
 }
 
 // handleTopApplicationsByUsage emits a wide table frame with one row per
@@ -181,7 +246,7 @@ func handleTopApplicationsByUsage(ctx context.Context, client *meraki.Client, q 
 		clientCount []int64
 	)
 	for _, r := range rows {
-		names = append(names, r.Name)
+		names = append(names, r.Application)
 		categories = append(categories, r.Category)
 		totals = append(totals, r.Total)
 		downstream = append(downstream, r.Downstream)
@@ -231,7 +296,7 @@ func handleTopApplicationCategoriesByUsage(ctx context.Context, client *meraki.C
 		clientCount []int64
 	)
 	for _, r := range rows {
-		names = append(names, r.Name)
+		names = append(names, r.Category)
 		totals = append(totals, r.Total)
 		downstream = append(downstream, r.Downstream)
 		upstream = append(upstream, r.Upstream)

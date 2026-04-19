@@ -45,30 +45,24 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 	if len(q.NetworkIDs) > 0 {
 		reqOpts.NetworkID = q.NetworkIDs[0]
 	}
-	// Status filter — sentinel read from q.Metrics[1] so the alerts table can
-	// include resolved + dismissed rows without adding a new field to the
-	// MerakiQuery wire shape. Values: "active" | "resolved" | "dismissed" |
-	// "all" (default). Empty / unknown sentinels fall through to "all" so
-	// operators see every alert in the window, matching the Meraki dashboard.
-	if statusSentinel := alertsStatusSentinel(q.Metrics); statusSentinel != "all" {
-		switch statusSentinel {
-		case "active":
-			t := true
-			reqOpts.Active = &t
-		case "resolved":
-			t := true
-			reqOpts.Resolved = &t
-		case "dismissed":
-			t := true
-			reqOpts.Dismissed = &t
-		}
-	}
+	// Status filter — sentinel read from q.Metrics[1]. Values:
+	//   "active" | "resolved" | "dismissed" | "all"
+	// Default is "active" (currently firing). See alertsStatusSentinel.
+	sentinel := alertsStatusSentinel(q.Metrics)
+	applyAlertsStatus(&reqOpts, sentinel)
 
-	if from := toRFCTime(tr.From); !from.IsZero() {
-		reqOpts.TSStart = &from
-	}
-	if to := toRFCTime(tr.To); !to.IsZero() {
-		reqOpts.TSEnd = &to
+	// Only apply the picker window when the caller wants historical data.
+	// Meraki's tsStart/tsEnd filter on alert.startedAt, so a long-running
+	// active alert that started before the picker window disappears from an
+	// active-snapshot view — which is exactly the "empty table" bug users
+	// reported. For "active" we deliberately ignore the picker.
+	if sentinel != "active" {
+		if from := toRFCTime(tr.From); !from.IsZero() {
+			reqOpts.TSStart = &from
+		}
+		if to := toRFCTime(tr.To); !to.IsZero() {
+			reqOpts.TSEnd = &to
+		}
 	}
 
 	alerts, err := client.GetOrganizationAssuranceAlerts(ctx, q.OrgID, reqOpts, alertsTTL)
@@ -79,6 +73,7 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 	var (
 		occurred      []time.Time
 		severity      []string
+		statusCol     []string
 		category      []string
 		alertType     []string
 		networkID     []string
@@ -88,8 +83,6 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 		deviceProduct []string
 		titles        []string
 		descriptions  []string
-		resolved      []bool
-		dismissed     []bool
 		drilldown     []string
 	)
 	for _, a := range alerts {
@@ -111,6 +104,20 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 		category = append(category, a.CategoryType)
 		alertType = append(alertType, a.AlertType)
 
+		// Human-readable lifecycle status. Dismissed overrides resolved when
+		// both are present (Meraki occasionally marks a post-resolution
+		// dismissal); the column is read by operators far more often than the
+		// old true/false resolved+dismissed pair so coalescing here is the
+		// least-surprising presentation.
+		status := "active"
+		switch {
+		case a.DismissedAt != nil && !a.DismissedAt.IsZero():
+			status = "dismissed"
+		case a.ResolvedAt != nil && !a.ResolvedAt.IsZero():
+			status = "resolved"
+		}
+		statusCol = append(statusCol, status)
+
 		var nID, nName string
 		if a.Network != nil {
 			nID = a.Network.ID
@@ -131,8 +138,6 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 
 		titles = append(titles, a.Title)
 		descriptions = append(descriptions, a.Description)
-		resolved = append(resolved, a.ResolvedAt != nil && !a.ResolvedAt.IsZero())
-		dismissed = append(dismissed, a.DismissedAt != nil && !a.DismissedAt.IsZero())
 		// Cross-family drilldown (§1.12): compute per-row based on the device's
 		// productType so a single alerts table that spans MR/MS/MX/MV/MG/MT still
 		// routes each row to the right detail page. Network-wide alerts with no
@@ -144,6 +149,7 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 	return []*data.Frame{
 		data.NewFrame("alerts",
 			data.NewField("occurredAt", nil, occurred),
+			data.NewField("status", nil, statusCol),
 			data.NewField("severity", nil, severity),
 			data.NewField("category", nil, category),
 			data.NewField("alertType", nil, alertType),
@@ -154,8 +160,6 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 			data.NewField("device_productType", nil, deviceProduct),
 			data.NewField("title", nil, titles),
 			data.NewField("description", nil, descriptions),
-			data.NewField("resolved", nil, resolved),
-			data.NewField("dismissed", nil, dismissed),
 			data.NewField("drilldownUrl", nil, drilldown),
 		),
 	}, nil
@@ -167,12 +171,16 @@ func handleAlerts(ctx context.Context, client *meraki.Client, q MerakiQuery, tr 
 // the filterByValue+reduce transform chain that has silently mis-reduced in
 // the past (G.20 in todos.txt).
 //
-// Severity accounting: Meraki's /overview/byType response returns a flat
-// `items` array by alert type (no severity breakdown). Its sibling /overview
-// endpoint returns `counts.bySeverity`. The wrapper decodes both shapes; we
-// prefer `counts.bySeverity` when populated (more accurate) and fall back to
-// summing `items[].count` into a generic `total` when only the per-type
-// shape is returned.
+// Endpoint choice — /overview, NOT /overview/byType. The byType response is
+// a flat `items` array keyed by alert type with NO top-level `counts`
+// aggregate; summing items[].count over-counts (one row per (type,severity)
+// pair). The /overview sibling returns {counts:{total, bySeverity:[...]}}
+// which is exactly the shape we need.
+//
+// Default sentinel is "active" (currently firing), no time filter — KPI
+// tiles are a live snapshot, not a "alerts that started in window" view.
+// Callers that want the historical rollup pass metrics:['…','all'] and
+// supply a real time range; we honour tsStart/tsEnd only in that case.
 func handleAlertsOverview(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("alertsOverview: orgId is required")
@@ -183,61 +191,40 @@ func handleAlertsOverview(ctx context.Context, client *meraki.Client, q MerakiQu
 		opts.NetworkID = q.NetworkIDs[0]
 	}
 	opts.Serials = q.Serials
-	// Status sentinel matches handleAlerts — default "all" so KPIs reflect
-	// the full feed rather than silently hiding resolved / dismissed rows.
-	if statusSentinel := alertsStatusSentinel(q.Metrics); statusSentinel != "all" {
-		switch statusSentinel {
-		case "active":
-			t := true
-			opts.Active = &t
-		case "resolved":
-			t := true
-			opts.Resolved = &t
-		case "dismissed":
-			t := true
-			opts.Dismissed = &t
+	sentinel := alertsStatusSentinel(q.Metrics)
+	applyAlertsStatus(&opts, sentinel)
+	if sentinel != "active" {
+		if from := toRFCTime(tr.From); !from.IsZero() {
+			opts.TSStart = &from
+		}
+		if to := toRFCTime(tr.To); !to.IsZero() {
+			opts.TSEnd = &to
 		}
 	}
-	if from := toRFCTime(tr.From); !from.IsZero() {
-		opts.TSStart = &from
-	}
-	if to := toRFCTime(tr.To); !to.IsZero() {
-		opts.TSEnd = &to
-	}
 
-	overview, err := client.GetOrganizationAssuranceAlertsOverviewByType(ctx, q.OrgID, opts, alertsTTL)
+	overview, err := client.GetOrganizationAssuranceAlertsOverview(ctx, q.OrgID, opts, alertsTTL)
 	if err != nil {
 		return nil, err
 	}
 
 	var critical, warning, informational, total int64
-	if overview != nil {
-		if overview.Counts != nil {
-			total = overview.Counts.Total
-			for _, sc := range overview.Counts.BySeverity {
-				switch strings.ToLower(sc.Type) {
-				case "critical":
-					critical += sc.Count
-				case "warning":
-					warning += sc.Count
-				case "informational", "info":
-					informational += sc.Count
-				}
-			}
-			// `total` sometimes 0 on partial responses — reconstruct from
-			// the severity breakdown so the KPI row always renders a
-			// meaningful number.
-			if total == 0 {
-				total = critical + warning + informational
+	if overview != nil && overview.Counts != nil {
+		total = overview.Counts.Total
+		for _, sc := range overview.Counts.BySeverity {
+			switch strings.ToLower(sc.Type) {
+			case "critical":
+				critical += sc.Count
+			case "warning":
+				warning += sc.Count
+			case "informational", "info":
+				informational += sc.Count
 			}
 		}
-		// When the byType shape is what we got back, we can only reliably
-		// fill `total`; severity columns stay 0. The UI surfaces this as a
-		// single-number KPI on the alerts page which is still useful.
-		if overview.Counts == nil {
-			for _, it := range overview.Items {
-				total += it.Count
-			}
+		// `total` sometimes 0 on partial responses — reconstruct from
+		// the severity breakdown so the KPI row always renders a
+		// meaningful number.
+		if total == 0 {
+			total = critical + warning + informational
 		}
 	}
 
@@ -265,18 +252,44 @@ func firstNonEmpty(ss []string) string {
 
 // alertsStatusSentinel picks the alerts status filter out of q.Metrics[1:].
 // q.Metrics[0] is the severity; q.Metrics[1] (when present) is one of
-// "active" | "resolved" | "dismissed" | "all". Default is "all" so the feed
-// matches the Meraki dashboard's default view — operators saw resolved /
-// dismissed rows missing when the backend hard-coded active=true.
+// "active" | "resolved" | "dismissed" | "all".
+//
+// Default is "active" — the plugin's Alerts page is primarily a "what's
+// firing right now?" surface, and users consistently reported empty tables
+// when the default silently filtered by startedAt (Meraki's tsStart/tsEnd
+// cut long-running active alerts out of narrow picker windows). Panels that
+// want historical semantics (timeline bar chart, MTTR) MUST pass an explicit
+// non-"active" sentinel; those paths apply tsStart/tsEnd as before.
 func alertsStatusSentinel(metrics []string) string {
 	if len(metrics) < 2 {
-		return "all"
+		return "active"
 	}
 	switch strings.ToLower(metrics[1]) {
-	case "active", "resolved", "dismissed":
+	case "active", "resolved", "dismissed", "all":
 		return strings.ToLower(metrics[1])
 	}
-	return "all"
+	return "active"
+}
+
+// applyAlertsStatus sets Active/Resolved/Dismissed on opts based on the
+// sentinel. The "all" case must set every boolean explicitly because Meraki's
+// default when nothing is sent is active=true, which silently hides resolved
+// + dismissed rows (todos.txt §G.* — discovered when the org detail Alerts
+// tab rendered empty despite active alerts existing).
+func applyAlertsStatus(opts *meraki.AlertsOptions, sentinel string) {
+	t := true
+	switch sentinel {
+	case "active":
+		opts.Active = &t
+	case "resolved":
+		opts.Resolved = &t
+	case "dismissed":
+		opts.Dismissed = &t
+	default: // "all"
+		opts.Active = &t
+		opts.Resolved = &t
+		opts.Dismissed = &t
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -294,11 +307,19 @@ func handleAlertsOverviewByNetwork(ctx context.Context, client *meraki.Client, q
 	if len(q.NetworkIDs) > 0 {
 		opts.NetworkID = q.NetworkIDs[0]
 	}
-	if from := toRFCTime(tr.From); !from.IsZero() {
-		opts.TSStart = &from
-	}
-	if to := toRFCTime(tr.To); !to.IsZero() {
-		opts.TSEnd = &to
+	// Same default-active / skip-time-filter contract as handleAlerts so
+	// the "alerts by network" table shows currently-firing counts out of
+	// the box and doesn't hide active alerts that started before the
+	// picker window.
+	sentinel := alertsStatusSentinel(q.Metrics)
+	applyAlertsStatus(&opts, sentinel)
+	if sentinel != "active" {
+		if from := toRFCTime(tr.From); !from.IsZero() {
+			opts.TSStart = &from
+		}
+		if to := toRFCTime(tr.To); !to.IsZero() {
+			opts.TSEnd = &to
+		}
 	}
 
 	rows, err := client.GetOrganizationAssuranceAlertsOverviewByNetwork(ctx, q.OrgID, opts, alertsTTL)

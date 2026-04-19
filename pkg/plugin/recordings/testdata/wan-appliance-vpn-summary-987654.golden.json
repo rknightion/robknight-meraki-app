@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-wan-appliance-vpn-summary-987654",
+  "title": "Meraki VPN tunnel summary — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "applianceVpnStatuses",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Recorded site-to-site VPN tunnel up-percentage from /organizations/{orgId}/appliance/vpn/statuses. Series labelled by network + peer. Powers 'VPN outage over the last hour' dashboards without polling Meraki per view.",
+    "summary": "VPN tunnel health recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wan",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "appliance-vpn-summary"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "wan",
+  "record": {
+    "metric": "meraki_appliance_vpn_tunnels_up_pct",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

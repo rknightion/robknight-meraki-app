@@ -3,35 +3,53 @@ import { css } from '@emotion/css';
 import { lastValueFrom } from 'rxjs';
 import { GrafanaTheme2 } from '@grafana/data';
 import { getBackendSrv } from '@grafana/runtime';
-import {
-  Alert,
-  Button,
-  Checkbox,
-  Collapse,
-  ConfirmModal,
-  Field,
-  Input,
-  LinkButton,
-  MultiCombobox,
-  useStyles2,
-} from '@grafana/ui';
+import { Alert, ConfirmModal, useStyles2 } from '@grafana/ui';
 import { PLUGIN_ID } from '../../constants';
-import { AlertsConfig, AppJsonData } from '../../types';
+import { AppJsonData } from '../../types';
 import { testIds } from '../testIds';
 import { useAlertsTemplates } from './useAlertsTemplates';
 import { useAlertsStatus } from './useAlertsStatus';
 import {
-  AlertGroupDef,
-  AlertsGroupStateDto,
   AlertTemplateDef,
+  AlertsStatusResponse,
+  AlertsTemplatesResponse,
   DesiredStatePayload,
-  InstalledRuleInfo,
   ReconcileResultResponse,
-  ThresholdSchemaDef,
 } from './alertsTypes';
+import {
+  ButtonRow,
+  ButtonRowTestIds,
+  DriftBanner,
+  GroupRow,
+  GroupRowTestIds,
+  GroupStateDto,
+  detectDrift,
+  indexInstalled,
+  seedDesired,
+} from './RuleBundlePanel';
+
+const ALERTS_RECONCILE_PATH = 'alerts/reconcile';
+const ALERTS_UNINSTALL_PATH = 'alerts/uninstall-all';
+
+export { detectDrift, indexInstalled };
 
 export type AlertRulesPanelProps = {
   jsonData?: AppJsonData;
+  title?: string;
+  subtitle?: string;
+  featureToggleTitle?: string;
+  featureToggleBody?: React.ReactNode;
+  loadErrorTitle?: string;
+  reconcileEndpointPath?: string;
+  uninstallEndpointPath?: string;
+  viewInGrafanaHref?: string;
+  viewInGrafanaLabel?: string;
+  groupEmptyHint?: string;
+  footerLabels?: string;
+  footerFolder?: string;
+  footerHint?: string;
+  uninstallConfirmTitle?: string;
+  uninstallConfirmBody?: string;
 };
 
 /**
@@ -55,7 +73,24 @@ export type AlertRulesPanelProps = {
  * grows richer — acceptable for now because thresholds only drift when an
  * operator hand-edits a rule in the Grafana Alerting UI.
  */
-export function AlertRulesPanel({ jsonData }: AlertRulesPanelProps) {
+export function AlertRulesPanel({
+  jsonData,
+  title = 'Bundled alert rules',
+  subtitle = 'Rules are managed by the Meraki plugin. Contact points and notification policies are your responsibility — see the Grafana Alerting UI.',
+  featureToggleTitle = 'Alerts bundle unavailable',
+  featureToggleBody,
+  loadErrorTitle = 'Failed to load alert bundle',
+  reconcileEndpointPath = ALERTS_RECONCILE_PATH,
+  uninstallEndpointPath = ALERTS_UNINSTALL_PATH,
+  viewInGrafanaHref = '/alerting/grouped?dataSource=grafana',
+  viewInGrafanaLabel = 'View in Grafana Alerting',
+  groupEmptyHint = 'Turn on "Install this group" above to pick per-rule toggles and tune thresholds.',
+  footerLabels = 'severity, meraki_group, meraki_product, meraki_org, meraki_rule',
+  footerFolder = 'Meraki (bundled)',
+  footerHint = "Routing: use Grafana's notification-policy matchers on the labels above to send these rules to the right contact points.",
+  uninstallConfirmTitle = 'Uninstall all Meraki alert rules?',
+  uninstallConfirmBody = 'This will delete every rule this plugin installed. Continue?',
+}: AlertRulesPanelProps) {
   const s = useStyles2(getStyles);
 
   const {
@@ -161,7 +196,7 @@ export function AlertRulesPanel({ jsonData }: AlertRulesPanelProps) {
     setActionInFlight(true);
     setResultBanner(null);
     try {
-      const result = await postReconcile(desired);
+      const result = await postReconcile(reconcileEndpointPath, desired);
       const msg = `Created ${result.created.length} · Updated ${result.updated.length} · Deleted ${result.deleted.length}` +
         (result.failed.length ? ` · Failed ${result.failed.length}` : '');
       setResultBanner({ kind: 'success', title: 'Reconcile complete', body: msg });
@@ -182,7 +217,7 @@ export function AlertRulesPanel({ jsonData }: AlertRulesPanelProps) {
     setActionInFlight(true);
     setResultBanner(null);
     try {
-      const result = await postUninstallAll();
+      const result = await postUninstallAll(uninstallEndpointPath);
       setResultBanner({
         kind: 'success',
         title: 'Uninstall complete',
@@ -192,7 +227,7 @@ export function AlertRulesPanel({ jsonData }: AlertRulesPanelProps) {
       // freshly-empty world. Thresholds stay in place (user may want to
       // reinstall with the same tuning).
       setDesired((prev) => {
-        const next: Record<string, AlertsGroupStateDto> = {};
+        const next: Record<string, GroupStateDto> = {};
         for (const [gid, gs] of Object.entries(prev.groups)) {
           next[gid] = { ...gs, installed: false };
         }
@@ -213,41 +248,47 @@ export function AlertRulesPanel({ jsonData }: AlertRulesPanelProps) {
   const loading = templatesLoading || statusLoading;
   const loadError = templatesError ?? statusError;
 
+  const groupRowTestIds: GroupRowTestIds = {
+    groupCard: testIds.alertRulesPanel.groupCard,
+    groupInstallToggle: testIds.alertRulesPanel.groupInstallToggle,
+    templateRow: testIds.alertRulesPanel.templateRow,
+    ruleEnabled: testIds.alertRulesPanel.ruleEnabled,
+    thresholdInput: testIds.alertRulesPanel.thresholdInput,
+  };
+
+  const buttonRowTestIds: ButtonRowTestIds = {
+    reconcileButton: testIds.alertRulesPanel.reconcileButton,
+    uninstallButton: testIds.alertRulesPanel.uninstallButton,
+    viewInGrafana: testIds.alertRulesPanel.viewInGrafana,
+  };
+
   return (
     <div className={s.root} data-testid={testIds.alertRulesPanel.container}>
-      <h3 className={s.heading}>Bundled alert rules</h3>
-      <p className={s.subtitle}>
-        Rules are managed by the Meraki plugin. Contact points and notification policies are your
-        responsibility — see the Grafana Alerting UI.
-      </p>
+      <h3 className={s.heading}>{title}</h3>
+      <p className={s.subtitle}>{subtitle}</p>
 
       {!grafanaReady && (
         <Alert
           severity="warning"
-          title="Alerts bundle unavailable"
+          title={featureToggleTitle}
           data-testid={testIds.alertRulesPanel.featureToggleBanner}
         >
-          Enable the <code>externalServiceAccounts</code> feature toggle in Grafana (or upgrade to a
-          build where it is on by default), then reload this page.
+          {featureToggleBody ?? (
+            <>
+              Enable the <code>externalServiceAccounts</code> feature toggle in Grafana (or upgrade to a
+              build where it is on by default), then reload this page.
+            </>
+          )}
         </Alert>
       )}
 
       {loadError && (
-        <Alert severity="error" title="Failed to load alert bundle">
+        <Alert severity="error" title={loadErrorTitle}>
           {loadError}
         </Alert>
       )}
 
-      {drift && (
-        <Alert
-          severity="info"
-          title="External edits detected"
-          data-testid={testIds.alertRulesPanel.driftBanner}
-        >
-          One or more managed rules differ from the desired state configured here. Running
-          reconcile will revert them.
-        </Alert>
-      )}
+      {drift && <DriftBanner testId={testIds.alertRulesPanel.driftBanner} />}
 
       {resultBanner && (
         <Alert
@@ -271,36 +312,17 @@ export function AlertRulesPanel({ jsonData }: AlertRulesPanelProps) {
         )}
       </div>
 
-      <div className={s.actions}>
-        <Button
-          type="button"
-          variant="primary"
-          onClick={onReconcile}
-          disabled={actionInFlight || loading || !grafanaReady}
-          data-testid={testIds.alertRulesPanel.reconcileButton}
-        >
-          {actionInFlight ? 'Working…' : 'Reconcile selected'}
-        </Button>
-        <Button
-          type="button"
-          variant="destructive"
-          onClick={() => setConfirmUninstall(true)}
-          disabled={actionInFlight || loading || counts.installedRules === 0}
-          data-testid={testIds.alertRulesPanel.uninstallButton}
-        >
-          Uninstall all
-        </Button>
-        <LinkButton
-          href="/alerting/grouped?dataSource=grafana"
-          target="_blank"
-          rel="noreferrer"
-          variant="secondary"
-          icon="external-link-alt"
-          data-testid={testIds.alertRulesPanel.viewInGrafana}
-        >
-          View in Grafana Alerting
-        </LinkButton>
-      </div>
+      <ButtonRow
+        onReconcile={onReconcile}
+        onRequestUninstall={() => setConfirmUninstall(true)}
+        viewInGrafanaHref={viewInGrafanaHref}
+        viewInGrafanaLabel={viewInGrafanaLabel}
+        actionInFlight={actionInFlight}
+        loading={loading}
+        grafanaReady={grafanaReady}
+        installedRules={counts.installedRules}
+        testIds={buttonRowTestIds}
+      />
 
       {/*
         Group cards. The install checkbox is rendered OUTSIDE the Collapse
@@ -312,77 +334,37 @@ export function AlertRulesPanel({ jsonData }: AlertRulesPanelProps) {
         const groupState = desired.groups[group.id] ?? { installed: false, rulesEnabled: {} };
         const isOpen = openGroups[group.id] ?? groupState.installed;
         return (
-          <div
+          <GroupRow<AlertTemplateDef>
             key={group.id}
-            className={s.groupCard}
-            data-testid={testIds.alertRulesPanel.groupCard(group.id)}
-          >
-            <div className={s.groupHeader}>
-              <Checkbox
-                label={`${group.displayName} (${group.templates.length} rule${group.templates.length === 1 ? '' : 's'})`}
-                value={groupState.installed}
-                onChange={(e) =>
-                  onToggleGroupInstall(
-                    group.id,
-                    (e.currentTarget as HTMLInputElement).checked,
-                  )
-                }
-                data-testid={testIds.alertRulesPanel.groupInstallToggle(group.id)}
-              />
-            </div>
-            <Collapse
-              label={<span className={s.groupMeta}>Rule detail</span>}
-              isOpen={isOpen}
-              onToggle={(next) => setOpenGroups((prev) => ({ ...prev, [group.id]: next }))}
-            >
-              <div className={s.groupBody}>
-                {groupState.installed ? (
-                  <div className={s.templateList}>
-                    {group.templates.map((tpl) => (
-                      <TemplateRow
-                        key={tpl.id}
-                        group={group}
-                        template={tpl}
-                        enabled={groupState.rulesEnabled[tpl.id] ?? true}
-                        thresholds={desired.thresholds?.[group.id]?.[tpl.id] ?? {}}
-                        onEnabledChange={(next) =>
-                          onToggleRuleEnabled(group.id, tpl.id, next)
-                        }
-                        onThresholdChange={(key, value) =>
-                          onThresholdChange(group.id, tpl.id, key, value)
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className={s.groupHint}>
-                    Turn on &quot;Install this group&quot; above to pick per-rule toggles and
-                    tune thresholds.
-                  </p>
-                )}
-              </div>
-            </Collapse>
-          </div>
+            group={group}
+            groupState={groupState}
+            thresholds={desired.thresholds?.[group.id] ?? {}}
+            isOpen={isOpen}
+            onToggleInstall={(next) => onToggleGroupInstall(group.id, next)}
+            onToggleOpen={(next) => setOpenGroups((prev) => ({ ...prev, [group.id]: next }))}
+            onToggleRuleEnabled={(tplId, next) => onToggleRuleEnabled(group.id, tplId, next)}
+            onThresholdChange={(tplId, key, value) => onThresholdChange(group.id, tplId, key, value)}
+            renderTemplateMeta={renderAlertSeverity(s.severity)}
+            emptyHint={groupEmptyHint}
+            testIds={groupRowTestIds}
+          />
         );
       })}
 
       <div className={s.footer}>
         <div>
-          <strong>Labels:</strong> severity, meraki_group, meraki_product, meraki_org, meraki_rule
+          <strong>Labels:</strong> {footerLabels}
         </div>
         <div>
-          <strong>Folder:</strong> Meraki (bundled)
+          <strong>Folder:</strong> {footerFolder}
         </div>
-        <div className={s.footerHint}>
-          Routing: use Grafana&apos;s notification-policy matchers on the labels above to send
-          these rules to the right contact points.
-        </div>
+        <div className={s.footerHint}>{footerHint}</div>
       </div>
 
       <ConfirmModal
         isOpen={confirmUninstall}
-        title="Uninstall all Meraki alert rules?"
-        body="This will delete every rule this plugin installed. Continue?"
+        title={uninstallConfirmTitle}
+        body={uninstallConfirmBody}
         confirmText="Uninstall"
         confirmVariant="destructive"
         onConfirm={onUninstallAll}
@@ -394,235 +376,15 @@ export function AlertRulesPanel({ jsonData }: AlertRulesPanelProps) {
   );
 }
 
-// -----------------------------------------------------------------------------
-// Sub-component: one template row with per-threshold editors.
-// -----------------------------------------------------------------------------
-
-type TemplateRowProps = {
-  group: AlertGroupDef;
-  template: AlertTemplateDef;
-  enabled: boolean;
-  thresholds: Record<string, unknown>;
-  onEnabledChange: (next: boolean) => void;
-  onThresholdChange: (key: string, value: unknown) => void;
-};
-
-function TemplateRow({
-  group,
-  template,
-  enabled,
-  thresholds,
-  onEnabledChange,
-  onThresholdChange,
-}: TemplateRowProps) {
-  const s = useStyles2(getStyles);
-  return (
-    <div
-      className={s.templateRow}
-      data-testid={testIds.alertRulesPanel.templateRow(group.id, template.id)}
-    >
-      <div className={s.templateHeader}>
-        <Checkbox
-          value={enabled}
-          onChange={(e) => onEnabledChange((e.currentTarget as HTMLInputElement).checked)}
-          label={template.displayName}
-          data-testid={testIds.alertRulesPanel.ruleEnabled(group.id, template.id)}
-        />
-        <span className={s.severity}>{template.severity}</span>
-      </div>
-
-      {template.thresholds.length > 0 && (
-        <div className={s.thresholdGrid}>
-          {template.thresholds.map((schema) => (
-            <ThresholdInput
-              key={schema.key}
-              schema={schema}
-              groupId={group.id}
-              templateId={template.id}
-              value={thresholds[schema.key]}
-              onChange={(next) => onThresholdChange(schema.key, next)}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-type ThresholdInputProps = {
-  schema: ThresholdSchemaDef;
-  groupId: string;
-  templateId: string;
-  value: unknown;
-  onChange: (next: unknown) => void;
-};
-
-function ThresholdInput({ schema, groupId, templateId, value, onChange }: ThresholdInputProps) {
-  const label = schema.label || schema.key;
-  const testId = testIds.alertRulesPanel.thresholdInput(groupId, templateId, schema.key);
-
-  switch (schema.type) {
-    case 'list': {
-      const options = (schema.options ?? []).map((o) => ({ label: o, value: o }));
-      const selected = Array.isArray(value) ? (value as string[]) : [];
-      return (
-        <Field label={label} description={schema.help}>
-          <MultiCombobox<string>
-            options={options}
-            value={selected}
-            onChange={(items) => {
-              const next = items
-                .map((it) => it.value)
-                .filter((v): v is string => typeof v === 'string');
-              onChange(next);
-            }}
-            width={30}
-            data-testid={testId}
-          />
-        </Field>
-      );
-    }
-    case 'int':
-    case 'float': {
-      const str = value === undefined || value === null ? '' : String(value);
-      return (
-        <Field label={label} description={schema.help}>
-          <Input
-            type="number"
-            value={str}
-            onChange={(e) => {
-              const raw = (e.currentTarget as HTMLInputElement).value;
-              if (raw === '') {
-                onChange(undefined);
-                return;
-              }
-              const n = Number(raw);
-              onChange(Number.isFinite(n) ? n : raw);
-            }}
-            width={20}
-            data-testid={testId}
-          />
-        </Field>
-      );
-    }
-    case 'duration':
-    case 'string':
-    default: {
-      const str = value === undefined || value === null ? '' : String(value);
-      return (
-        <Field label={label} description={schema.help}>
-          <Input
-            value={str}
-            onChange={(e) => onChange((e.currentTarget as HTMLInputElement).value)}
-            width={20}
-            data-testid={testId}
-            placeholder={schema.type === 'duration' ? 'e.g. 5m' : undefined}
-          />
-        </Field>
-      );
-    }
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Pure helpers (exported for tests).
-// -----------------------------------------------------------------------------
-
-/**
- * Pure seeder used by the first-render init effect. Splitting this out of
- * the component keeps the effect's body free of setState sequences (lint:
- * `react-hooks/set-state-in-effect`) and makes the initialisation logic
- * unit-testable in isolation.
- *
- * Precedence for every field:
- *   1. If the user has a persisted `AppJsonData.alerts` value → use it.
- *   2. Else fall back to live status (installed → installed=true,
- *      enabled flag mirrored from the live row).
- *   3. Else fall back to template defaults.
- */
-export function seedDesired(
-  groups: AlertGroupDef[],
-  installed: InstalledRuleInfo[],
-  saved: AlertsConfig | undefined,
-): {
-  groups: Record<string, AlertsGroupStateDto>;
-  thresholds: Record<string, Record<string, Record<string, unknown>>>;
-  openGroups: Record<string, boolean>;
-} {
-  const savedGroups = saved?.groups ?? {};
-  const savedThresholds = saved?.thresholds ?? {};
-  const installedIndex = indexInstalled(installed);
-
-  const nextGroups: Record<string, AlertsGroupStateDto> = {};
-  const nextThresholds: Record<string, Record<string, Record<string, unknown>>> = {};
-  const openGroups: Record<string, boolean> = {};
-
-  for (const group of groups) {
-    const savedGroup = savedGroups[group.id];
-    const installedUnderGroup = installedIndex[group.id] ?? {};
-    const hasAnyInstalled = Object.keys(installedUnderGroup).length > 0;
-
-    const rulesEnabled: Record<string, boolean> = {};
-    for (const tpl of group.templates) {
-      if (savedGroup?.rulesEnabled && tpl.id in savedGroup.rulesEnabled) {
-        rulesEnabled[tpl.id] = Boolean(savedGroup.rulesEnabled[tpl.id]);
-      } else if (installedUnderGroup[tpl.id]) {
-        rulesEnabled[tpl.id] = installedUnderGroup[tpl.id].enabled;
-      } else {
-        rulesEnabled[tpl.id] = true;
-      }
-    }
-
-    nextGroups[group.id] = {
-      installed: savedGroup?.installed ?? hasAnyInstalled,
-      rulesEnabled,
-    };
-    openGroups[group.id] = nextGroups[group.id].installed;
-
-    const groupThresholds: Record<string, Record<string, unknown>> = {};
-    for (const tpl of group.templates) {
-      const perTpl: Record<string, unknown> = {};
-      const savedPerTpl = savedThresholds[group.id]?.[tpl.id] ?? {};
-      for (const th of tpl.thresholds) {
-        if (th.key in savedPerTpl) {
-          perTpl[th.key] = savedPerTpl[th.key];
-        } else if (th.default !== undefined) {
-          perTpl[th.key] = th.default;
-        }
-      }
-      if (Object.keys(perTpl).length > 0) {
-        groupThresholds[tpl.id] = perTpl;
-      }
-    }
-    if (Object.keys(groupThresholds).length > 0) {
-      nextThresholds[group.id] = groupThresholds;
-    }
-  }
-
-  return { groups: nextGroups, thresholds: nextThresholds, openGroups };
-}
-
-export function indexInstalled(
-  installed: InstalledRuleInfo[],
-): Record<string, Record<string, InstalledRuleInfo>> {
-  const out: Record<string, Record<string, InstalledRuleInfo>> = {};
-  for (const row of installed) {
-    if (!row.groupId || !row.templateId) {
-      continue;
-    }
-    const bucket = (out[row.groupId] = out[row.groupId] ?? {});
-    // When a group+template is installed across multiple orgs we only
-    // retain one row for the "is this installed?" decision; enabled state
-    // collapses to the last-seen row, which matches how the UI presents a
-    // single enable toggle per template.
-    bucket[row.templateId] = row;
-  }
-  return out;
+function renderAlertSeverity(className: string) {
+  return function AlertSeverityMeta(template: AlertTemplateDef) {
+    return <span className={className}>{template.severity}</span>;
+  };
 }
 
 function computeCounts(
-  templates: { groups: AlertGroupDef[] } | null,
-  status: { installed: InstalledRuleInfo[] } | null,
+  templates: AlertsTemplatesResponse | null,
+  status: AlertsStatusResponse | null,
   desired: DesiredStatePayload,
 ) {
   const totalGroups = templates?.groups.length ?? 0;
@@ -642,33 +404,6 @@ function computeCounts(
     installedGroups: userInstalledGroups || installedGroups,
     installedRules,
   };
-}
-
-export function detectDrift(
-  status: { installed: InstalledRuleInfo[] } | null,
-  desired: DesiredStatePayload,
-): boolean {
-  if (!status) {
-    return false;
-  }
-  for (const row of status.installed) {
-    const groupState = desired.groups[row.groupId];
-    if (!groupState) {
-      // Rule lives in Grafana but the user hasn't loaded/chosen the group
-      // yet — ignore rather than render a scary banner on first render.
-      continue;
-    }
-    const wantEnabled = groupState.rulesEnabled[row.templateId] ?? true;
-    const wantInstalled = groupState.installed;
-    if (!wantInstalled) {
-      // User wants this group uninstalled but rules still live — drift.
-      return true;
-    }
-    if (wantEnabled !== row.enabled) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function formatRelative(iso: string): string {
@@ -692,9 +427,12 @@ function formatRelative(iso: string): string {
   return `${deltaDay}d ago`;
 }
 
-async function postReconcile(desired: DesiredStatePayload): Promise<ReconcileResultResponse> {
+async function postReconcile(
+  path: string,
+  desired: DesiredStatePayload,
+): Promise<ReconcileResultResponse> {
   const obs = getBackendSrv().fetch<ReconcileResultResponse>({
-    url: `/api/plugins/${PLUGIN_ID}/resources/alerts/reconcile`,
+    url: `/api/plugins/${PLUGIN_ID}/resources/${path}`,
     method: 'POST',
     data: desired,
     showErrorAlert: false,
@@ -703,9 +441,9 @@ async function postReconcile(desired: DesiredStatePayload): Promise<ReconcileRes
   return res.data;
 }
 
-async function postUninstallAll(): Promise<ReconcileResultResponse> {
+async function postUninstallAll(path: string): Promise<ReconcileResultResponse> {
   const obs = getBackendSrv().fetch<ReconcileResultResponse>({
-    url: `/api/plugins/${PLUGIN_ID}/resources/alerts/uninstall-all`,
+    url: `/api/plugins/${PLUGIN_ID}/resources/${path}`,
     method: 'POST',
     showErrorAlert: false,
   });
@@ -743,65 +481,11 @@ const getStyles = (theme: GrafanaTheme2) => ({
     color: ${theme.colors.text.secondary};
     font-size: ${theme.typography.bodySmall.fontSize};
   `,
-  actions: css`
-    display: flex;
-    gap: ${theme.spacing(1)};
-    margin-bottom: ${theme.spacing(2)};
-    flex-wrap: wrap;
-  `,
-  groupBody: css`
-    padding: ${theme.spacing(1, 2, 2, 2)};
-  `,
-  groupMeta: css`
-    color: ${theme.colors.text.secondary};
-    font-weight: normal;
-  `,
-  groupToggleRow: css`
-    margin-bottom: ${theme.spacing(1.5)};
-  `,
-  groupCard: css`
-    margin-bottom: ${theme.spacing(2)};
-    border: 1px solid ${theme.colors.border.weak};
-    border-radius: ${theme.shape.radius.default};
-    background: ${theme.colors.background.primary};
-  `,
-  groupHeader: css`
-    padding: ${theme.spacing(1.5, 2)};
-    border-bottom: 1px solid ${theme.colors.border.weak};
-  `,
-  groupHint: css`
-    color: ${theme.colors.text.secondary};
-    font-size: ${theme.typography.bodySmall.fontSize};
-    margin: 0;
-  `,
-  templateList: css`
-    display: flex;
-    flex-direction: column;
-    gap: ${theme.spacing(2)};
-  `,
-  templateRow: css`
-    padding: ${theme.spacing(1.5)};
-    border: 1px solid ${theme.colors.border.weak};
-    border-radius: ${theme.shape.radius.default};
-    background: ${theme.colors.background.secondary};
-  `,
-  templateHeader: css`
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: ${theme.spacing(2)};
-    margin-bottom: ${theme.spacing(1)};
-  `,
   severity: css`
     font-size: ${theme.typography.bodySmall.fontSize};
     color: ${theme.colors.text.secondary};
     text-transform: uppercase;
     letter-spacing: 0.04em;
-  `,
-  thresholdGrid: css`
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: ${theme.spacing(1, 2)};
   `,
   footer: css`
     margin-top: ${theme.spacing(3)};

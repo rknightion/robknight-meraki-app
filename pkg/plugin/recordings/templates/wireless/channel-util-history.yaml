@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: channel-util-history
+group: wireless
+display_name: Meraki wireless channel utilisation (history cache)
+thresholds: []
+rule:
+  title: "Meraki wireless channel utilisation — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 300, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: wirelessChannelUtil
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_wireless_channel_util_pct"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: wireless
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: channel-util-history
+  annotations:
+    summary: "Wireless channel utilisation recorded for Meraki org <% .OrgID %>"
+    description: "Category B (rate-limit relief): Meraki's wireless channel-util history is a real timeseries but each panel view pays the API cost. Recording centralises the fetch. Series labelled by serial + band (2.4 / 5 / 6 GHz)."

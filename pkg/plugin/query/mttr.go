@@ -37,10 +37,16 @@ func handleAlertsMttrSummary(ctx context.Context, client *meraki.Client, q Merak
 	}
 
 	// Pull the superset of alerts; we need resolved + open so the ratio column
-	// is meaningful on its own. handleAlerts' severity/status sentinel overloads
-	// are unused here — the summary is a time-window aggregation, not a filter.
+	// is meaningful on its own. Meraki's default when no status params are sent
+	// is active=true only — that silently excludes the resolved rows MTTR needs
+	// to compute anything, leaving mean/p50/p95 permanently 0. Explicitly opt
+	// into every status so the aggregate is honest.
+	trueP := true
 	reqOpts := meraki.AlertsOptions{
 		SortOrder: "descending",
+		Active:    &trueP,
+		Resolved:  &trueP,
+		Dismissed: &trueP,
 	}
 	if len(q.NetworkIDs) > 0 {
 		reqOpts.NetworkID = q.NetworkIDs[0]

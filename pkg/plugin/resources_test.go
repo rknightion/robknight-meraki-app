@@ -15,6 +15,7 @@ import (
 
 	"github.com/robknight/grafana-meraki-plugin/pkg/meraki"
 	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/alerts"
+	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/recordings"
 )
 
 type mockCallResourceResponseSender struct {
@@ -616,6 +617,288 @@ func TestParseRuleUID(t *testing.T) {
 					tc.uid, g, tpl, org, tc.g, tc.tpl, tc.org)
 			}
 		})
+	}
+}
+
+// TestParseRecordingRuleUID exercises the recordings-variant UID parser
+// which strips the `meraki-rec-` prefix before walking from both ends.
+func TestParseRecordingRuleUID(t *testing.T) {
+	tests := []struct{ uid, g, tpl, org string }{
+		{"meraki-rec-availability-device-status-overview-987654", "availability", "device-status-overview", "987654"},
+		{"meraki-rec-wan-appliance-uplink-status-111", "wan", "appliance-uplink-status", "111"},
+		{"meraki-rec-a-b-c", "a", "b", "c"},
+		// Alert UIDs must NOT parse as recording UIDs (prefix guard).
+		{"meraki-availability-device-offline-987654", "", "", ""},
+		{"not-a-meraki-rule", "", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.uid, func(t *testing.T) {
+			g, tpl, org := parseRecordingRuleUID(tc.uid)
+			if g != tc.g || tpl != tc.tpl || org != tc.org {
+				t.Fatalf("parseRecordingRuleUID(%q) = (%q,%q,%q), want (%q,%q,%q)",
+					tc.uid, g, tpl, org, tc.g, tc.tpl, tc.org)
+			}
+		})
+	}
+}
+
+// --- /recordings/* handler tests ------------------------------------------
+
+// newAppForRecordings mirrors newAppForAlerts — preloads the embedded
+// recordings registry, a scratch-dir recordingsStore, and an injected
+// GrafanaAPI fake. Does NOT attach a Meraki client; reconcile tests that
+// need Configured()==true wire one via newAppForRecordingsReconcile.
+func newAppForRecordings(t *testing.T, api alerts.GrafanaAPI) *App {
+	t.Helper()
+	t.Setenv("GF_PATHS_DATA", t.TempDir())
+	reg, err := recordings.LoadRegistry()
+	if err != nil {
+		t.Fatalf("recordings.LoadRegistry: %v", err)
+	}
+	store, err := newRecordingsStore(alertsDataDir())
+	if err != nil {
+		t.Fatalf("newRecordingsStore: %v", err)
+	}
+	return &App{
+		logger:             log.DefaultLogger,
+		recordingsRegistry: reg,
+		recordingsStore:    store,
+		newGrafanaAPI: func(*backend.GrafanaCfg) (alerts.GrafanaAPI, error) {
+			return api, nil
+		},
+	}
+}
+
+// newAppForRecordingsReconcile wires everything needed by
+// /recordings/reconcile: registry, store, GrafanaAPI fake, Meraki client
+// pointed at an httptest server, and the operator-picked target DS UID.
+// Tests override the target UID on app.settings directly so the gate
+// path is exercised cleanly.
+func newAppForRecordingsReconcile(t *testing.T, api alerts.GrafanaAPI, targetDsUID string) (*App, *httptest.Server) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/organizations"):
+			_, _ = w.Write([]byte(`[{"id":"987654","name":"Acme"}]`))
+		default:
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	app := newAppForRecordings(t, api)
+	app.settings.RecordingsTargetDatasourceUID = targetDsUID
+	mc, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("meraki.NewClient: %v", err)
+	}
+	app.client = mc
+	return app, srv
+}
+
+// TestHandleRecordingsTemplates_ReturnsRegistry smoke-tests that the
+// embedded YAML templates are surfaced and every template carries a
+// metric name — the UI needs that metadata to render without re-hitting
+// the backend.
+func TestHandleRecordingsTemplates_ReturnsRegistry(t *testing.T) {
+	app := newAppForRecordings(t, newFakeGrafanaAPI())
+	rr := callResource(t, app, http.MethodGet, "/recordings/templates", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	var body recordingsTemplatesResponse
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Groups) < 1 {
+		t.Fatalf("groups = %d, want >= 1", len(body.Groups))
+	}
+	var avail *recordingGroupDTO
+	for i := range body.Groups {
+		if body.Groups[i].ID == "availability" {
+			avail = &body.Groups[i]
+		}
+	}
+	if avail == nil {
+		t.Fatalf("availability group missing; got %+v", body.Groups)
+	}
+	var dso *recordingTemplateDTO
+	for i := range avail.Templates {
+		if avail.Templates[i].ID == "device-status-overview" {
+			dso = &avail.Templates[i]
+		}
+	}
+	if dso == nil {
+		t.Fatalf("device-status-overview template missing")
+	}
+	if dso.Metric != "meraki_device_status_count" {
+		t.Fatalf("metric = %q, want meraki_device_status_count", dso.Metric)
+	}
+}
+
+// TestHandleRecordingsStatus_FilterRequiresKindLabel seeds four rules
+// that each differ in exactly one label or prefix, and asserts the
+// status handler's combined filter (UID prefix + managed_by +
+// meraki_kind) only surfaces the fully-conforming rule. This is the
+// defence-in-depth gate that keeps alert rules from being misclassified
+// as recordings (and vice versa).
+func TestHandleRecordingsStatus_FilterRequiresKindLabel(t *testing.T) {
+	api := newFakeGrafanaAPI()
+	folder := recordings.BundledRecordingsFolderUID()
+
+	// (1) Fully valid — must surface.
+	valid := "meraki-rec-availability-device-status-overview-987654"
+	api.rules[valid] = alerts.AlertRule{
+		UID: valid, FolderUID: folder,
+		Labels: map[string]string{"managed_by": "meraki-plugin", "meraki_kind": "recording"},
+	}
+	// (2) Missing meraki_kind — should be filtered.
+	missingKind := "meraki-rec-wan-appliance-uplink-status-111"
+	api.rules[missingKind] = alerts.AlertRule{
+		UID: missingKind, FolderUID: folder,
+		Labels: map[string]string{"managed_by": "meraki-plugin"},
+	}
+	// (3) Alert UID prefix mistakenly labelled as recording — should be filtered.
+	wrongPrefix := "meraki-alerts-device-offline-222"
+	api.rules[wrongPrefix] = alerts.AlertRule{
+		UID: wrongPrefix, FolderUID: folder,
+		Labels: map[string]string{"managed_by": "meraki-plugin", "meraki_kind": "recording"},
+	}
+	// (4) User-authored rule sharing the rec prefix but no managed_by.
+	userOwned := "meraki-rec-user-thing-333"
+	api.rules[userOwned] = alerts.AlertRule{
+		UID: userOwned, FolderUID: folder,
+		Labels: map[string]string{"meraki_kind": "recording"},
+	}
+
+	app := newAppForRecordings(t, api)
+	rr := callResource(t, app, http.MethodGet, "/recordings/status", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var body recordingsStatusResponse
+	_ = json.NewDecoder(rr.Body).Decode(&body)
+	if len(body.Installed) != 1 {
+		t.Fatalf("installed = %+v, want exactly 1 (the fully-conforming rule)", body.Installed)
+	}
+	if body.Installed[0].UID != valid {
+		t.Fatalf("installed UID = %q, want %q", body.Installed[0].UID, valid)
+	}
+	if body.Installed[0].GroupID != "availability" || body.Installed[0].TemplateID != "device-status-overview" {
+		t.Fatalf("parsed UID fields wrong: %+v", body.Installed[0])
+	}
+}
+
+// TestHandleRecordingsReconcile_RequiresTargetDS verifies the 412 gate:
+// an empty settings.RecordingsTargetDatasourceUID + no override in the
+// request body must fail precondition. This is the critical plan
+// invariant — no silent fallback to grafana.ini defaults.
+func TestHandleRecordingsReconcile_RequiresTargetDS(t *testing.T) {
+	api := newFakeGrafanaAPI()
+	app, _ := newAppForRecordingsReconcile(t, api, "") // empty target DS
+	body := recordingsDesiredStateDTO{
+		Groups: map[string]groupStateDTO{
+			"availability": {Installed: true, RulesEnabled: map[string]bool{"device-status-overview": true}},
+		},
+	}
+	rr := callResource(t, app, http.MethodPost, "/recordings/reconcile", body)
+	if rr.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412 (body=%s)", rr.Code, rr.Body.String())
+	}
+	if len(api.rules) != 0 {
+		t.Fatalf("rules were written despite 412: %+v", api.rules)
+	}
+}
+
+// TestHandleRecordingsReconcile_CreatesRule exercises the happy path:
+// target DS configured, one template enabled, org resolved via the
+// fake Meraki server. Verifies (a) the rule lands in the fake Grafana
+// store, (b) its Record block carries the operator's target UID, (c)
+// the reconcile summary gets persisted.
+func TestHandleRecordingsReconcile_CreatesRule(t *testing.T) {
+	api := newFakeGrafanaAPI()
+	app, _ := newAppForRecordingsReconcile(t, api, "my-prometheus-uid")
+
+	body := recordingsDesiredStateDTO{
+		Groups: map[string]groupStateDTO{
+			"availability": {Installed: true, RulesEnabled: map[string]bool{"device-status-overview": true}},
+		},
+	}
+	rr := callResource(t, app, http.MethodPost, "/recordings/reconcile", body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	var result recordings.ReconcileResult
+	if err := json.NewDecoder(rr.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Created) != 1 {
+		t.Fatalf("Created = %+v, want 1 UID", result.Created)
+	}
+	wantUID := "meraki-rec-availability-device-status-overview-987654"
+	if result.Created[0] != wantUID {
+		t.Fatalf("Created[0] = %q, want %q", result.Created[0], wantUID)
+	}
+	rule, ok := api.rules[wantUID]
+	if !ok {
+		t.Fatalf("rule %q missing from fake store after reconcile", wantUID)
+	}
+	if rule.Record == nil {
+		t.Fatal("rule.Record is nil — recording-rule payload must carry a Record block")
+	}
+	if rule.Record.TargetDatasourceUID != "my-prometheus-uid" {
+		t.Fatalf("Record.TargetDatasourceUID = %q, want my-prometheus-uid", rule.Record.TargetDatasourceUID)
+	}
+	st := app.recordingsStore.Get()
+	if st.LastReconciledAt.IsZero() {
+		t.Fatal("lastReconciledAt not persisted")
+	}
+	if st.LastReconcileSummary.Created != 1 {
+		t.Fatalf("summary.Created = %d, want 1", st.LastReconcileSummary.Created)
+	}
+}
+
+// TestHandleRecordingsUninstallAll_DeletesManagedRules seeds a mix of
+// rules and verifies uninstall-all deletes only those carrying BOTH the
+// managed_by and meraki_kind=recording labels, leaving user-authored and
+// alert-bundle rules untouched. Does NOT require Configured() — uninstall
+// path never calls Meraki.
+func TestHandleRecordingsUninstallAll_DeletesManagedRules(t *testing.T) {
+	api := newFakeGrafanaAPI()
+	folder := recordings.BundledRecordingsFolderUID()
+	managedUID := "meraki-rec-availability-device-status-overview-987654"
+	api.rules[managedUID] = alerts.AlertRule{
+		UID: managedUID, FolderUID: folder,
+		Labels: map[string]string{"managed_by": "meraki-plugin", "meraki_kind": "recording"},
+	}
+	userUID := "meraki-rec-user-custom-metric-123"
+	api.rules[userUID] = alerts.AlertRule{
+		UID: userUID, FolderUID: folder,
+		Labels: map[string]string{"meraki_kind": "recording"}, // no managed_by
+	}
+
+	app := newAppForRecordings(t, api) // no Meraki client, no target DS
+
+	rr := callResource(t, app, http.MethodPost, "/recordings/uninstall-all", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rr.Code, rr.Body.String())
+	}
+	var result recordings.ReconcileResult
+	if err := json.NewDecoder(rr.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(result.Deleted) != 1 {
+		t.Fatalf("Deleted = %+v, want 1 UID", result.Deleted)
+	}
+	if result.Deleted[0] != managedUID {
+		t.Fatalf("Deleted[0] = %q, want %q", result.Deleted[0], managedUID)
+	}
+	if _, ok := api.rules[managedUID]; ok {
+		t.Fatal("managed recording rule still present after uninstall-all")
+	}
+	if _, ok := api.rules[userUID]; !ok {
+		t.Fatal("user-authored rule was deleted — label gate failed")
 	}
 }
 

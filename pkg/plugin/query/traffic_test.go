@@ -136,13 +136,84 @@ func TestHandle_NetworkTraffic_RequiresNetworkIDs(t *testing.T) {
 	}
 }
 
+// TestHandle_NetworkTraffic_AllNetworksFanout confirms that when the $network
+// picker resolves to its "All" sentinel (a single empty-string entry from
+// `allValue: ''` on the scene variable), the handler expands to the concrete
+// org network list via /organizations/{id}/networks instead of iterating over
+// the empty string and producing a blank frame. Previously the per-network
+// panel on the Traffic page appeared empty whenever the user hadn't picked a
+// specific network.
+func TestHandle_NetworkTraffic_AllNetworksFanout(t *testing.T) {
+	const orgNetworks = `[
+	  {"id":"N1","name":"Site A","productTypes":["wireless"]},
+	  {"id":"N2","name":"Site B","productTypes":["switch"]}
+	]`
+	const n1Payload = `[{"application":"YouTube","destination":"youtube.com","protocol":"tcp","port":443,"sent":1.0,"recv":2.0,"numClients":1,"activeTime":10,"flows":1}]`
+	const n2Payload = `[{"application":"Spotify","destination":"spotify.com","protocol":"tcp","port":443,"sent":3.0,"recv":4.0,"numClients":1,"activeTime":10,"flows":1}]`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/organizations/o1/networks"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(orgNetworks))
+		case strings.Contains(r.URL.Path, "/networks/N1/traffic"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(n1Payload))
+		case strings.Contains(r.URL.Path, "/networks/N2/traffic"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(n2Payload))
+		default:
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	now := time.Now().UTC()
+	resp, err := Handle(context.Background(), client, &QueryRequest{
+		Range: TimeRange{
+			From: now.Add(-1 * time.Hour).UnixMilli(),
+			To:   now.UnixMilli(),
+		},
+		Queries: []MerakiQuery{{
+			RefID:      "A",
+			Kind:       KindNetworkTraffic,
+			OrgID:      "o1",
+			NetworkIDs: []string{""}, // "All" sentinel from the $network picker
+		}},
+	}, Options{})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if got := len(resp.Frames); got != 1 {
+		t.Fatalf("got %d frames, want 1", got)
+	}
+	var frame data.Frame
+	if err := json.Unmarshal(resp.Frames[0], &frame); err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	rows, _ := frame.RowLen()
+	if rows != 2 {
+		t.Fatalf("got %d rows, want 2 (one per org network after fanout)", rows)
+	}
+}
+
 // TestHandle_TopApplicationsByUsage_WideRow asserts the org-wide top-apps
 // handler emits a wide table frame with the expected columns and that the
 // nested clients counter is flattened into a `clientCount` column.
 func TestHandle_TopApplicationsByUsage_WideRow(t *testing.T) {
+	// Meraki's byUsage endpoint names the app column `application` (not
+	// `name`) and does not include a `category` field on each row — the
+	// category breakdown lives on the sibling /categories/byUsage path.
+	// Clients are present here as the spec still documents the optional
+	// `clients` sub-object on byUsage responses.
 	const payload = `[
-	  {"name":"YouTube","category":"Video","total":500.5,"downstream":480.0,"upstream":20.5,"percentage":42.1,"clients":{"counts":{"total":12}}},
-	  {"name":"Spotify","category":"Audio","total":200.0,"downstream":190.0,"upstream":10.0,"percentage":18.4,"clients":{"counts":{"total":4}}}
+	  {"application":"YouTube","total":500.5,"downstream":480.0,"upstream":20.5,"percentage":42.1,"clients":{"counts":{"total":12}}},
+	  {"application":"Spotify","total":200.0,"downstream":190.0,"upstream":10.0,"percentage":18.4,"clients":{"counts":{"total":4}}}
 	]`
 
 	var calls atomic.Int32
@@ -198,6 +269,14 @@ func TestHandle_TopApplicationsByUsage_WideRow(t *testing.T) {
 		}
 	}
 
+	// The `application` wire field must surface in the emitted `name` column —
+	// a prior decode bug used the wrong JSON tag and returned empty strings
+	// here even when the upstream response was populated.
+	nameField, _ := frame.FieldByName("name")
+	if got, _ := nameField.ConcreteAt(0); got != "YouTube" {
+		t.Fatalf("row 0 name = %v, want YouTube (decoded from `application` wire field)", got)
+	}
+
 	clientField, _ := frame.FieldByName("clientCount")
 	if got, _ := clientField.ConcreteAt(0); got != int64(12) {
 		t.Fatalf("row 0 clientCount = %v, want 12 (flattened from clients.counts.total)", got)
@@ -210,8 +289,9 @@ func TestHandle_TopApplicationsByUsage_WideRow(t *testing.T) {
 // camelCase `/applicationsCategories/byUsage`. Verified via ctx7 against the
 // canonical OpenAPI spec on 2026-04-18; calling the wrong path would 404.
 func TestHandle_TopApplicationCategoriesByUsage_PathIncludesCategoriesSlash(t *testing.T) {
+	// Category rows name the discriminator column `category` on the wire.
 	const payload = `[
-	  {"name":"Video","total":1024.0,"downstream":1000.0,"upstream":24.0,"percentage":52.3,"clients":{"counts":{"total":18}}}
+	  {"category":"Video","total":1024.0,"downstream":1000.0,"upstream":24.0,"percentage":52.3,"clients":{"counts":{"total":18}}}
 	]`
 
 	var observedPath string
@@ -227,7 +307,7 @@ func TestHandle_TopApplicationCategoriesByUsage_PathIncludesCategoriesSlash(t *t
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	_, err = Handle(context.Background(), client, &QueryRequest{
+	resp, err := Handle(context.Background(), client, &QueryRequest{
 		Queries: []MerakiQuery{{
 			RefID: "A",
 			Kind:  KindTopApplicationCategoriesByUsage,
@@ -239,6 +319,23 @@ func TestHandle_TopApplicationCategoriesByUsage_PathIncludesCategoriesSlash(t *t
 	}
 	if !strings.Contains(observedPath, "/summary/top/applications/categories/byUsage") {
 		t.Fatalf("upstream path = %q, want to contain /summary/top/applications/categories/byUsage", observedPath)
+	}
+
+	// Confirm the `category` wire field surfaces in the emitted `name`
+	// column — same decode-bug guard as the sibling applications test.
+	if got := len(resp.Frames); got != 1 {
+		t.Fatalf("got %d frames, want 1", got)
+	}
+	var frame data.Frame
+	if err := json.Unmarshal(resp.Frames[0], &frame); err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	nameField, _ := frame.FieldByName("name")
+	if nameField == nil {
+		t.Fatalf("frame missing `name` column; fields=%v", frame.Fields)
+	}
+	if got, _ := nameField.ConcreteAt(0); got != "Video" {
+		t.Fatalf("row 0 name = %v, want Video (decoded from `category` wire field)", got)
 	}
 }
 

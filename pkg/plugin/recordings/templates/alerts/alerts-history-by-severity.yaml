@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: alerts-history-by-severity
+group: alerts
+display_name: Meraki alerts history (severity buckets)
+thresholds: []
+rule:
+  title: "Meraki alert history by severity — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 300, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: alertsOverviewHistorical
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_alerts_history_count"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: alerts
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: alerts-history-by-severity
+  annotations:
+    summary: "Historical alert counts recorded for Meraki org <% .OrgID %>"
+    description: "Category B (rate-limit relief): Meraki's /organizations/{orgId}/assurance/alerts/overview/historical endpoint already returns time-bucketed counts, but every dashboard view pays the API cost. Recording centralises the fetch on a single evaluation interval. Series labelled by severity (critical / warning / info)."

@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-wan-appliance-uplinks-overview-987654",
+  "title": "Meraki appliance uplinks overview — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "applianceUplinksOverview",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Recorded rollup of /organizations/{orgId}/appliance/uplinks/overview — series labelled by uplink kind (broadband, cellular, sdwan). Powers backup-link availability dashboards without polling Meraki on every view.",
+    "summary": "Appliance uplink inventory recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wan",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "appliance-uplinks-overview"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "wan",
+  "record": {
+    "metric": "meraki_appliance_uplinks_active_count",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

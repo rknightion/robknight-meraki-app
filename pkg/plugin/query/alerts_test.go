@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +15,262 @@ import (
 
 	"github.com/robknight/grafana-meraki-plugin/pkg/meraki"
 )
+
+// Status-filter + KPI-time-filter regression tests (see alerts.go's
+// applyAlertsStatus helper and alertsStatusSentinel).
+//
+// Contract:
+//   - Default sentinel (no metrics[1]) = "active" → active=true, tsStart/tsEnd
+//     skipped so a long-running alert that started before the picker window
+//     still shows up in KPI tiles and current-state tables.
+//   - Explicit sentinel "all" → active=true&resolved=true&dismissed=true, and
+//     tsStart/tsEnd applied (historical mode, e.g. the timeline bar chart).
+//   - Explicit "resolved" / "dismissed" → just that boolean + time filter.
+
+// TestHandle_Alerts_DefaultSentinel_IsActiveAndSkipsTime verifies the default
+// (no metrics[1]) produces a "currently firing" snapshot — Active=true only,
+// no tsStart/tsEnd — so active alerts are visible regardless of picker.
+func TestHandle_Alerts_DefaultSentinel_IsActiveAndSkipsTime(t *testing.T) {
+	var captured atomic.Pointer[url.Values]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/assurance/alerts") {
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		q := r.URL.Query()
+		captured.Store(&q)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	// Real picker window — the handler must ignore it in active mode.
+	from := time.Now().Add(-2 * 24 * time.Hour)
+	to := time.Now()
+	if _, err := Handle(context.Background(), client, &QueryRequest{
+		Range:   TimeRange{From: from.UnixMilli(), To: to.UnixMilli()},
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindAlerts, OrgID: "o1"}},
+	}, Options{}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	qs := captured.Load()
+	if qs == nil {
+		t.Fatal("stub never captured a request")
+	}
+	if got := qs.Get("active"); got != "true" {
+		t.Errorf("active = %q, want true", got)
+	}
+	for _, k := range []string{"resolved", "dismissed"} {
+		if got := qs.Get(k); got != "" {
+			t.Errorf("%s = %q, want unset", k, got)
+		}
+	}
+	for _, k := range []string{"tsStart", "tsEnd"} {
+		if got := qs.Get(k); got != "" {
+			t.Errorf("%s = %q, want unset in active mode", k, got)
+		}
+	}
+}
+
+// TestHandle_Alerts_AllSentinel_SendsExplicitBooleansAndTime asserts that
+// an explicit "all" sentinel pushes active=true&resolved=true&dismissed=true
+// AND applies the picker window — this is the historical-data path used by
+// the timeline bar chart.
+func TestHandle_Alerts_AllSentinel_SendsExplicitBooleansAndTime(t *testing.T) {
+	var captured atomic.Pointer[url.Values]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		captured.Store(&q)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	from := time.Now().Add(-7 * 24 * time.Hour)
+	to := time.Now()
+	if _, err := Handle(context.Background(), client, &QueryRequest{
+		Range:   TimeRange{From: from.UnixMilli(), To: to.UnixMilli()},
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindAlerts, OrgID: "o1", Metrics: []string{"", "all"}}},
+	}, Options{}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	qs := captured.Load()
+	if qs == nil {
+		t.Fatal("stub never captured a request")
+	}
+	for _, k := range []string{"active", "resolved", "dismissed"} {
+		if got := qs.Get(k); got != "true" {
+			t.Errorf("query %s = %q, want %q", k, got, "true")
+		}
+	}
+	if qs.Get("tsStart") == "" {
+		t.Error("tsStart empty, want RFC3339 timestamp in historical mode")
+	}
+	if qs.Get("tsEnd") == "" {
+		t.Error("tsEnd empty, want RFC3339 timestamp in historical mode")
+	}
+}
+
+// TestHandle_Alerts_SpecificStatusSentinel_SendsOnlyThatOne confirms that a
+// non-"all" sentinel ("resolved") sets exactly one boolean, matching the
+// user-picked status tab.
+func TestHandle_Alerts_SpecificStatusSentinel_SendsOnlyThatOne(t *testing.T) {
+	var captured atomic.Pointer[url.Values]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		captured.Store(&q)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	// Metrics[0]=severity, Metrics[1]="resolved" → only Resolved=true.
+	if _, err := Handle(context.Background(), client, &QueryRequest{
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindAlerts, OrgID: "o1", Metrics: []string{"", "resolved"}}},
+	}, Options{}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	qs := captured.Load()
+	if qs == nil {
+		t.Fatal("stub never captured a request")
+	}
+	if got := qs.Get("resolved"); got != "true" {
+		t.Errorf("resolved = %q, want true", got)
+	}
+	if got := qs.Get("active"); got != "" {
+		t.Errorf("active = %q, want unset", got)
+	}
+	if got := qs.Get("dismissed"); got != "" {
+		t.Errorf("dismissed = %q, want unset", got)
+	}
+}
+
+// TestHandle_AlertsOverview_HitsCorrectEndpointAndOmitsTimeRange asserts that
+// the KPI overview handler calls /assurance/alerts/overview (NOT /byType —
+// that variant has no counts.bySeverity aggregate) and skips tsStart/tsEnd.
+// The KPIs are a currently-firing snapshot; Meraki's tsStart/tsEnd filter on
+// alert startedAt would hide long-running alerts that pre-date the window.
+func TestHandle_AlertsOverview_HitsCorrectEndpointAndOmitsTimeRange(t *testing.T) {
+	var captured atomic.Pointer[url.Values]
+	var capturedPath atomic.Value // string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Reject /byType explicitly — the handler must use the sibling endpoint.
+		if strings.Contains(r.URL.Path, "/assurance/alerts/overview/byType") {
+			http.Error(w, "handler hit /byType but should use /overview", http.StatusBadRequest)
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/assurance/alerts/overview") {
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		q := r.URL.Query()
+		captured.Store(&q)
+		capturedPath.Store(r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"counts":{"total":0,"bySeverity":[]}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	// Supply a real picker window — the handler must ignore it in default
+	// (active) mode.
+	from := time.Now().Add(-2 * 24 * time.Hour)
+	to := time.Now()
+	if _, err := Handle(context.Background(), client, &QueryRequest{
+		Range:   TimeRange{From: from.UnixMilli(), To: to.UnixMilli()},
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindAlertsOverview, OrgID: "o1"}},
+	}, Options{}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	qs := captured.Load()
+	if qs == nil {
+		t.Fatal("stub never captured a request")
+	}
+	if got := qs.Get("tsStart"); got != "" {
+		t.Errorf("tsStart = %q, want unset (KPI is a snapshot)", got)
+	}
+	if got := qs.Get("tsEnd"); got != "" {
+		t.Errorf("tsEnd = %q, want unset (KPI is a snapshot)", got)
+	}
+	// Default sentinel is now "active" — only Active=true should be set.
+	if got := qs.Get("active"); got != "true" {
+		t.Errorf("active = %q, want true", got)
+	}
+	for _, k := range []string{"resolved", "dismissed"} {
+		if got := qs.Get(k); got != "" {
+			t.Errorf("%s = %q, want unset in default active mode", k, got)
+		}
+	}
+}
+
+// TestHandle_AlertsOverviewByNetwork_DefaultActive asserts that the byNetwork
+// handler defaults to active-only with no time filter — same contract as the
+// alerts list and KPI overview. Explicit "all" would enable time-filtered
+// historical mode; default keeps the per-network table as a live snapshot.
+func TestHandle_AlertsOverviewByNetwork_DefaultActive(t *testing.T) {
+	var captured atomic.Pointer[url.Values]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/assurance/alerts/overview/byNetwork") {
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		q := r.URL.Query()
+		captured.Store(&q)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[],"meta":{"counts":{"items":0}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := meraki.NewClient(meraki.ClientConfig{APIKey: "fake", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	from := time.Now().Add(-2 * 24 * time.Hour)
+	to := time.Now()
+	if _, err := Handle(context.Background(), client, &QueryRequest{
+		Range:   TimeRange{From: from.UnixMilli(), To: to.UnixMilli()},
+		Queries: []MerakiQuery{{RefID: "A", Kind: KindAlertsOverviewByNetwork, OrgID: "o1"}},
+	}, Options{}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	qs := captured.Load()
+	if qs == nil {
+		t.Fatal("stub never captured a request")
+	}
+	if got := qs.Get("active"); got != "true" {
+		t.Errorf("active = %q, want true", got)
+	}
+	for _, k := range []string{"resolved", "dismissed", "tsStart", "tsEnd"} {
+		if got := qs.Get(k); got != "" {
+			t.Errorf("%s = %q, want unset in default active mode", k, got)
+		}
+	}
+}
 
 // §3.4 — Alerts overview byNetwork + historical handler tests.
 

@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-wan-appliance-uplink-status-987654",
+  "title": "Meraki appliance uplink status — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "applianceUplinkStatuses",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Recorded per-uplink binary status (1=active, 0=failed/disabled) from /organizations/{orgId}/appliance/uplink/statuses. Labels include serial + uplink + provider. Powers SLA + failover dashboards without polling Meraki per view.",
+    "summary": "Per-uplink status recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wan",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "appliance-uplink-status"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "wan",
+  "record": {
+    "metric": "meraki_appliance_uplink_up",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

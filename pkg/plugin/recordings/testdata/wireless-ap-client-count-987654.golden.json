@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-wireless-ap-client-count-987654",
+  "title": "Meraki AP client count — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "apClients",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Recorded per-AP active-client counts from /organizations/{orgId}/wireless/clients/overview/byDevice. Series labelled by network + AP serial. Powers capacity-trend + peak-hour dashboards without polling Meraki per view.",
+    "summary": "Per-AP client counts recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wireless",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "ap-client-count"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "wireless",
+  "record": {
+    "metric": "meraki_ap_client_count",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

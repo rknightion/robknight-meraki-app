@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-switches-ports-overview-987654",
+  "title": "Meraki switch ports overview — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "switchPortsOverview",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Recorded org-wide switch port counts from /organizations/{orgId}/switch/ports/overview, labelled by state + speed + media (RJ45 / SFP). Category B: records a historical endpoint so dashboard views don't each trigger a Meraki API call.",
+    "summary": "Switch port inventory recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "switches",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "ports-overview"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "switches",
+  "record": {
+    "metric": "meraki_switch_ports_count",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

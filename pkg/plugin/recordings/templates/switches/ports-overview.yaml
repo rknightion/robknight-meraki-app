@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: ports-overview
+group: switches
+display_name: Meraki switch ports — state by speed + media
+thresholds: []
+rule:
+  title: "Meraki switch ports overview — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: switchPortsOverview
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_switch_ports_count"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: switches
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: ports-overview
+  annotations:
+    summary: "Switch port inventory recorded for Meraki org <% .OrgID %>"
+    description: "Recorded org-wide switch port counts from /organizations/{orgId}/switch/ports/overview, labelled by state + speed + media (RJ45 / SFP). Category B: records a historical endpoint so dashboard views don't each trigger a Meraki API call."

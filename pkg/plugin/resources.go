@@ -10,6 +10,7 @@ import (
 
 	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/alerts"
 	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/query"
+	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/recordings"
 )
 
 // bundledFolderUID is duplicated here (and in pkg/plugin/alerts/registry.go)
@@ -105,6 +106,10 @@ func (a *App) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/alerts/status", a.handleAlertsStatus)
 	mux.HandleFunc("/alerts/reconcile", a.handleAlertsReconcile)
 	mux.HandleFunc("/alerts/uninstall-all", a.handleAlertsUninstallAll)
+	mux.HandleFunc("/recordings/templates", a.handleRecordingsTemplates)
+	mux.HandleFunc("/recordings/status", a.handleRecordingsStatus)
+	mux.HandleFunc("/recordings/reconcile", a.handleRecordingsReconcile)
+	mux.HandleFunc("/recordings/uninstall-all", a.handleRecordingsUninstallAll)
 }
 
 // --- /alerts/* handlers ----------------------------------------------------
@@ -472,5 +477,354 @@ func (a *App) persistReconcileSummary(result alerts.ReconcileResult) {
 		LastReconcileSummary: summary,
 	}); err != nil {
 		a.logger.Warn("alerts store write failed", "err", err)
+	}
+}
+
+// --- /recordings/* handlers ------------------------------------------------
+//
+// Exact twin of the /alerts/* surface, with three load-bearing differences:
+//
+//   1. UID prefix filter is `meraki-rec-` (see recordings/reconciler.go).
+//   2. Status handler filters on BOTH `managed_by=meraki-plugin` AND
+//      `meraki_kind=recording`. The second label is the defence-in-depth
+//      gate that keeps the alerts + recordings reconcilers from ever
+//      deleting each other's rules regardless of folder mishap.
+//   3. Reconcile gates on `settings.RecordingsTargetDatasourceUID` and
+//      returns 412 Precondition Failed when unset — the UI prompts the
+//      operator to pick a target DS before writing anything.
+//
+// Configured() gating mirrors alerts exactly: templates + status +
+// uninstall-all need no API key (users can see what's available and
+// clean up regardless); reconcile does require Configured() because the
+// default org-resolution path hits Meraki.
+
+// recordingTemplateDTO is one recording-rule template. Distinct from
+// alertTemplateDTO because recording rules carry a Metric field the UI
+// surfaces ("what series name will this emit?") and do NOT carry a
+// severity (they don't fire).
+type recordingTemplateDTO struct {
+	ID          string                    `json:"id"`
+	GroupID     string                    `json:"groupId"`
+	DisplayName string                    `json:"displayName"`
+	Metric      string                    `json:"metric"`
+	Thresholds  []alertThresholdSchemaDTO `json:"thresholds"`
+}
+
+type recordingGroupDTO struct {
+	ID          string                 `json:"id"`
+	DisplayName string                 `json:"displayName"`
+	Templates   []recordingTemplateDTO `json:"templates"`
+}
+
+type recordingsTemplatesResponse struct {
+	Groups []recordingGroupDTO `json:"groups"`
+}
+
+// handleRecordingsTemplates answers GET /recordings/templates with the
+// in-process registry. No Configured() gate — the registry is static YAML
+// embedded at build time and should be visible before the user has
+// supplied an API key or picked a target datasource.
+func (a *App) handleRecordingsTemplates(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.recordingsRegistry == nil {
+		http.Error(w, "recordings registry not loaded", http.StatusServiceUnavailable)
+		return
+	}
+	groups := a.recordingsRegistry.Groups()
+	out := recordingsTemplatesResponse{Groups: make([]recordingGroupDTO, 0, len(groups))}
+	for _, g := range groups {
+		dto := recordingGroupDTO{
+			ID:          g.ID,
+			DisplayName: g.DisplayName,
+			Templates:   make([]recordingTemplateDTO, 0, len(g.Templates)),
+		}
+		for _, t := range g.Templates {
+			tdto := recordingTemplateDTO{
+				ID:          t.ID,
+				GroupID:     t.GroupID,
+				DisplayName: t.DisplayName,
+				Metric:      t.Metric,
+				Thresholds:  make([]alertThresholdSchemaDTO, 0, len(t.Thresholds)),
+			}
+			for _, th := range t.Thresholds {
+				tdto.Thresholds = append(tdto.Thresholds, alertThresholdSchemaDTO{
+					Key: th.Key, Type: th.Type, Default: th.Default,
+					Label: th.Label, Help: th.Help, Options: th.Options,
+				})
+			}
+			dto.Templates = append(dto.Templates, tdto)
+		}
+		out.Groups = append(out.Groups, dto)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// recordingsInstalledRuleDTO is a one-rule-per-object view of the
+// recording rules live in Grafana. The UID layout is
+// `meraki-rec-<group>-<template>-<org>`; parseRecordingRuleUID splits
+// it back into its parts.
+type recordingsInstalledRuleDTO struct {
+	GroupID    string `json:"groupId"`
+	TemplateID string `json:"templateId"`
+	OrgID      string `json:"orgId"`
+	UID        string `json:"uid"`
+	Enabled    bool   `json:"enabled"`
+}
+
+type recordingsStatusResponse struct {
+	Installed            []recordingsInstalledRuleDTO `json:"installed"`
+	TargetDatasourceUID  string                       `json:"targetDatasourceUid,omitempty"`
+	LastReconciledAt     *time.Time                   `json:"lastReconciledAt,omitempty"`
+	LastReconcileSummary *RecordingsReconcileSummary  `json:"lastReconcileSummary,omitempty"`
+	GrafanaReady         bool                         `json:"grafanaReady"`
+}
+
+// handleRecordingsStatus answers GET /recordings/status. Mirrors
+// handleAlertsStatus except:
+//   - filters by `meraki-rec-` UID prefix
+//   - filters by both `managed_by` AND `meraki_kind=recording` labels
+//   - surfaces the current TargetDatasourceUID so the UI can reflect it
+func (a *App) handleRecordingsStatus(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg := backend.GrafanaConfigFromContext(req.Context())
+	resp := recordingsStatusResponse{
+		Installed:           []recordingsInstalledRuleDTO{},
+		TargetDatasourceUID: a.settings.RecordingsTargetDatasourceUID,
+	}
+
+	if a.recordingsStore != nil {
+		st := a.recordingsStore.Get()
+		if !st.LastReconciledAt.IsZero() {
+			t := st.LastReconciledAt
+			resp.LastReconciledAt = &t
+			summary := st.LastReconcileSummary
+			resp.LastReconcileSummary = &summary
+		}
+	}
+
+	if a.newGrafanaAPI == nil {
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	api, err := a.newGrafanaAPI(cfg)
+	if err != nil {
+		a.logger.Debug("recordings status: grafana client unavailable", "err", err)
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	rules, err := api.ListAlertRules(req.Context(), recordings.BundledRecordingsFolderUID())
+	if err != nil {
+		a.logger.Debug("recordings status: list rules failed", "err", err)
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	resp.GrafanaReady = true
+	for _, r := range rules {
+		if !strings.HasPrefix(r.UID, "meraki-rec-") {
+			continue
+		}
+		if r.Labels["managed_by"] != "meraki-plugin" {
+			continue
+		}
+		if r.Labels["meraki_kind"] != "recording" {
+			continue
+		}
+		groupID, templateID, orgID := parseRecordingRuleUID(r.UID)
+		resp.Installed = append(resp.Installed, recordingsInstalledRuleDTO{
+			GroupID:    groupID,
+			TemplateID: templateID,
+			OrgID:      orgID,
+			UID:        r.UID,
+			Enabled:    !r.IsPaused,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// parseRecordingRuleUID splits a `meraki-rec-<group>-<template>-<org>`
+// UID back into its parts. Same walk-from-both-ends approach as
+// parseRuleUID for the alerts case — the `-rec-` infix is stripped
+// first, then the remainder follows the alerts parse rules.
+func parseRecordingRuleUID(uid string) (group, template, org string) {
+	if !strings.HasPrefix(uid, "meraki-rec-") {
+		return "", "", ""
+	}
+	rest := strings.TrimPrefix(uid, "meraki-rec-")
+	firstIdx := strings.Index(rest, "-")
+	if firstIdx < 0 {
+		return "", "", ""
+	}
+	group = rest[:firstIdx]
+	remainder := rest[firstIdx+1:]
+	lastIdx := strings.LastIndex(remainder, "-")
+	if lastIdx < 0 {
+		return group, remainder, ""
+	}
+	template = remainder[:lastIdx]
+	org = remainder[lastIdx+1:]
+	return group, template, org
+}
+
+// recordingsDesiredStateDTO is the wire shape of a recordings reconcile
+// body. Same as desiredStateDTO with the addition of targetDsUid —
+// optional on the wire because the backend's authoritative source is
+// the jsonData-derived settings.RecordingsTargetDatasourceUID; the DTO
+// field exists as an escape-hatch override for hermetic tests.
+type recordingsDesiredStateDTO struct {
+	Groups      map[string]groupStateDTO             `json:"groups"`
+	Thresholds  map[string]map[string]map[string]any `json:"thresholds,omitempty"`
+	OrgOverride []string                             `json:"orgOverride,omitempty"`
+	TargetDsUID string                               `json:"targetDatasourceUid,omitempty"`
+}
+
+func (d recordingsDesiredStateDTO) toInternal(defaultTargetDsUID string) recordings.DesiredState {
+	out := recordings.DesiredState{
+		Thresholds:  d.Thresholds,
+		OrgOverride: d.OrgOverride,
+		TargetDsUID: d.TargetDsUID,
+	}
+	if out.TargetDsUID == "" {
+		out.TargetDsUID = defaultTargetDsUID
+	}
+	if len(d.Groups) > 0 {
+		out.Groups = make(map[string]recordings.GroupState, len(d.Groups))
+		for k, v := range d.Groups {
+			out.Groups[k] = recordings.GroupState{Installed: v.Installed, RulesEnabled: v.RulesEnabled}
+		}
+	}
+	return out
+}
+
+// handleRecordingsReconcile POSTs a DesiredState, runs the recordings
+// reconciler, persists the summary, and returns the ReconcileResult.
+// Requires Configured() because resolveOrgs fans out to Meraki.
+//
+// Additional gate: the effective TargetDatasourceUID — either from the
+// request body or from settings.RecordingsTargetDatasourceUID — must be
+// non-empty or this returns 412 Precondition Failed. The 412 is the
+// explicit "pick a target datasource first" signal the UI surfaces
+// (plan §4.6.4).
+func (a *App) handleRecordingsReconcile(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.Configured() {
+		http.Error(w, "Meraki API key not set", http.StatusPreconditionFailed)
+		return
+	}
+	if a.recordingsRegistry == nil {
+		http.Error(w, "recordings registry not loaded", http.StatusServiceUnavailable)
+		return
+	}
+	if a.newGrafanaAPI == nil {
+		http.Error(w, "grafana client factory unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var body recordingsDesiredStateDTO
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	desired := body.toInternal(a.settings.RecordingsTargetDatasourceUID)
+	if desired.TargetDsUID == "" {
+		http.Error(w, "target datasource not configured: pick a Prometheus-compatible datasource in the plugin's Recording rules panel before reconciling", http.StatusPreconditionFailed)
+		return
+	}
+
+	cfg := backend.GrafanaConfigFromContext(req.Context())
+	api, err := a.newGrafanaAPI(cfg)
+	if err != nil {
+		http.Error(w, "grafana client: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	m := a.merakiForAlerts()
+	result, rerr := recordings.Reconcile(req.Context(), api, m, a.recordingsRegistry, desired)
+	a.persistRecordingsReconcileSummary(result)
+	if rerr != nil {
+		a.logger.Warn("recordings reconcile failed", "err", rerr)
+		http.Error(w, rerr.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleRecordingsUninstallAll is a reconcile with Groups={} — the
+// diff turns every managed recording rule into a delete. Does NOT
+// require Configured() (delete path doesn't call Meraki) and does NOT
+// require a target datasource (uninstall renders nothing, so the Record
+// block's target_datasource_uid is never referenced). Pass a fixed
+// sentinel TargetDsUID so recordings.Reconcile's precondition check
+// passes — the value never appears on any persisted rule because there
+// are no desired rules to render.
+func (a *App) handleRecordingsUninstallAll(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.recordingsRegistry == nil {
+		http.Error(w, "recordings registry not loaded", http.StatusServiceUnavailable)
+		return
+	}
+	if a.newGrafanaAPI == nil {
+		http.Error(w, "grafana client factory unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	cfg := backend.GrafanaConfigFromContext(req.Context())
+	api, err := a.newGrafanaAPI(cfg)
+	if err != nil {
+		http.Error(w, "grafana client: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	desired := recordings.DesiredState{
+		Groups:      map[string]recordings.GroupState{},
+		OrgOverride: []string{"uninstall-placeholder"},
+		TargetDsUID: "uninstall-placeholder-ds",
+	}
+
+	result, rerr := recordings.Reconcile(req.Context(), api, nil, a.recordingsRegistry, desired)
+	a.persistRecordingsReconcileSummary(result)
+	if rerr != nil {
+		a.logger.Warn("recordings uninstall-all failed", "err", rerr)
+		http.Error(w, rerr.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// persistRecordingsReconcileSummary writes counters + timestamp to the
+// recordingsStore in a best-effort manner. Mirrors
+// persistReconcileSummary exactly; separate function because the target
+// type differs (RecordingsReconcileSummary vs AlertsReconcileSummary).
+func (a *App) persistRecordingsReconcileSummary(result recordings.ReconcileResult) {
+	if a.recordingsStore == nil {
+		return
+	}
+	finished := result.FinishedAt
+	if finished.IsZero() {
+		finished = time.Now()
+	}
+	summary := RecordingsReconcileSummary{
+		Created: len(result.Created),
+		Updated: len(result.Updated),
+		Deleted: len(result.Deleted),
+		Failed:  len(result.Failed),
+	}
+	if err := a.recordingsStore.Set(RecordingsState{
+		LastReconciledAt:     finished,
+		LastReconcileSummary: summary,
+	}); err != nil {
+		a.logger.Warn("recordings store write failed", "err", err)
 	}
 }

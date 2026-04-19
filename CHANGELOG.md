@@ -1,5 +1,104 @@
 # Changelog
 
+## 0.7.0 (Unreleased)
+
+**Bundled recording rules** — todos.txt §4.6. A curated set of 14
+Grafana-managed recording rules that poll Meraki on a schedule via the
+nested data source and remote-write the samples into a user-picked
+Prometheus-compatible data source. Opt-in; supersedes the v0.2
+ring-buffer proposal in `todos.txt §4.2` entirely. Rules reconcile
+idempotently against the same Grafana provisioning API as the v0.6
+alert bundle, land in the `Meraki (bundled recordings)` folder with
+stable `meraki-rec-<group>-<template>-<orgId>` UIDs, and label-gate
+their delete path on BOTH `managed_by=meraki-plugin` AND
+`meraki_kind=recording` so the alerts and recordings reconcilers
+cannot touch each other's rules.
+
+### Added
+
+- **Resource endpoints for the recordings bundle** —
+  `/recordings/templates`, `/recordings/status`,
+  `/recordings/reconcile`, `/recordings/uninstall-all`. Reconcile
+  returns **412 Precondition Failed** when
+  `jsonData.recordings.targetDatasourceUid` is empty, so the UI can
+  prompt the operator to pick a target data source before writing
+  anything. Summary is persisted to
+  `$GF_PATHS_DATA/plugins/<id>/recordings-state.json` the same way
+  alerts does (§4.6.4).
+- **Configuration page → "Bundled recording rules"** — new
+  `RecordingsPanel` with a `DataSourcePicker` at the top (filtered to
+  Prometheus, Grafana Amazon Prometheus, Mimir, and Cortex), per-group
+  install toggles, per-template threshold editor, Reconcile +
+  Uninstall actions, drift banner, and the same
+  `externalServiceAccounts` feature-toggle banner as the alert bundle.
+  Shared UI factored into `src/components/AppConfig/RuleBundlePanel/`
+  so both `AlertRulesPanel` and `RecordingsPanel` consume it
+  (§4.6.5).
+- **14 recording-rule templates across 6 groups** (§4.6.7):
+  - `availability` (1): `device-status-overview` →
+    `meraki_device_status_count`.
+  - `wan` (4): `appliance-uplink-status` → `meraki_appliance_uplink_up`,
+    `appliance-uplinks-overview` → `meraki_appliance_uplinks_active_count`,
+    `appliance-vpn-summary` → `meraki_appliance_vpn_tunnels_up_pct`,
+    `device-uplinks-loss-latency` → `meraki_wan_uplink_loss_pct` (+
+    latency).
+  - `wireless` (4): `ap-client-count` → `meraki_ap_client_count`,
+    `channel-util-history` → `meraki_wireless_channel_util_pct`,
+    `usage-history` → `meraki_wireless_usage_bytes`,
+    `packet-loss-by-network` → `meraki_wireless_packet_loss_pct`.
+  - `cellular` (1): `mg-uplink-signal` → `meraki_mg_rsrp_dbm` (+ rsrq,
+    sinr).
+  - `switches` (1): `ports-overview` → `meraki_switch_ports_count`.
+  - `alerts` (3): `alerts-overview-by-type` →
+    `meraki_alerts_by_type_count`, `alerts-overview-by-network` →
+    `meraki_alerts_by_network_count`, `alerts-history-by-severity` →
+    `meraki_alerts_history_count`.
+- **Panel fallback helper** `src/scene-helpers/trend-query.ts` — panels
+  that want trend history call `trendQuery(...)` with both a recorded
+  PromQL expression and a direct-Meraki fallback. When the feature is
+  enabled AND a target data source is set AND the owning group is
+  installed, the panel reads from Prometheus; otherwise it queries the
+  nested Meraki data source exactly as it did before v0.7. Canonical
+  metric names are constants in
+  `src/scene-helpers/recording-metrics.ts` so the template YAML and
+  panel code share a single source of truth (§4.6.6).
+- **Deletion safety** — the recordings reconciler only removes rules
+  matching BOTH `uid` prefix `meraki-rec-` AND label
+  `managed_by=meraki-plugin` AND label `meraki_kind=recording`. The
+  alerts reconciler's filter is tightened symmetrically — neither
+  bundle can clobber the other (§1.14).
+
+### Changed
+
+- **`AlertRule` wire shape** (`pkg/plugin/alerts/grafana_rule.go`) —
+  added optional `*RecordBlock` field so the shared provisioning
+  endpoint carries both alert and recording rules. `omitempty` keeps
+  the alert-only JSON payload wire-compatible with existing installs.
+- **Alerts reconciler** extracted its diff/apply loop + `ruleSignature`
+  helper into a shared package so the recordings reconciler single-
+  sources the idempotency logic; signature now covers the `Record`
+  block when present. No behaviour change for existing alert rules.
+
+### Superseded
+
+- **§4.2 ring-buffer proposals** (deviceStatuses 24 h × 1 min and
+  MV/MG signal-strength trend store). Recording rules solve the same
+  "trend history for snapshot endpoints" problem with durable storage,
+  cross-restart persistence, and the operator's existing TSDB
+  retention policy. Ring-buffer items remain in `todos.txt §4.2` for
+  historical context, marked `[SUPERSEDED by §4.6]`.
+
+### Developer
+
+- New package `pkg/plugin/recordings/` with `registry.go`,
+  `grafana_rule.go`, `reconciler.go`, golden-file test harness, and
+  `templates/<group>/<id>.yaml` embedded at build time.
+- `pkg/plugin/alerts/e2e_mock.go` `InMemoryGrafana` stub keys its
+  store by `(folderUID, UID)` so alerts + recordings reconciler tests
+  can coexist without cross-folder contamination.
+- New Playwright spec `tests/recordings.spec.ts` gated on
+  `E2E_MOCK_GRAFANA=1`, mirroring the `tests/alerts.spec.ts` pattern.
+
 ## 0.6.0 (Unreleased)
 
 **Bundled alert rules** — todos.txt §4.5. A curated set of 13

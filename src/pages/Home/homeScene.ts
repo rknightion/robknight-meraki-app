@@ -18,6 +18,7 @@ import { recentAlertsTile } from '../Alerts/panels';
 import {
   HOME_AT_A_GLANCE_KPIS,
   availabilityByFamilyStackedBar,
+  deviceStatusTrendOrCurrent,
   homeAtAGlanceStats,
   orgChangeFeedTile,
 } from './panels';
@@ -89,6 +90,16 @@ export function homeScene() {
             new SceneFlexItem({ body: orgDeviceStatusDonut('$org') }),
             new SceneFlexItem({ body: availabilityByFamilyStackedBar('$org') }),
           ],
+        }),
+
+        // Row 5.1 (§4.6) — Device-status trend panel. Re-shapes itself into
+        // a timeseries (Prometheus-backed) when the `device-status-overview`
+        // recording rule is enabled + a target DS is configured; otherwise
+        // renders a live Meraki stat tile. Non-empty-state fallback is
+        // load-bearing per plan §4.6 + session memory.
+        new SceneFlexItem({
+          minHeight: 220,
+          body: deviceStatusTrendOrCurrent('$org'),
         }),
 
         // Row 6 — Org inventory table (drill-out to Organizations page).

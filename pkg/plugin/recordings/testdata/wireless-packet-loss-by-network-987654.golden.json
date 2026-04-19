@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-wireless-packet-loss-by-network-987654",
+  "title": "Meraki wireless packet loss by network — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "wirelessPacketLossByNetwork",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Recorded per-network wireless packet-loss percentages from /organizations/{orgId}/wireless/devices/packetLoss/byNetwork — series labelled by network + direction (upstream / downstream / total). Meraki caps this endpoint at a one-day lookback, so recording it into Prometheus is the only path to longer-term WiFi-health dashboards.",
+    "summary": "Wireless packet loss recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wireless",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "packet-loss-by-network"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "wireless",
+  "record": {
+    "metric": "meraki_wireless_packet_loss_pct",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

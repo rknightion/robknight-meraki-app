@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-wan-device-uplinks-loss-latency-987654",
+  "title": "Meraki WAN uplink loss + latency — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "deviceUplinksLossLatencyHistory",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Category B (rate-limit relief): Meraki's /organizations/{orgId}/devices/uplinksLossAndLatency endpoint already returns a timeseries, but a 5-minute window per call and every dashboard view pays the API cost. Recording centralises the fetch on a single evaluation interval so panels read from Prometheus instead. Series labelled by serial + uplink.",
+    "summary": "WAN uplink loss + latency recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wan",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "device-uplinks-loss-latency"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "wan",
+  "record": {
+    "metric": "meraki_wan_uplink_loss_pct",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

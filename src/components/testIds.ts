@@ -31,6 +31,27 @@ export const testIds = {
     thresholdInput: (groupId: string, templateId: string, key: string) =>
       `data-testid arp-threshold-${groupId}-${templateId}-${key}`,
   },
+  recordingsPanel: {
+    container: 'data-testid rrp-container',
+    featureToggleBanner: 'data-testid rrp-feature-toggle-banner',
+    driftBanner: 'data-testid rrp-drift-banner',
+    resultBanner: 'data-testid rrp-result-banner',
+    statusPill: 'data-testid rrp-status-pill',
+    reconcileButton: 'data-testid rrp-reconcile',
+    uninstallButton: 'data-testid rrp-uninstall',
+    uninstallConfirm: 'data-testid rrp-uninstall-confirm',
+    viewInGrafana: 'data-testid rrp-view-in-grafana',
+    datasourcePicker: 'data-testid rrp-datasource-picker',
+    datasourceHint: 'data-testid rrp-datasource-hint',
+    groupCard: (groupId: string) => `data-testid rrp-group-${groupId}`,
+    groupInstallToggle: (groupId: string) => `data-testid rrp-group-install-${groupId}`,
+    templateRow: (groupId: string, templateId: string) =>
+      `data-testid rrp-template-${groupId}-${templateId}`,
+    ruleEnabled: (groupId: string, templateId: string) =>
+      `data-testid rrp-rule-enabled-${groupId}-${templateId}`,
+    thresholdInput: (groupId: string, templateId: string, key: string) =>
+      `data-testid rrp-threshold-${groupId}-${templateId}-${key}`,
+  },
   home: {
     container: 'data-testid home-container',
     orgCountStat: 'data-testid home-org-count',

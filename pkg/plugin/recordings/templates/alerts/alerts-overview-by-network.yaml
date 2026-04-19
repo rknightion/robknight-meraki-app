@@ -1,0 +1,28 @@
+kind: recording_rule_template
+id: alerts-overview-by-network
+group: alerts
+display_name: Meraki assurance alerts by network + severity
+thresholds: []
+rule:
+  title: "Meraki alerts by network — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: alertsOverview
+        orgId: "<% .OrgID %>"
+        groupBy: network
+  record:
+    metric: "meraki_alerts_by_network_count"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: alerts
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: alerts-overview-by-network
+  annotations:
+    summary: "Per-network alert counts recorded for Meraki org <% .OrgID %>"
+    description: "Recorded rollup of /organizations/{orgId}/assurance/alerts/overview/byNetwork. Series labelled by network + severity. Powers per-network SLA + MTTR dashboards without polling Meraki per view."

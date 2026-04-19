@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-alerts-alerts-overview-by-type-987654",
+  "title": "Meraki assurance alerts by type — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "alertsOverview",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 60,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Recorded rollup of /organizations/{orgId}/assurance/alerts/overview/byType — one series per (type, severity) combination. Use over_time queries in panels for MTTR / alert-volume trend analysis without hitting the Meraki API per dashboard view.",
+    "summary": "Assurance alert counts recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "alerts",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "alerts-overview-by-type"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "alerts",
+  "record": {
+    "metric": "meraki_alerts_by_type_count",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: packet-loss-by-network
+group: wireless
+display_name: Meraki wireless packet loss by network
+thresholds: []
+rule:
+  title: "Meraki wireless packet loss by network — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: wirelessPacketLossByNetwork
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_wireless_packet_loss_pct"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: wireless
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: packet-loss-by-network
+  annotations:
+    summary: "Wireless packet loss recorded for Meraki org <% .OrgID %>"
+    description: "Recorded per-network wireless packet-loss percentages from /organizations/{orgId}/wireless/devices/packetLoss/byNetwork — series labelled by network + direction (upstream / downstream / total). Meraki caps this endpoint at a one-day lookback, so recording it into Prometheus is the only path to longer-term WiFi-health dashboards."

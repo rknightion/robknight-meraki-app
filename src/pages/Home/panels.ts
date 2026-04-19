@@ -1,4 +1,4 @@
-import { FieldColorModeId, ThresholdsMode } from '@grafana/schema';
+import { DataSourceRef, FieldColorModeId, ThresholdsMode } from '@grafana/schema';
 import {
   PanelBuilders,
   SceneDataTransformer,
@@ -6,6 +6,9 @@ import {
   VizPanel,
 } from '@grafana/scenes';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
+import { readAppJsonData } from '../../scene-helpers/app-jsondata';
+import { MERAKI_RECORDING_METRICS } from '../../scene-helpers/recording-metrics';
+import { resolveRecordingTarget } from '../../scene-helpers/trend-query';
 import { QueryKind } from '../../datasource/types';
 
 // §3.3 — Device memory pressure timeseries ------------------------------------
@@ -317,6 +320,85 @@ export function availabilityByFamilyStackedBar(orgId = '$org'): VizPanel {
       b.matchFieldsWithName('offline').overrideColor({ mode: FieldColorModeId.Fixed, fixedColor: 'red' });
       b.matchFieldsWithName('dormant').overrideColor({ mode: FieldColorModeId.Fixed, fixedColor: 'gray' });
     })
+    .build();
+}
+
+// §4.6 — Device-status trend panel (recording-rules aware) --------------------
+//
+// Chooses its own visualisation based on whether the operator has enabled the
+// `availability/device-status-overview` recording rule:
+//   - ON  → timeseries panel reading meraki_device_status_count{meraki_org="$org"}
+//          from the operator-picked Prometheus sink. Shows the 4-status trend
+//          since the rule was installed.
+//   - OFF → stat panel reading the live `deviceStatusOverview` kind. Shows
+//          current counts only. The description nudges operators toward the
+//          recording-rules feature for historical trend data.
+//
+// Swapping the viz at scene-build time honours the plan's "graceful fallback,
+// no empty states" invariant (plan §4.6 + memory/feedback_optional_feature_fallback):
+// users without the feature keep seeing useful data, not an "enable this to
+// continue" banner.
+
+/**
+ * Home-page device-status panel, whose shape depends on the recording-rules
+ * feature state. Intended to sit below the KPI row so the existing Home
+ * layout's cold-start path is unaffected.
+ */
+export function deviceStatusTrendOrCurrent(orgId = '$org'): VizPanel {
+  const jsonData = readAppJsonData();
+  const targetUid = resolveRecordingTarget(
+    jsonData,
+    'availability',
+    'device-status-overview',
+  );
+
+  if (targetUid) {
+    const promDs: DataSourceRef = { uid: targetUid, type: 'prometheus' };
+    const runner = new SceneQueryRunner({
+      datasource: promDs,
+      queries: [
+        {
+          refId: 'A',
+          expr: `${MERAKI_RECORDING_METRICS.deviceStatusCount}{meraki_org="${orgId}"}`,
+        },
+      ],
+    });
+    return PanelBuilders.timeseries()
+      .setTitle('Device status trend')
+      .setDescription(
+        'Historical device-status counts recorded via plugin-managed recording rules. ' +
+          'Writes one sample per evaluation interval to the configured Prometheus sink.',
+      )
+      .setData(runner)
+      .setCustomFieldConfig('fillOpacity', 15)
+      .setCustomFieldConfig('lineWidth', 1)
+      .setOption('legend', {
+        showLegend: true,
+        displayMode: 'list',
+        placement: 'bottom',
+      } as any)
+      .build();
+  }
+
+  const runner = new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [{ refId: 'A', kind: QueryKind.DeviceStatusOverview, orgId }],
+  });
+  return PanelBuilders.stat()
+    .setTitle('Device status (current)')
+    .setDescription(
+      'Current device-status counts from Meraki. Enable the ' +
+        'availability/device-status-overview recording rule in plugin config ' +
+        'to replace this tile with a historical trend.',
+    )
+    .setData(runner)
+    .setOption('reduceOptions', {
+      values: false,
+      calcs: ['lastNotNull'],
+      fields: '/.*/',
+    } as any)
+    .setOption('colorMode', 'value' as any)
+    .setOption('graphMode', 'none' as any)
     .build();
 }
 

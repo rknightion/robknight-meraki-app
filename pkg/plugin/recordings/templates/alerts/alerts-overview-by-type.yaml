@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: alerts-overview-by-type
+group: alerts
+display_name: Meraki assurance alerts by type + severity
+thresholds: []
+rule:
+  title: "Meraki assurance alerts by type — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: alertsOverview
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_alerts_by_type_count"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: alerts
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: alerts-overview-by-type
+  annotations:
+    summary: "Assurance alert counts recorded for Meraki org <% .OrgID %>"
+    description: "Recorded rollup of /organizations/{orgId}/assurance/alerts/overview/byType — one series per (type, severity) combination. Use over_time queries in panels for MTTR / alert-volume trend analysis without hitting the Meraki API per dashboard view."

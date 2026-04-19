@@ -26,6 +26,7 @@ import { AppJsonData, AppSecureJsonData, DeviceLabelMode } from '../../types';
 import { DEFAULT_MERAKI_BASE_URL, MERAKI_REGIONS, PLUGIN_ID, ROUTES } from '../../constants';
 import { prefixRoute } from '../../utils/utils.routing';
 import { AlertRulesPanel } from './AlertRulesPanel';
+import { RecordingsPanel } from './RecordingsPanel';
 
 const CUSTOM_REGION_LABEL = 'Custom…';
 
@@ -455,6 +456,12 @@ export const MerakiConfigForm = ({ meta, variant = 'full' }: MerakiConfigFormPro
       {variant === 'full' && (
         <div className={s.alertRulesSection}>
           <AlertRulesPanel jsonData={jsonData} />
+        </div>
+      )}
+
+      {variant === 'full' && (
+        <div className={s.alertRulesSection}>
+          <RecordingsPanel jsonData={jsonData} />
         </div>
       )}
     </div>

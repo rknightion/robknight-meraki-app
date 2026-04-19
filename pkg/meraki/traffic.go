@@ -117,13 +117,20 @@ func (c *Client) GetNetworkTrafficAnalysis(ctx context.Context, networkID string
 // `GET /organizations/{organizationId}/summary/top/applications/byUsage`.
 // Meraki returns usage in megabytes by default — fields are float64 to
 // preserve fractional values.
+//
+// NOTE: the wire field is `application` (not `name`, despite what an earlier
+// reading of the OpenAPI spec suggested). The byUsage endpoint does not
+// return a `category` column on each row — that breakdown lives on the
+// sibling `/applications/categories/byUsage` endpoint. `Category` is kept in
+// the struct for forward compatibility if a future spec revision populates
+// it, but callers should expect it to stay empty today.
 type TopApplicationRow struct {
-	Name        string  `json:"name,omitempty"`
-	Category    string  `json:"category,omitempty"`
-	Total       float64 `json:"total,omitempty"`
-	Downstream  float64 `json:"downstream,omitempty"`
-	Upstream    float64 `json:"upstream,omitempty"`
-	Percentage  float64 `json:"percentage,omitempty"`
+	Application string                 `json:"application,omitempty"`
+	Category    string                 `json:"category,omitempty"`
+	Total       float64                `json:"total,omitempty"`
+	Downstream  float64                `json:"downstream,omitempty"`
+	Upstream    float64                `json:"upstream,omitempty"`
+	Percentage  float64                `json:"percentage,omitempty"`
 	Clients     *TopApplicationClients `json:"clients,omitempty"`
 }
 
@@ -141,10 +148,9 @@ type TopApplicationClientsCounts struct {
 
 // TopApplicationCategoryRow mirrors one row of
 // `GET /organizations/{organizationId}/summary/top/applications/categories/byUsage`.
-// Same shape as TopApplicationRow without the `category` discriminator
-// (each row IS a category here).
+// Each row IS a category here, and the wire field is named `category`.
 type TopApplicationCategoryRow struct {
-	Name       string                 `json:"name,omitempty"`
+	Category   string                 `json:"category,omitempty"`
 	Total      float64                `json:"total,omitempty"`
 	Downstream float64                `json:"downstream,omitempty"`
 	Upstream   float64                `json:"upstream,omitempty"`

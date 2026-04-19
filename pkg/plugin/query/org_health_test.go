@@ -54,11 +54,13 @@ func newOrgHealthStubServer(t *testing.T) *orgHealthStubServer {
 			atomic.AddInt64(&hits.deviceStatus, 1)
 			_, _ = w.Write([]byte(`{"counts":{"byStatus":{"online":2,"alerting":1,"offline":1,"dormant":0}}}`))
 
-		// Alerts overview byType → alertsOverview handler. Four critical,
-		// three warning, one informational.
-		case strings.Contains(path, "/assurance/alerts/overview/byType"):
+		// Alerts severity overview → alertsOverview handler. The handler now
+		// hits /assurance/alerts/overview (NOT .../byType) because that's
+		// the endpoint that exposes counts.bySeverity. Match must come
+		// BEFORE any generic /assurance/alerts handler.
+		case strings.HasSuffix(path, "/assurance/alerts/overview"):
 			atomic.AddInt64(&hits.alertsOverview, 1)
-			_, _ = w.Write([]byte(`{"items":[],"counts":{"total":8,"bySeverity":[{"type":"critical","count":4},{"type":"warning","count":3},{"type":"informational","count":1}]}}`))
+			_, _ = w.Write([]byte(`{"counts":{"total":8,"bySeverity":[{"type":"critical","count":4},{"type":"warning","count":3},{"type":"informational","count":1}]}}`))
 
 		// Licenses overview probe → short-circuit on non-coterm shape (must
 		// have /licenses/overview matched BEFORE /licenses).

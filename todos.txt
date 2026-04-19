@@ -283,6 +283,44 @@ HOW TO READ THIS FILE
        CLAUDE.md §1.13. Changing any of these breaks idempotent
        reconcile on existing installs — provide a migration path.
 
+1.14 Recording-rules UID + label invariants (v0.7)
+     - UID scheme: `meraki-rec-<group>-<template>-<orgId>`. The
+       `-rec-` infix disambiguates from alert UIDs so both bundles can
+       share the `managed_by=meraki-plugin` label without the
+       reconcilers over-matching during delete.
+     - Delete gate: the recordings reconciler deletes only rules
+       matching BOTH the `meraki-rec-` UID prefix AND label
+       `managed_by=meraki-plugin` AND label `meraki_kind=recording`.
+       Symmetrically, the alerts reconciler filter is tightened so it
+       will not touch any rule bearing `meraki_kind=recording`. User-
+       authored rules in either folder are never touched.
+     - Folder: `Meraki (bundled recordings)` with UID
+       `meraki-bundled-rec-folder`. Distinct from the alert-bundle
+       folder (`Meraki (bundled)` / `meraki-bundled-folder`) so
+       operators find recording rules at `/alerting/recording-rules`
+       and alerts at `/alerting/list`.
+     - Metric-name contract: every rendered rule emits exactly one
+       metric named against the regex `^meraki_[a-z][a-z0-9_]*$`.
+       `LoadRegistry` validates at template-load time — bad names are
+       a startup error, not a reconcile-time surprise. Canonical
+       names are duplicated in `src/scene-helpers/recording-metrics.ts`
+       so frontend panels and template YAMLs share one source of
+       truth.
+     - `for: "0s"` — recording rules have no pending state (Grafana
+       requirement). Render() forces this regardless of template
+       content.
+     - Target datasource gate: `POST /recordings/reconcile` returns
+       **412 Precondition Failed** when
+       `jsonData.recordings.targetDatasourceUid` is empty — no silent
+       fallback to `grafana.ini [recording_rules].default_datasource_uid`.
+       The UI uses the 412 to prompt the operator to pick a target
+       data source before writing anything.
+     - Template delimiters: `<% ... %>` — same as alerts, shared
+       renderer.
+     - Full invariants live in pkg/plugin/recordings/CLAUDE.md. Changing
+       any of these breaks idempotent reconcile on existing installs —
+       provide a migration path.
+
 1.12 Cross-family drilldown via server-computed drilldownUrl column
      - Handlers that emit device rows (devices, deviceAvailabilities,
        cameraOnboarding, mgUplinks, topDevices, topSwitchesByEnergy,
@@ -546,12 +584,12 @@ Q.7  [DONE — signed-release prep] Plugin-ID rename rknightion-* -> robknight-*
 [DONE — v0.4.0] ConfigurationChanges query kind + AuditLog scene. See §18.
 [DONE — v0.4.0] DeviceAvailabilityChanges query kind. See §18.
 
-[PENDING] 24h × 1min in-process ring buffer for deviceStatuses state transitions.
+[SUPERSEDED by §4.6 — see v0.7 recording rules] 24h × 1min in-process ring buffer for deviceStatuses state transitions.
      Noted in §1.9. Synthesize a short-term trend stream from snapshot
      endpoints. Guard with an opt-in config flag; cap memory. Good fit for
      offline-device alerting where users don't have a Prometheus sidecar.
 
-[PENDING] MV / MG signal-strength trend store.
+[SUPERSEDED by §4.6 — see v0.7 recording rules] MV / MG signal-strength trend store.
      Same shape as the deviceStatuses ring buffer above, but for RSRP / RSRQ
      snapshots from mgUplinks. Useful for "did the cellular link degrade over
      the last hour?" questions.

@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-wireless-usage-history-987654",
+  "title": "Meraki wireless usage — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "wirelessUsage",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 300,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Category B (rate-limit relief): Meraki's wireless usage history endpoint returns bytes sent / received per interval. Recording centralises the fetch. Series labelled by serial + band + direction.",
+    "summary": "Wireless usage volume recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wireless",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "usage-history"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "wireless",
+  "record": {
+    "metric": "meraki_wireless_usage_bytes",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

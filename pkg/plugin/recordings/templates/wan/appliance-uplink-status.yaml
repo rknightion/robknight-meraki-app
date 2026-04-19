@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: appliance-uplink-status
+group: wan
+display_name: Meraki MX per-uplink status
+thresholds: []
+rule:
+  title: "Meraki appliance uplink status — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: applianceUplinkStatuses
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_appliance_uplink_up"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: wan
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: appliance-uplink-status
+  annotations:
+    summary: "Per-uplink status recorded for Meraki org <% .OrgID %>"
+    description: "Recorded per-uplink binary status (1=active, 0=failed/disabled) from /organizations/{orgId}/appliance/uplink/statuses. Labels include serial + uplink + provider. Powers SLA + failover dashboards without polling Meraki per view."

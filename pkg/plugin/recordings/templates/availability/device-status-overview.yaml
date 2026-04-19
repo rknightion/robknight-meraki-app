@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: device-status-overview
+group: availability
+display_name: Meraki device status counts
+thresholds: []
+rule:
+  title: "Meraki device status count — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: deviceStatusOverview
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_device_status_count"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: availability
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: device-status-overview
+  annotations:
+    summary: "Device status counts recorded for Meraki org <% .OrgID %>"
+    description: "Recorded rollup of /organizations/{orgId}/devices/statuses/overview counts (online, alerting, offline, dormant) as gauges. Emits one series per status label."

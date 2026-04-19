@@ -53,6 +53,16 @@ export interface AppJsonData {
    * once the frontend saves settings.
    */
   alerts?: AlertsConfig;
+  /**
+   * Bundled Grafana-managed recording-rules install state. Mirrors the
+   * Go-side `pkg/plugin.appRecordingsConfig`. Populated by the AppConfig
+   * UI's RecordingsPanel and by `/recordings/reconcile`. Unlike alerts,
+   * this config carries the operator-picked `targetDatasourceUid` — the
+   * reconciler refuses to write rules without a target (412). Runtime
+   * reconcile telemetry is also dual-persisted to a plugin-local JSON
+   * file so `/recordings/status` can answer after a restart.
+   */
+  recordings?: RecordingsConfig;
 }
 
 /**
@@ -102,6 +112,60 @@ export interface AlertsConfig {
    */
   lastReconciledAt?: string;
   lastReconcileSummary?: AlertsReconcileSummary;
+}
+
+/**
+ * Per-group install state for the recording-rules bundle. Same shape as
+ * `AlertsGroupState` — kept as a distinct type so a future divergence
+ * (e.g. per-group evaluation interval override) doesn't force reshaping
+ * on the alerts side.
+ */
+export interface RecordingsGroupState {
+  installed: boolean;
+  rulesEnabled: Record<string, boolean>;
+}
+
+/**
+ * Summary counters from the most recent recording-rules reconcile.
+ * Four numbers; per-rule outcomes live in the synchronous
+ * `ReconcileResult` returned from POST /recordings/reconcile.
+ */
+export interface RecordingsReconcileSummary {
+  created: number;
+  updated: number;
+  deleted: number;
+  failed: number;
+}
+
+/**
+ * App-wide bundled recording-rules configuration. Mirrors the Go-side
+ * `pkg/plugin.appRecordingsConfig` shape. Every field is optional so a
+ * fresh install serialises as `{}` rather than a partially-populated
+ * object.
+ */
+export interface RecordingsConfig {
+  /**
+   * UID of the Prometheus-compatible data source every recording rule
+   * writes samples into. The DataSourcePicker in RecordingsPanel
+   * populates this; `/recordings/reconcile` returns 412 Precondition
+   * Failed when empty.
+   */
+  targetDatasourceUid?: string;
+  /**
+   * group-id → group state. Absent entries are treated as `installed=false`.
+   */
+  groups?: Record<string, RecordingsGroupState>;
+  /**
+   * Threshold overrides, indexed `[groupId][templateId][thresholdKey]`.
+   * Same permissive shape as `AlertsConfig.thresholds`.
+   */
+  thresholds?: Record<string, Record<string, Record<string, unknown>>>;
+  /**
+   * ISO-8601 timestamp of the most recent reconcile. Absent on fresh
+   * installs.
+   */
+  lastReconciledAt?: string;
+  lastReconcileSummary?: RecordingsReconcileSummary;
 }
 
 /**

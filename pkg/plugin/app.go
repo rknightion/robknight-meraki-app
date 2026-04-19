@@ -15,6 +15,7 @@ import (
 
 	"github.com/robknight/grafana-meraki-plugin/pkg/meraki"
 	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/alerts"
+	"github.com/robknight/grafana-meraki-plugin/pkg/plugin/recordings"
 )
 
 // e2eMockEnv gates the Go-level stub wiring for Playwright e2e tests. When
@@ -71,6 +72,17 @@ type App struct {
 	// serve status with a zero-valued summary.
 	alertsStore *alertsStore
 
+	// recordingsRegistry is the loaded-once bundled Grafana-managed
+	// recording-rule registry. Populated at App startup. Handlers read
+	// under the immutable-post-load contract, same as alertsRegistry.
+	recordingsRegistry *recordings.Registry
+
+	// recordingsStore persists the last recording-reconcile summary to the
+	// plugin data dir so /recordings/status can answer "when did the last
+	// run happen" after a Grafana restart. Separate file from alertsStore
+	// so one corrupted write can't poison the other surface's status.
+	recordingsStore *recordingsStore
+
 	// e2eMockEnabled mirrors isE2EMockEnabled() at construction time. It is
 	// captured once (rather than re-checking the env on every request) so
 	// the stub surface stays stable for the lifetime of a plugin instance —
@@ -119,6 +131,14 @@ type Settings struct {
 	// on warm cache. Default off; suitable for multi-org deployments
 	// where the cold-start round-trip is felt on every nav.
 	PrefetchSpine bool
+	// RecordingsTargetDatasourceUID is the Prometheus-compatible data-source
+	// UID the Grafana-managed recording rules should remote-write samples
+	// into. Populated from jsonData.recordings.targetDatasourceUid at
+	// NewApp time (so it's stable for the lifetime of an instance).
+	// Empty string means the feature is unconfigured — /recordings/reconcile
+	// short-circuits with 412 Precondition Failed rather than silently
+	// falling back to grafana.ini defaults.
+	RecordingsTargetDatasourceUID string
 }
 
 // appJSONData mirrors src/types.ts AppJsonData.
@@ -137,6 +157,13 @@ type appJSONData struct {
 	// log — dataPath persistence avoids an extra Grafana HTTP round trip
 	// on every reconcile).
 	Alerts *appAlertsConfig `json:"alerts,omitempty"`
+	// Recordings mirrors src/types.ts RecordingsConfig. Same round-trip
+	// pattern as Alerts: user toggles + threshold overrides + the
+	// operator-picked target DS UID authoritatively live here, and the
+	// last-reconcile telemetry is dual-persisted (jsonData mirror +
+	// recordingsStore file) so /recordings/status can answer after a
+	// restart without waiting on a jsonData push.
+	Recordings *appRecordingsConfig `json:"recordings,omitempty"`
 }
 
 // appAlertsConfig mirrors src/types.ts AlertsConfig. Both sides are
@@ -151,6 +178,27 @@ type appAlertsConfig struct {
 
 // appAlertsGroupState mirrors src/types.ts AlertsGroupState.
 type appAlertsGroupState struct {
+	Installed    bool            `json:"installed"`
+	RulesEnabled map[string]bool `json:"rulesEnabled,omitempty"`
+}
+
+// appRecordingsConfig mirrors src/types.ts RecordingsConfig. Adds
+// TargetDatasourceUID to the alerts-style {groups, thresholds, last*}
+// shape because recording rules need a write destination that alerts
+// don't.
+type appRecordingsConfig struct {
+	TargetDatasourceUID  string                                `json:"targetDatasourceUid,omitempty"`
+	Groups               map[string]appRecordingsGroupState    `json:"groups,omitempty"`
+	Thresholds           map[string]map[string]map[string]any  `json:"thresholds,omitempty"`
+	LastReconciledAt     *time.Time                            `json:"lastReconciledAt,omitempty"`
+	LastReconcileSummary *RecordingsReconcileSummary           `json:"lastReconcileSummary,omitempty"`
+}
+
+// appRecordingsGroupState mirrors src/types.ts RecordingsGroupState.
+// Same shape as appAlertsGroupState; kept as a distinct type so a future
+// divergence (e.g. per-group evaluation interval override) doesn't
+// require reshaping the alerts side.
+type appRecordingsGroupState struct {
 	Installed    bool            `json:"installed"`
 	RulesEnabled map[string]bool `json:"rulesEnabled,omitempty"`
 }
@@ -184,12 +232,27 @@ func NewApp(_ context.Context, s backend.AppInstanceSettings) (instancemgmt.Inst
 		logger.Warn("alerts store unavailable, continuing without persistence", "err", serr)
 	}
 
+	// Load the recordings registry + store alongside the alerts bundle.
+	// Both registries are independently load-tolerant — a failure in one
+	// does not disable the other. Handlers short-circuit with 503 when
+	// their own registry is nil.
+	recordingsReg, rerr2 := recordings.LoadRegistry()
+	if rerr2 != nil {
+		logger.Warn("recordings registry failed to load", "err", rerr2)
+	}
+	recordingsStoreInst, serr2 := newRecordingsStore(alertsDataDir())
+	if serr2 != nil {
+		logger.Warn("recordings store unavailable, continuing without persistence", "err", serr2)
+	}
+
 	app := &App{
-		settings:       settings,
-		client:         client,
-		logger:         logger,
-		alertsRegistry: registry,
-		alertsStore:    store,
+		settings:           settings,
+		client:             client,
+		logger:             logger,
+		alertsRegistry:     registry,
+		alertsStore:        store,
+		recordingsRegistry: recordingsReg,
+		recordingsStore:    recordingsStoreInst,
 		newGrafanaProber: func(cfg *backend.GrafanaCfg) (GrafanaProber, error) {
 			return NewGrafanaClient(cfg)
 		},
@@ -272,6 +335,9 @@ func loadSettings(s backend.AppInstanceSettings) (Settings, error) {
 		settings.LabelMode = jd.LabelMode
 		settings.EnableIPLimiter = jd.EnableIPLimiter
 		settings.PrefetchSpine = jd.PrefetchSpine
+		if jd.Recordings != nil {
+			settings.RecordingsTargetDatasourceUID = jd.Recordings.TargetDatasourceUID
+		}
 	}
 	if settings.LabelMode != LabelModeName {
 		// Default to serial — matches the current shipped behaviour and keeps

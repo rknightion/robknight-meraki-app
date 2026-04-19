@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-wireless-channel-util-history-987654",
+  "title": "Meraki wireless channel utilisation — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "wirelessChannelUtil",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 300,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Category B (rate-limit relief): Meraki's wireless channel-util history is a real timeseries but each panel view pays the API cost. Recording centralises the fetch. Series labelled by serial + band (2.4 / 5 / 6 GHz).",
+    "summary": "Wireless channel utilisation recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "wireless",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "channel-util-history"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "wireless",
+  "record": {
+    "metric": "meraki_wireless_channel_util_pct",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

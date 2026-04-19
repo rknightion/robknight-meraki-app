@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: mg-uplink-signal
+group: cellular
+display_name: Meraki cellular gateway uplink signal (RSRP/RSRQ/SINR)
+thresholds: []
+rule:
+  title: "Meraki MG uplink signal — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: mgUplinks
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_mg_rsrp_dbm"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: cellular
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: mg-uplink-signal
+  annotations:
+    summary: "Cellular gateway uplink signal recorded for Meraki org <% .OrgID %>"
+    description: "Recorded per-gateway cellular uplink signal metrics (RSRP / RSRQ / SINR) from /organizations/{orgId}/cellularGateway/uplink/statuses — series labelled by serial + uplink. Essential for MG deployments where cellular link-quality degradation over the last hour is otherwise invisible (the Meraki endpoint returns only 'now')."

@@ -183,6 +183,90 @@ Grafana 12.x you may need to enable it in `grafana.ini` or via
 `GF_FEATURE_TOGGLES_ENABLE=externalServiceAccounts`. The Configuration
 page surfaces a warning banner when the toggle is missing.
 
+## Bundled recording rules
+
+The plugin also ships a curated set of Grafana-managed **recording
+rules** that poll Meraki on a schedule via the nested data source and
+remote-write the samples into a Prometheus-compatible data source of
+your choice. Recording rules are opt-in — nothing is written until you
+pick a target data source and toggle at least one group on.
+
+Two motivations, one mechanism:
+
+1. **Trend history for snapshot-only endpoints.** Many Meraki v1
+   endpoints (device status overview, appliance uplink statuses,
+   cellular signal, alerts overview) return only "now". Recording them
+   every N minutes into Prometheus gives you long-term history backed
+   by the TSDB you already operate.
+2. **Meraki API rate-limit relief for high-traffic endpoints that
+   already return history.** `GetOrganizationSwitchPortsOverview`,
+   `GetOrganizationDevicesUplinksLossAndLatency`, and friends accept a
+   timespan and return a real timeseries — but every dashboard view
+   hits Meraki directly. A recording rule fetches once per interval;
+   every subsequent dashboard read is served from Prometheus.
+
+This is a distinct feature from Grafana Enterprise's
+[Recorded Queries](https://grafana.com/docs/grafana/latest/administration/recorded-queries/),
+which stores query results in Grafana's internal database. The plugin
+uses [Grafana-managed recording rules](https://grafana.com/docs/grafana/latest/alerting/alerting-rules/create-grafana-managed-rule/#recording-rules)
+instead.
+
+### How to enable
+
+1. Open **Apps → Cisco Meraki → Configuration** and scroll to the
+   **Bundled recording rules** section.
+2. **Pick a target data source** in the DataSourcePicker at the top.
+   Only Prometheus-family data sources are listed (Prometheus, Grafana
+   Amazon Prometheus, Mimir, Cortex). The Reconcile button stays
+   disabled until this is set.
+3. Toggle on the groups you want to record, tune any thresholds, and
+   click **Reconcile**. Rules install into the `Meraki (bundled
+   recordings)` folder with UID prefix `meraki-rec-`.
+4. Visit **Alerting → Recording rules** in Grafana to confirm the
+   rules, or navigate to `/alerting/recording-rules` directly.
+
+### Panel fallback behaviour
+
+Panels that consume recorded metrics go through the
+`trendQuery(...)` helper in `src/scene-helpers/trend-query.ts`. When
+the feature is off (or no target data source is set), the helper falls
+back to the same direct Meraki query the panel used before v0.7 — so
+operators who never enable recordings see the same panels they see
+today, just without extended retention. No empty states.
+
+### What gets installed
+
+| Group        | Templates | Metric prefix                                              |
+|--------------|-----------|------------------------------------------------------------|
+| availability | 1         | `meraki_device_status_count`                               |
+| wan          | 4         | `meraki_appliance_uplink_*`, `meraki_wan_uplink_*`         |
+| wireless     | 4         | `meraki_ap_client_count`, `meraki_wireless_*`              |
+| cellular     | 1         | `meraki_mg_rsrp_dbm` (+ rsrq, sinr)                        |
+| switches     | 1         | `meraki_switch_ports_count`                                |
+| alerts       | 3         | `meraki_alerts_by_*_count`, `meraki_alerts_history_count`  |
+
+**Total: 14 templates across 6 groups**, fanned out per Meraki
+organisation your API key has access to. Metric names are constrained
+to `^meraki_[a-z][a-z0-9_]*$` and validated at template-load time.
+
+### Install / uninstall
+
+- **Install a group**: toggle it on, tune thresholds, click Reconcile.
+- **Uninstall everything**: click Uninstall all. Only rules matching
+  BOTH `uid` prefix `meraki-rec-` AND label
+  `managed_by=meraki-plugin` AND label `meraki_kind=recording` are
+  removed — user-authored rules are never touched.
+- **Per-rule uninstall**: untick the rule, click Reconcile.
+
+### Feature-toggle prerequisite
+
+The install UX uses the same `externalServiceAccounts` Grafana feature
+toggle as the alert bundle — enabled by default on Grafana Cloud, and
+settable via `grafana.ini` or
+`GF_FEATURE_TOGGLES_ENABLE=externalServiceAccounts` on self-hosted
+Grafana 12.x. The Configuration page surfaces a warning banner when
+the toggle is missing.
+
 ## Repository layout
 
 ```

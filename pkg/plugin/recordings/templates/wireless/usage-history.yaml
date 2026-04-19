@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: usage-history
+group: wireless
+display_name: Meraki wireless usage (history cache)
+thresholds: []
+rule:
+  title: "Meraki wireless usage — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 300, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: wirelessUsage
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_wireless_usage_bytes"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: wireless
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: usage-history
+  annotations:
+    summary: "Wireless usage volume recorded for Meraki org <% .OrgID %>"
+    description: "Category B (rate-limit relief): Meraki's wireless usage history endpoint returns bytes sent / received per interval. Recording centralises the fetch. Series labelled by serial + band + direction."

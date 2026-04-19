@@ -1,0 +1,27 @@
+kind: recording_rule_template
+id: ap-client-count
+group: wireless
+display_name: Meraki AP connected-client counts
+thresholds: []
+rule:
+  title: "Meraki AP client count — <% .OrgID %>"
+  data:
+    - refId: A
+      relativeTimeRange: { from: 60, to: 0 }
+      datasourceUid: "robknight-meraki-ds"
+      model:
+        refId: A
+        kind: apClients
+        orgId: "<% .OrgID %>"
+  record:
+    metric: "meraki_ap_client_count"
+    from: A
+  labels:
+    managed_by: meraki-plugin
+    meraki_kind: recording
+    meraki_group: wireless
+    meraki_org: "<% .OrgID %>"
+    meraki_rule: ap-client-count
+  annotations:
+    summary: "Per-AP client counts recorded for Meraki org <% .OrgID %>"
+    description: "Recorded per-AP active-client counts from /organizations/{orgId}/wireless/clients/overview/byDevice. Series labelled by network + AP serial. Powers capacity-trend + peak-hour dashboards without polling Meraki per view."

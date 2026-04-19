@@ -1,0 +1,38 @@
+{
+  "uid": "meraki-rec-alerts-alerts-history-by-severity-987654",
+  "title": "Meraki alert history by severity — 987654",
+  "data": [
+    {
+      "refId": "A",
+      "datasourceUid": "robknight-meraki-ds",
+      "model": {
+        "kind": "alertsOverviewHistorical",
+        "orgId": "987654",
+        "refId": "A"
+      },
+      "relativeTimeRange": {
+        "from": 300,
+        "to": 0
+      }
+    }
+  ],
+  "for": "0s",
+  "annotations": {
+    "description": "Category B (rate-limit relief): Meraki's /organizations/{orgId}/assurance/alerts/overview/historical endpoint already returns time-bucketed counts, but every dashboard view pays the API cost. Recording centralises the fetch on a single evaluation interval. Series labelled by severity (critical / warning / info).",
+    "summary": "Historical alert counts recorded for Meraki org 987654"
+  },
+  "labels": {
+    "managed_by": "meraki-plugin",
+    "meraki_group": "alerts",
+    "meraki_kind": "recording",
+    "meraki_org": "987654",
+    "meraki_rule": "alerts-history-by-severity"
+  },
+  "folderUID": "meraki-bundled-rec-folder",
+  "ruleGroup": "alerts",
+  "record": {
+    "metric": "meraki_alerts_history_count",
+    "from": "A",
+    "target_datasource_uid": "golden-prom-uid"
+  }
+}

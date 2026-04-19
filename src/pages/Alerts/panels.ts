@@ -29,6 +29,8 @@ import { QueryKind } from '../../datasource/types';
 
 type AlertsQueryKind = QueryKind.Alerts | QueryKind.AlertsOverview;
 
+type AlertsStatus = 'active' | 'resolved' | 'dismissed' | 'all';
+
 interface AlertsQueryOpts {
   refId?: string;
   kind: AlertsQueryKind;
@@ -44,6 +46,12 @@ interface AlertsQueryOpts {
    * the variable or when rendering from a scene that doesn't own one.
    */
   severity?: string[];
+  /**
+   * Lifecycle-state filter. Backend default is "active" (currently firing,
+   * no time filter). Pass "all" from historical panels (timeline bar chart,
+   * MTTR) so the backend applies the picker window. Maps to metrics[1].
+   */
+  status?: AlertsStatus;
   maxDataPoints?: number;
 }
 
@@ -59,8 +67,13 @@ function alertsQuery(opts: AlertsQueryOpts): SceneQueryRunner {
     kind,
     orgId,
     severity = ['$severity'],
+    status,
     maxDataPoints,
   } = opts;
+
+  // metrics[0] = severity, metrics[1] = status sentinel. Omitting the
+  // second slot lets the backend fall through to its default ("active").
+  const metrics = status ? [...severity, status] : severity;
 
   const query: Record<string, unknown> & { refId: string } = {
     refId,
@@ -68,7 +81,7 @@ function alertsQuery(opts: AlertsQueryOpts): SceneQueryRunner {
     orgId: orgId ?? '$org',
     // Severity filter — see the file-level comment for why this uses
     // `metrics` instead of a dedicated `severity` field.
-    metrics: severity,
+    metrics,
   };
 
   return new SceneQueryRunner({
@@ -117,9 +130,9 @@ export function alertsTable(orgId?: string): VizPanel {
 
   return PanelBuilders.table()
     .setTitle('Alerts')
-    .setDescription('Assurance alerts returned by the Meraki API for the selected organization and severity.')
+    .setDescription('Currently firing Meraki alerts for the selected organization and severity. Switch the time picker to a longer window for historical views.')
     .setData(organized)
-    .setNoValue('No alerts in the selected range.')
+    .setNoValue('No active alerts for the selected severity.')
     .setOverrides((b) => {
       // Cross-family drilldown: the backend emits one URL per row keyed on the
       // alert's device.productType, so a table spanning MR/MS/MX/MV/MG/MT
@@ -135,6 +148,24 @@ export function alertsTable(orgId?: string): VizPanel {
       b.matchFieldsWithName('severity').overrideCustomFieldConfig('width', 110);
       b.matchFieldsWithName('occurredAt').overrideCustomFieldConfig('width', 180);
       b.matchFieldsWithName('alertType').overrideCustomFieldConfig('width', 200);
+      // Status column colour-coded so active / resolved / dismissed are
+      // visually distinct at a glance. value-to-color mapping: firing red,
+      // resolved green, dismissed grey.
+      b.matchFieldsWithName('status').overrideCustomFieldConfig('width', 110);
+      b.matchFieldsWithName('status').overrideCustomFieldConfig(
+        'cellOptions',
+        { type: 'color-background', mode: 'gradient' } as any
+      );
+      b.matchFieldsWithName('status').overrideMappings([
+        {
+          type: 'value',
+          options: {
+            active: { text: 'Active', color: 'red', index: 0 },
+            resolved: { text: 'Resolved', color: 'green', index: 1 },
+            dismissed: { text: 'Dismissed', color: 'dark-blue', index: 2 },
+          },
+        } as any,
+      ]);
     })
     .build();
 }
@@ -150,7 +181,11 @@ export function alertsTable(orgId?: string): VizPanel {
  * overview runner instead.
  */
 export function alertsTimelineBarChart(orgId?: string): VizPanel {
-  const runner = alertsQuery({ kind: QueryKind.Alerts, orgId });
+  // `status: 'all'` bypasses the backend's "active" default — the timeline
+  // is historical context (how much fired when?), so it needs every alert
+  // status with the picker window applied. The backend honours tsStart/tsEnd
+  // only when the sentinel is non-"active".
+  const runner = alertsQuery({ kind: QueryKind.Alerts, orgId, status: 'all' });
 
   // Pivot into a matrix: row = occurredAt bucket, columns = severity.
   // The `groupingToMatrix` transform does this in one step. We give it
@@ -203,10 +238,15 @@ function alertOverviewStat(
 ): VizPanel {
   const runner = alertsQuery({ kind: QueryKind.AlertsOverview, orgId });
 
+  // `total` is deliberately excluded alongside the other-severity fields —
+  // without this the stat viz renders BOTH "critical: 0" and "total: 543"
+  // inside the Critical tile, because `total` sits in the same wide frame
+  // and nothing else was filtering it out.
   const excludeByName: Record<string, boolean> = {
     critical: field !== 'critical',
     warning: field !== 'warning',
     informational: field !== 'informational',
+    total: true,
   };
 
   const builder = PanelBuilders.stat()
@@ -250,9 +290,13 @@ function alertOverviewStat(
  * warning is orange above zero, informational stays blue/neutral.
  */
 export function alertsKpiRow(orgId?: string): VizPanel[] {
+  // "Active ..." in the title makes explicit that these are a currently-
+  // firing snapshot, not "alerts in the picker window" — the previous
+  // wording led operators to expect the counts to change with the time
+  // picker, which they intentionally don't.
   return [
     alertOverviewStat(
-      'Critical',
+      'Active critical',
       'critical',
       [
         { value: 0, color: 'green' },
@@ -261,7 +305,7 @@ export function alertsKpiRow(orgId?: string): VizPanel[] {
       orgId
     ),
     alertOverviewStat(
-      'Warning',
+      'Active warning',
       'warning',
       [
         { value: 0, color: 'green' },
@@ -270,7 +314,7 @@ export function alertsKpiRow(orgId?: string): VizPanel[] {
       orgId
     ),
     alertOverviewStat(
-      'Informational',
+      'Active informational',
       'informational',
       [
         { value: 0, color: 'blue' },
