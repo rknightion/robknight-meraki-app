@@ -8,7 +8,9 @@
   "automergeType": "pr",
   "platformAutomerge": true,
   "gitIgnoredAuthors": [
-    "268667784+rknightion-renovate[bot]@users.noreply.github.com"
+    "268667784+rknightion-renovate[bot]@users.noreply.github.com",
+    'noreply@github.com',
+    'rknightion-renovate[bot]@users.noreply.github.com'
   ],
   "packageRules": [
     {
