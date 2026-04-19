@@ -23,7 +23,7 @@ const (
 	apClientsTTL           = 1 * time.Minute
 
 	wirelessChannelUtilEndpoint = "organizations/{organizationId}/wireless/devices/channelUtilization/history"
-	wirelessUsageEndpoint       = "networks/{networkId}/wireless/usageHistory"
+	wirelessUsageEndpoint       = "networks/{networkId}/clients/bandwidthUsageHistory"
 )
 
 // handleWirelessChannelUtil emits one frame per (serial, band) with Prometheus-style labels
@@ -615,7 +615,8 @@ const wirelessCpuLoadEndpoint = "organizations/{organizationId}/wireless/devices
 // (or serial when the name is unavailable).
 //
 // The endpoint GET /organizations/{organizationId}/wireless/devices/system/cpu/load/history
-// caps the time window to 1 day; allowed intervals are 60, 300, and 900 seconds.
+// caps the time window to 1 day. As of 2026-04 the endpoint no longer accepts an
+// interval parameter and samples are returned at natural cadence (~5 min).
 func handleWirelessDevicesCpuLoadHistory(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, opts Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("wirelessDevicesCpuLoadHistory: orgId is required")

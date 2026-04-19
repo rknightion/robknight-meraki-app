@@ -23,11 +23,13 @@ import (
 
 // TestHandle_WirelessApClientCounts_Table verifies that handleWirelessApClientCounts
 // emits one table frame with one row per device and the expected column set.
+//
+// Uses the 2026-04 items-envelope wire shape.
 func TestHandle_WirelessApClientCounts_Table(t *testing.T) {
-	const payload = `[
+	const payload = `{"items":[
 	  {"serial":"Q2AA-0001","network":{"id":"N1"},"counts":{"byStatus":{"online":7}}},
 	  {"serial":"Q2AA-0002","network":{"id":"N2"},"counts":{"byStatus":{"online":3}}}
-	]`
+	],"meta":{"counts":{"items":{"total":2,"remaining":0}}}}`
 	const networksPayload = `[
 	  {"id":"N1","organizationId":"o1","name":"HQ Wireless","productTypes":["wireless"]},
 	  {"id":"N2","organizationId":"o1","name":"Branch Wireless","productTypes":["wireless"]}
@@ -315,23 +317,28 @@ func TestHandle_WirelessDevicesEthernetStatuses_Table(t *testing.T) {
 // handleWirelessDevicesCpuLoadHistory emits one frame per AP serial with correct
 // label and value.
 func TestHandle_WirelessDevicesCpuLoadHistory_EmitsPerSerialFrames(t *testing.T) {
-	const payload = `[
+	// 2026-04 wire shape: items-envelope, per-item series[{ts,cpuLoad5}],
+	// cpuLoad5 in raw kernel load × 2^16 units (cpuCount=4 → 0.5 load →
+	// ~12.8% per-core utilization).
+	const payload = `{"items":[
 	  {
 	    "serial":"Q2AA-0001",
 	    "network":{"id":"N1"},
-	    "history":[
-	      {"startTs":"2026-04-18T10:00:00Z","endTs":"2026-04-18T10:05:00Z","util":{"average":{"percentage":12.5}}},
-	      {"startTs":"2026-04-18T10:05:00Z","endTs":"2026-04-18T10:10:00Z","util":{"average":{"percentage":14.0}}}
+	    "cpuCount":4,
+	    "series":[
+	      {"ts":"2026-04-18T10:00:00Z","cpuLoad5":32768},
+	      {"ts":"2026-04-18T10:05:00Z","cpuLoad5":36864}
 	    ]
 	  },
 	  {
 	    "serial":"Q2AA-0002",
 	    "network":{"id":"N1"},
-	    "history":[
-	      {"startTs":"2026-04-18T10:00:00Z","endTs":"2026-04-18T10:05:00Z","util":{"average":{"percentage":5.0}}}
+	    "cpuCount":4,
+	    "series":[
+	      {"ts":"2026-04-18T10:00:00Z","cpuLoad5":13107}
 	    ]
 	  }
-	]`
+	]}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -396,7 +403,7 @@ func TestHandle_WirelessDevicesCpuLoadHistory_Respects1DayCap(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/wireless/devices/system/cpu/load/history") {
 			capturedT0 = r.URL.Query().Get("t0")
-			_, _ = w.Write([]byte(`[]`))
+			_, _ = w.Write([]byte(`{"items":[]}`))
 			return
 		}
 		http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)

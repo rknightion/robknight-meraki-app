@@ -1,4 +1,4 @@
-import { CustomVariable } from '@grafana/scenes';
+import { TextBoxVariable } from '@grafana/scenes';
 import { clientVariable } from '../../scene-helpers/variables';
 
 /**
@@ -10,6 +10,6 @@ import { clientVariable } from '../../scene-helpers/variables';
  * that as "show the empty-state notice" rather than firing a request that
  * would 400 on the backend.
  */
-export function clientSearchVariable(): CustomVariable {
+export function clientSearchVariable(): TextBoxVariable {
   return clientVariable({ name: 'client', label: 'MAC' });
 }

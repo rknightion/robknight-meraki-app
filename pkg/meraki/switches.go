@@ -3,6 +3,7 @@ package meraki
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -77,6 +78,43 @@ type SwitchPortStatus struct {
 	VoiceVlan    int    `json:"voiceVlan,omitempty"`
 	AllowedVlans string `json:"allowedVlans,omitempty"`
 	IsUplink     bool   `json:"isUplink,omitempty"`
+	// SpanningTree carries the live per-port STP/RSTP state — status strings
+	// like "Forwarding", "Is edge", "Is peer-to-peer" per Meraki's
+	// device-scoped `/switch/ports/statuses` response. Only populated on the
+	// device-scoped path; the org-level `bySwitch` shape omits it.
+	SpanningTree *SwitchPortSpanningTree `json:"spanningTree,omitempty"`
+	// SecurePort carries 802.1X / MAC-auth state per port. `AuthenticationStatus`
+	// is the operator-facing value ("Disabled", "Authenticated", "Failed", ...).
+	SecurePort *SwitchPortSecurePort `json:"securePort,omitempty"`
+	// ActiveProfile carries the port-profile binding (e.g. "Access Points",
+	// "CAM"). Only the `Name` is surfaced in the frame; the full struct is
+	// retained here in case a future panel wants profile-source context.
+	ActiveProfile *SwitchPortActiveProfile `json:"activeProfile,omitempty"`
+}
+
+// SwitchPortSpanningTree mirrors the `spanningTree` nested object on the
+// device-scoped port-status shape. `Statuses` is the usable field — one or
+// more strings describing the port's role in the spanning-tree topology.
+type SwitchPortSpanningTree struct {
+	Statuses []string `json:"statuses,omitempty"`
+}
+
+// SwitchPortSecurePort mirrors the `securePort` nested object. We only
+// surface `AuthenticationStatus` today but keep `Enabled`/`Active` so tests
+// and future panels can inspect them without a re-decode.
+type SwitchPortSecurePort struct {
+	Enabled              bool   `json:"enabled,omitempty"`
+	Active               bool   `json:"active,omitempty"`
+	AuthenticationStatus string `json:"authenticationStatus,omitempty"`
+}
+
+// SwitchPortActiveProfile mirrors the `activeProfile` nested object. The
+// live API returns `{id, name, iname, source: {type}, isActive, updatedAt}`.
+type SwitchPortActiveProfile struct {
+	ID       string `json:"id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	IName    string `json:"iname,omitempty"`
+	IsActive bool   `json:"isActive,omitempty"`
 }
 
 // SwitchPortTrafficKbps and SwitchPortUsageKb are surfaced by some firmware
@@ -540,17 +578,26 @@ func (c *Client) GetNetworkSwitchStp(ctx context.Context, networkID string, ttl 
 // per-device client list. For a switch the `switchport` field is populated;
 // for APs it's null (callers here filter for switches, so it's always set).
 // Usage is in kilobytes per the Meraki spec.
+//
+// `vlan` is serialised as a STRING by Meraki (e.g. `"25"`, `""` for trunk
+// ports with no access VLAN). Verified live 2026-04-19 — a non-string
+// mapping here made the whole response fail to unmarshal and the MAC-table
+// panel silently render its "no clients" empty state. Keep as a string and
+// let the handler pass it through unchanged.
 type DeviceClient struct {
-	ID          string  `json:"id,omitempty"`
-	MAC         string  `json:"mac"`
-	Description string  `json:"description,omitempty"`
-	IP          string  `json:"ip,omitempty"`
-	IP6         string  `json:"ip6,omitempty"`
-	User        string  `json:"user,omitempty"`
-	VLAN        int     `json:"vlan,omitempty"`
-	SwitchPort  string  `json:"switchport,omitempty"`
-	Manufacturer string  `json:"manufacturer,omitempty"`
-	OS          string  `json:"os,omitempty"`
+	ID           string `json:"id,omitempty"`
+	MAC          string `json:"mac"`
+	Description  string `json:"description,omitempty"`
+	IP           string `json:"ip,omitempty"`
+	IP6          string `json:"ip6,omitempty"`
+	User         string `json:"user,omitempty"`
+	VLAN         string `json:"vlan,omitempty"`
+	NamedVlan    string `json:"namedVlan,omitempty"`
+	DhcpHostname string `json:"dhcpHostname,omitempty"`
+	MdnsName     string `json:"mdnsName,omitempty"`
+	SwitchPort   string `json:"switchport,omitempty"`
+	Manufacturer string `json:"manufacturer,omitempty"`
+	OS           string `json:"os,omitempty"`
 	Usage        struct {
 		Sent float64 `json:"sent"`
 		Recv float64 `json:"recv"`
@@ -724,6 +771,419 @@ func (c *Client) GetOrganizationSwitchPortsUsageHistory(ctx context.Context, org
 			Recv:      v.Recv,
 			Total:     v.Total,
 		})
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// v0.8 — new switch endpoints
+// ---------------------------------------------------------------------------
+
+// SwitchFleetPowerHistoryPoint is one entry in
+// GET /organizations/{organizationId}/summary/switch/power/history.
+// Single-page (no pagination). Auto-buckets by the requested window: 20-minute
+// buckets at short ranges, 4-hour at medium, 1-day at max. Verified 2026-04-19.
+type SwitchFleetPowerHistoryPoint struct {
+	Ts       time.Time `json:"-"`
+	DrawWatts float64  `json:"draw"`
+}
+
+// switchFleetPowerHistoryRaw is the on-wire shape (timestamps are RFC3339
+// strings). We re-parse into SwitchFleetPowerHistoryPoint so callers see a
+// real time.Time.
+type switchFleetPowerHistoryRaw struct {
+	Ts   string  `json:"ts"`
+	Draw float64 `json:"draw"`
+}
+
+// GetOrganizationSummarySwitchPowerHistory fetches fleet-wide PoE draw over a
+// t0/t1 window. Both timestamps are epoch seconds (Meraki accepts either
+// RFC3339 or Unix seconds — seconds are more compact in the URL). The
+// endpoint accepts up to 186 days.
+func (c *Client) GetOrganizationSummarySwitchPowerHistory(ctx context.Context, orgID string, t0, t1 time.Time, ttl time.Duration) ([]SwitchFleetPowerHistoryPoint, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/summary/switch/power/history", Message: "missing organization id"}}
+	}
+	params := url.Values{}
+	if !t0.IsZero() {
+		params.Set("t0", strconv.FormatInt(t0.Unix(), 10))
+	}
+	if !t1.IsZero() {
+		params.Set("t1", strconv.FormatInt(t1.Unix(), 10))
+	}
+	var raw []switchFleetPowerHistoryRaw
+	if err := c.Get(ctx,
+		"organizations/"+url.PathEscape(orgID)+"/summary/switch/power/history",
+		orgID, params, ttl, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]SwitchFleetPowerHistoryPoint, 0, len(raw))
+	for _, p := range raw {
+		ts, err := time.Parse(time.RFC3339, p.Ts)
+		if err != nil {
+			continue
+		}
+		out = append(out, SwitchFleetPowerHistoryPoint{Ts: ts, DrawWatts: p.Draw})
+	}
+	return out, nil
+}
+
+// SwitchPortsClientsOverviewByDeviceOptions filters the
+// /switch/ports/clients/overview/byDevice endpoint.
+type SwitchPortsClientsOverviewByDeviceOptions struct {
+	NetworkIDs []string
+	Serials    []string
+	// Timespan in seconds; defaults to Meraki's 1-day default when zero.
+	Timespan time.Duration
+}
+
+func (o SwitchPortsClientsOverviewByDeviceOptions) values() url.Values {
+	// perPage cap is 3-20 on this endpoint — verified live 2026-04-19 (HTTP
+	// 400 `"The perPage parameter must be between 3 and 20"` on anything
+	// higher). Keep at 20 and rely on Link-header pagination for big estates.
+	v := url.Values{"perPage": []string{"20"}}
+	for _, id := range o.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range o.Serials {
+		v.Add("serials[]", s)
+	}
+	if o.Timespan > 0 {
+		v.Set("timespan", strconv.Itoa(int(o.Timespan.Seconds())))
+	}
+	return v
+}
+
+// SwitchClientsOverviewDevice is one entry in the paginated
+// `/switch/ports/clients/overview/byDevice` response.
+type SwitchClientsOverviewDevice struct {
+	Name    string                      `json:"name,omitempty"`
+	Serial  string                      `json:"serial"`
+	MAC     string                      `json:"mac,omitempty"`
+	Network SwitchNetworkRef            `json:"network"`
+	Model   string                      `json:"model,omitempty"`
+	Ports   []SwitchClientsOverviewPort `json:"ports"`
+}
+
+// SwitchClientsOverviewPort is one per-port entry inside a device's clients
+// overview response. `Counts.ByStatus` keys observed live: "online". Meraki
+// may add others later; we preserve the map as-is.
+type SwitchClientsOverviewPort struct {
+	PortID string `json:"portId"`
+	Counts struct {
+		ByStatus map[string]int64 `json:"byStatus"`
+	} `json:"counts"`
+}
+
+// switchClientsOverviewResponse is the pagination envelope.
+type switchClientsOverviewResponse struct {
+	Items []SwitchClientsOverviewDevice `json:"items"`
+}
+
+// GetOrganizationSwitchPortsClientsOverviewByDevice fans out the paginated
+// clients-overview endpoint via Link: rel=next.
+func (c *Client) GetOrganizationSwitchPortsClientsOverviewByDevice(ctx context.Context, orgID string, opts SwitchPortsClientsOverviewByDeviceOptions, ttl time.Duration) ([]SwitchClientsOverviewDevice, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/switch/ports/clients/overview/byDevice", Message: "missing organization id"}}
+	}
+	endpoint := "organizations/" + url.PathEscape(orgID) + "/switch/ports/clients/overview/byDevice"
+	params := opts.values()
+
+	var all []SwitchClientsOverviewDevice
+	path := endpoint
+	for pageNum := 0; pageNum < MaxPages; pageNum++ {
+		var pageParams url.Values
+		if pageNum == 0 {
+			pageParams = params
+		}
+		body, hdr, err := c.Do(ctx, "GET", path, orgID, pageParams, nil)
+		if err != nil {
+			return nil, err
+		}
+		var pageResp switchClientsOverviewResponse
+		if err := json.Unmarshal(body, &pageResp); err != nil {
+			return nil, fmt.Errorf("meraki: decode switch clients overview: %w", err)
+		}
+		all = append(all, pageResp.Items...)
+		next := nextLink(hdr)
+		if next == "" {
+			break
+		}
+		path = next
+	}
+	_ = ttl // c.Get handles TTL; Do path is uncached but upstream handler memoises.
+	return all, nil
+}
+
+// SwitchNeighborsTopologyOptions filters the per-port LLDP/CDP endpoint.
+type SwitchNeighborsTopologyOptions struct {
+	NetworkIDs []string
+	Serials    []string
+	// Timespan in seconds. Defaults to Meraki's default (1 day) when zero.
+	Timespan time.Duration
+}
+
+func (o SwitchNeighborsTopologyOptions) values() url.Values {
+	// perPage cap: 3-20 on this endpoint (verified live via the OpenAPI spec
+	// and sampled response 2026-04-19).
+	v := url.Values{"perPage": []string{"20"}}
+	for _, id := range o.NetworkIDs {
+		v.Add("networkIds[]", id)
+	}
+	for _, s := range o.Serials {
+		v.Add("serials[]", s)
+	}
+	if o.Timespan > 0 {
+		v.Set("timespan", strconv.Itoa(int(o.Timespan.Seconds())))
+	}
+	return v
+}
+
+// SwitchNeighborsDevice is one device entry in the topology-discovery feed.
+type SwitchNeighborsDevice struct {
+	Name    string                `json:"name,omitempty"`
+	Serial  string                `json:"serial"`
+	MAC     string                `json:"mac,omitempty"`
+	Network SwitchNetworkRef      `json:"network"`
+	Model   string                `json:"model,omitempty"`
+	Ports   []SwitchNeighborsPort `json:"ports"`
+}
+
+// SwitchNeighborsPort is one port entry carrying LLDP and CDP name/value pairs.
+// Meraki emits both as `[{name, value}, ...]` arrays — the shape is a set of
+// human-readable key/value rows, not a nested struct. Keys seen live:
+// "System name", "System description", "Port ID", "Chassis ID",
+// "Port description", "Management address", "System capabilities"
+// (LLDP); "Platform", "Device ID", "Address", "Version", "Capabilities",
+// "Native VLAN", "Management address" (CDP).
+type SwitchNeighborsPort struct {
+	PortID        string                   `json:"portId"`
+	LastUpdatedAt string                   `json:"lastUpdatedAt,omitempty"`
+	LLDP          []SwitchNeighborsKeyPair `json:"lldp,omitempty"`
+	CDP           []SwitchNeighborsKeyPair `json:"cdp,omitempty"`
+}
+
+// SwitchNeighborsKeyPair is one name/value entry inside the lldp/cdp arrays.
+type SwitchNeighborsKeyPair struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type switchNeighborsResponse struct {
+	Items []SwitchNeighborsDevice `json:"items"`
+}
+
+// GetOrganizationSwitchPortsTopologyDiscoveryByDevice returns per-port
+// LLDP+CDP neighbour info for every switch in the org. Paginated via Link
+// headers; perPage cap is 20.
+func (c *Client) GetOrganizationSwitchPortsTopologyDiscoveryByDevice(ctx context.Context, orgID string, opts SwitchNeighborsTopologyOptions, ttl time.Duration) ([]SwitchNeighborsDevice, error) {
+	if orgID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "organizations/{organizationId}/switch/ports/topology/discovery/byDevice", Message: "missing organization id"}}
+	}
+	endpoint := "organizations/" + url.PathEscape(orgID) + "/switch/ports/topology/discovery/byDevice"
+	params := opts.values()
+
+	var all []SwitchNeighborsDevice
+	path := endpoint
+	for pageNum := 0; pageNum < MaxPages; pageNum++ {
+		var pageParams url.Values
+		if pageNum == 0 {
+			pageParams = params
+		}
+		body, hdr, err := c.Do(ctx, "GET", path, orgID, pageParams, nil)
+		if err != nil {
+			return nil, err
+		}
+		var pageResp switchNeighborsResponse
+		if err := json.Unmarshal(body, &pageResp); err != nil {
+			return nil, fmt.Errorf("meraki: decode switch neighbors: %w", err)
+		}
+		all = append(all, pageResp.Items...)
+		next := nextLink(hdr)
+		if next == "" {
+			break
+		}
+		path = next
+	}
+	_ = ttl
+	return all, nil
+}
+
+// DhcpServerSeenDevice is a switch reference embedded in the `seenBy[]`
+// array on each DHCP-seen entry. Verified live shape 2026-04-19:
+// `{"serial": ..., "name": ..., "url": ...}` — no `mac` or `interface`
+// field despite the v1 OpenAPI hinting at them. We keep the fields we
+// actually observe and accept the others will unmarshal to zero values.
+type DhcpServerSeenDevice struct {
+	Serial string `json:"serial,omitempty"`
+	Name   string `json:"name,omitempty"`
+	URL    string `json:"url,omitempty"`
+}
+
+// DhcpServerSeen is one entry in
+// GET /networks/{networkId}/switch/dhcp/v4/servers/seen. Rogue DHCP
+// detection: `IsAllowed=false` is what operators chase. Verified live
+// shape 2026-04-19 against org 1019781.
+type DhcpServerSeen struct {
+	MAC          string                 `json:"mac"`
+	IPv4         *DhcpServerSeenIPv4    `json:"ipv4,omitempty"`
+	VLAN         int                    `json:"vlan,omitempty"`
+	ClientID     string                 `json:"clientId,omitempty"`
+	IsAllowed    bool                   `json:"isAllowed,omitempty"`
+	IsConfigured bool                   `json:"isConfigured,omitempty"`
+	LastSeenAt   string                 `json:"lastSeenAt,omitempty"`
+	LastPacket   *DhcpServerSeenPacket  `json:"lastPacket,omitempty"`
+	// Type discriminates "discovered" (observed passively) vs "configured"
+	// (explicitly trusted on the network) entries in the live response.
+	Type   string                 `json:"type,omitempty"`
+	SeenBy []DhcpServerSeenDevice `json:"seenBy,omitempty"`
+}
+
+// DhcpServerSeenIPv4 mirrors the nested ipv4 block
+// (`{address, subnet, gateway}`). Only `address` is surfaced in the frame;
+// subnet/gateway are kept here for future panels.
+type DhcpServerSeenIPv4 struct {
+	Address string `json:"address,omitempty"`
+	Subnet  string `json:"subnet,omitempty"`
+	Gateway string `json:"gateway,omitempty"`
+}
+
+// DhcpServerSeenPacket mirrors the nested lastPacket block on each seen
+// entry. The live shape carries a rich nested structure; we only surface
+// `type` (e.g. "ACK", "OFFER") in the frame. Other fields are kept around
+// untyped so callers can inspect if needed without another decode pass.
+type DhcpServerSeenPacket struct {
+	Type string `json:"type,omitempty"`
+}
+
+// NetworkDhcpServersSeenOptions filters the v4/servers/seen endpoint.
+type NetworkDhcpServersSeenOptions struct {
+	Timespan time.Duration
+	T0       time.Time
+	T1       time.Time
+}
+
+func (o NetworkDhcpServersSeenOptions) values() url.Values {
+	v := url.Values{"perPage": []string{"1000"}}
+	if o.Timespan > 0 {
+		v.Set("timespan", strconv.Itoa(int(o.Timespan.Seconds())))
+	}
+	if !o.T0.IsZero() {
+		v.Set("t0", o.T0.UTC().Format(time.RFC3339))
+	}
+	if !o.T1.IsZero() {
+		v.Set("t1", o.T1.UTC().Format(time.RFC3339))
+	}
+	return v
+}
+
+// GetNetworkSwitchDhcpV4ServersSeen returns every DHCPv4 server observed on
+// switch ports in the given network during the timespan.
+func (c *Client) GetNetworkSwitchDhcpV4ServersSeen(ctx context.Context, networkID string, opts NetworkDhcpServersSeenOptions, ttl time.Duration) ([]DhcpServerSeen, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/switch/dhcp/v4/servers/seen", Message: "missing network id"}}
+	}
+	endpoint := "networks/" + url.PathEscape(networkID) + "/switch/dhcp/v4/servers/seen"
+	var out []DhcpServerSeen
+	if err := c.Get(ctx, endpoint, "", opts.values(), ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NetworkSwitchStack is one entry in `GET /networks/{networkId}/switch/stacks`.
+type NetworkSwitchStack struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name,omitempty"`
+	Serials []string `json:"serials,omitempty"`
+}
+
+// GetNetworkSwitchStacks returns every switch stack in the network.
+func (c *Client) GetNetworkSwitchStacks(ctx context.Context, networkID string, ttl time.Duration) ([]NetworkSwitchStack, error) {
+	if networkID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/switch/stacks", Message: "missing network id"}}
+	}
+	var out []NetworkSwitchStack
+	if err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/switch/stacks",
+		"", nil, ttl, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SwitchRoutingInterface mirrors one entry of both
+// GET /devices/{serial}/switch/routing/interfaces AND
+// GET /networks/{networkId}/switch/stacks/{stackId}/routing/interfaces.
+// Both endpoints return the same JSON shape — the field set is
+// documented identically in the Meraki v1 OpenAPI spec.
+type SwitchRoutingInterface struct {
+	InterfaceID      string                        `json:"interfaceId"`
+	Name             string                        `json:"name,omitempty"`
+	Subnet           string                        `json:"subnet,omitempty"`
+	VlanID           int                           `json:"vlanId,omitempty"`
+	InterfaceIP      string                        `json:"interfaceIp,omitempty"`
+	DefaultGateway   string                        `json:"defaultGateway,omitempty"`
+	MulticastRouting string                        `json:"multicastRouting,omitempty"`
+	OspfSettings     *SwitchRoutingInterfaceOspf   `json:"ospfSettings,omitempty"`
+	OspfV3Settings   *SwitchRoutingInterfaceOspfV3 `json:"ospfV3,omitempty"`
+}
+
+// SwitchRoutingInterfaceOspf mirrors the nested `ospfSettings` block.
+type SwitchRoutingInterfaceOspf struct {
+	Area        string `json:"area,omitempty"`
+	Cost        int    `json:"cost,omitempty"`
+	IsPassive   bool   `json:"isPassiveEnabled,omitempty"`
+}
+
+// SwitchRoutingInterfaceOspfV3 mirrors the nested `ospfV3` block.
+type SwitchRoutingInterfaceOspfV3 struct {
+	Area      string `json:"area,omitempty"`
+	Cost      int    `json:"cost,omitempty"`
+	IsPassive bool   `json:"isPassiveEnabled,omitempty"`
+}
+
+// GetDeviceSwitchRoutingInterfaces returns the L3 SVIs on a standalone L3
+// switch. Returns an empty slice (no error) when the endpoint 404s — L2
+// switches expose this path with an empty response in some firmware
+// versions and a 404 in others.
+func (c *Client) GetDeviceSwitchRoutingInterfaces(ctx context.Context, serial string, ttl time.Duration) ([]SwitchRoutingInterface, error) {
+	if serial == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "devices/{serial}/switch/routing/interfaces", Message: "missing serial"}}
+	}
+	var out []SwitchRoutingInterface
+	err := c.Get(ctx,
+		"devices/"+url.PathEscape(serial)+"/switch/routing/interfaces",
+		"", nil, ttl, &out)
+	if err != nil {
+		// L2 switches commonly 404 / 400 on this path. Treat as empty so
+		// the always-visible panel shows its "No L3 interfaces" no-value
+		// text instead of a red notice.
+		var nfe *NotFoundError
+		if errors.As(err, &nfe) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetNetworkSwitchStackRoutingInterfaces returns the L3 SVIs attached to a
+// switch stack.
+func (c *Client) GetNetworkSwitchStackRoutingInterfaces(ctx context.Context, networkID, stackID string, ttl time.Duration) ([]SwitchRoutingInterface, error) {
+	if networkID == "" || stackID == "" {
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/switch/stacks/{stackId}/routing/interfaces", Message: "missing network or stack id"}}
+	}
+	var out []SwitchRoutingInterface
+	err := c.Get(ctx,
+		"networks/"+url.PathEscape(networkID)+"/switch/stacks/"+url.PathEscape(stackID)+"/routing/interfaces",
+		"", nil, ttl, &out)
+	if err != nil {
+		var nfe *NotFoundError
+		if errors.As(err, &nfe) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	return out, nil
 }

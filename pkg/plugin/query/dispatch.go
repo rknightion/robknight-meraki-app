@@ -106,8 +106,9 @@ const (
 	KindNetworkEventsTimeline QueryKind = "networkEventsTimeline"
 
 	// API optimisation — §7.3 (phase 12).
-	KindConfigurationChanges        QueryKind = "configurationChanges"
-	KindDeviceAvailabilityChanges   QueryKind = "deviceAvailabilityChanges"
+	KindConfigurationChanges         QueryKind = "configurationChanges"
+	KindConfigurationChangesTimeline QueryKind = "configurationChangesTimeline"
+	KindDeviceAvailabilityChanges    QueryKind = "deviceAvailabilityChanges"
 
 	// §2.1 — org-level AP client counts (replaces N per-AP fan-out on the overview page).
 	KindWirelessApClientCounts QueryKind = "wirelessApClientCounts"
@@ -231,6 +232,35 @@ const (
 	// fire (online > 0 in any healthy fleet). This kind narrows to one int64
 	// `count` field so the standard reduce → threshold chain works.
 	KindDeviceOfflineCount QueryKind = "deviceOfflineCount"
+
+	// v0.8 — richer switch visualisations.
+	//
+	//   - switchFleetPowerHistory:      fleet-wide PoE draw over a 186-day
+	//                                   window, auto-bucketed to 20m/4h/1d.
+	//   - switchPortsClientsOverview:   per-switch active-port + online-client
+	//                                   counts from the org-wide clients
+	//                                   overview feed (one paginated call).
+	//   - switchNeighborsTopology:      per-port LLDP+CDP peer from the org-
+	//                                   wide topology discovery feed. Backs
+	//                                   the per-switch Neighbors table and
+	//                                   the per-port detail's neighbour KV.
+	//   - networkDhcpServersSeen:       DHCPv4 servers observed on switch
+	//                                   ports in a network. Auto-resolves
+	//                                   networkId from serials when only
+	//                                   serials supplied.
+	//   - networkSwitchStacks:          list of switch stacks in a network
+	//                                   (id + name + member serials).
+	//   - switchRoutingInterfaces:      L3 SVIs on a standalone L3 switch OR
+	//                                   on a stack (dispatches via stacks
+	//                                   lookup). Returns empty frame for
+	//                                   L2-only models so the always-visible
+	//                                   panel shows its no-value text.
+	KindSwitchFleetPowerHistory    QueryKind = "switchFleetPowerHistory"
+	KindSwitchPortsClientsOverview QueryKind = "switchPortsClientsOverview"
+	KindSwitchNeighborsTopology    QueryKind = "switchNeighborsTopology"
+	KindNetworkDhcpServersSeen     QueryKind = "networkDhcpServersSeen"
+	KindNetworkSwitchStacks        QueryKind = "networkSwitchStacks"
+	KindSwitchRoutingInterfaces    QueryKind = "switchRoutingInterfaces"
 )
 
 // MerakiQuery mirrors the TypeScript MerakiQuery shape. It is the per-panel
@@ -386,8 +416,9 @@ var handlers = map[QueryKind]handlerFn{
 	KindNetworkEvents:         handleNetworkEvents,
 	KindNetworkEventsTimeline: handleNetworkEventsTimeline,
 
-	KindConfigurationChanges:      handleConfigurationChanges,
-	KindDeviceAvailabilityChanges: handleDeviceAvailabilitiesChangeHistory,
+	KindConfigurationChanges:         handleConfigurationChanges,
+	KindConfigurationChangesTimeline: handleConfigurationChangesTimeline,
+	KindDeviceAvailabilityChanges:    handleDeviceAvailabilitiesChangeHistory,
 
 	KindWirelessApClientCounts:          handleWirelessApClientCounts,
 	KindWirelessPacketLossByNetwork:     handleWirelessPacketLossByNetwork,
@@ -457,6 +488,14 @@ var handlers = map[QueryKind]handlerFn{
 
 	// Single-field offline count consumed by the device-offline alert template.
 	KindDeviceOfflineCount: handleDeviceOfflineCount,
+
+	// v0.8 — richer switch visualisations.
+	KindSwitchFleetPowerHistory:    handleSwitchFleetPowerHistory,
+	KindSwitchPortsClientsOverview: handleSwitchPortsClientsOverview,
+	KindSwitchNeighborsTopology:    handleSwitchNeighborsTopology,
+	KindNetworkDhcpServersSeen:     handleNetworkDhcpServersSeen,
+	KindNetworkSwitchStacks:        handleNetworkSwitchStacks,
+	KindSwitchRoutingInterfaces:    handleSwitchRoutingInterfaces,
 }
 
 // Handle dispatches each MerakiQuery in req.Queries to its handler and

@@ -1,4 +1,4 @@
-import { CustomVariable, QueryVariable, SceneVariableSet } from '@grafana/scenes';
+import { QueryVariable, SceneVariableSet, TextBoxVariable } from '@grafana/scenes';
 import { VariableRefresh } from '@grafana/schema';
 import { MERAKI_DS_REF } from './datasource';
 import { QueryKind } from '../datasource/types';
@@ -109,24 +109,23 @@ export function deviceVariable(params: {
  * `clientVariable` — free-form text variable used by the Clients page for
  * MAC search and per-client drilldown.
  *
- * Why a CustomVariable rather than a QueryVariable: there is no Meraki API
- * that enumerates every client across an org without already knowing one
- * (the org-wide /clients/search call requires a `mac` parameter). A
- * permissive text input keeps the surface area tiny — operators paste the
- * MAC (or partial MAC) they're hunting for, and the panel queries forward
- * it through `metrics[0]`. Empty string means "no client selected" — the
- * Search tab handler treats that as "show the empty-state notice" rather
- * than an error.
+ * TextBoxVariable (not CustomVariable): there is no Meraki API that
+ * enumerates every client across an org without already knowing one (the
+ * org-wide /clients/search call requires a `mac` parameter), so we need a
+ * text input, not a dropdown of fixed options. Operators paste the MAC (or
+ * partial MAC) and the panel queries forward it through `metrics[0]`. Empty
+ * string means "no client selected" — the Search tab handler treats that as
+ * "show the empty-state notice" rather than an error.
  */
-export function clientVariable(params: { name: string; label: string }): CustomVariable {
-  return new CustomVariable({
+export function clientVariable(params: {
+  name: string;
+  label: string;
+  value?: string;
+}): TextBoxVariable {
+  return new TextBoxVariable({
     name: params.name,
     label: params.label,
-    query: '',
-    value: '',
-    text: '',
-    includeAll: false,
-    isMulti: false,
+    value: params.value ?? '',
   });
 }
 

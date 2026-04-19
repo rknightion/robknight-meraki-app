@@ -25,6 +25,7 @@ import {
   perSsidClientCountTimeseries,
   ssidUsageStackedTimeseries,
   wirelessApCpuLoadTimeseries,
+  wirelessApMemoryTimeseries,
   wirelessEthernetStatusTable,
   wirelessPacketLossByNetworkTable,
 } from './panels';
@@ -117,9 +118,12 @@ export function accessPointsScene(): EmbeddedScene {
           height: 320,
           body: wirelessEthernetStatusTable(),
         }),
-        new SceneFlexItem({
-          height: 320,
-          body: wirelessApCpuLoadTimeseries(),
+        new SceneFlexLayout({
+          direction: 'row',
+          children: [
+            new SceneFlexItem({ minWidth: 400, height: 320, body: wirelessApCpuLoadTimeseries() }),
+            new SceneFlexItem({ minWidth: 400, height: 320, body: wirelessApMemoryTimeseries() }),
+          ],
         }),
         new SceneFlexItem({
           minHeight: 420,

@@ -512,6 +512,35 @@ export function wirelessApCpuLoadTimeseries(): VizPanel {
     .build();
 }
 
+/**
+ * Timeseries of per-AP memory usage (5-minute intervals). Uses
+ * GET /organizations/{organizationId}/devices/system/memory/usage/history/byInterval
+ * scoped to `productTypes=wireless`. One series per AP; 31-day max lookback.
+ */
+export function wirelessApMemoryTimeseries(): VizPanel {
+  return PanelBuilders.timeseries()
+    .setTitle('AP memory usage')
+    .setDescription('Maximum memory usage % per access point over the selected range.')
+    .setData(
+      oneQuery({
+        kind: QueryKind.DeviceMemoryHistory,
+        productTypes: ['wireless'],
+        maxDataPoints: 300,
+      })
+    )
+    .setUnit('percent')
+    .setMin(0)
+    .setMax(100)
+    .setNoValue('No memory usage data in the selected range.')
+    .setColor({ mode: FieldColorModeId.PaletteClassic })
+    .setCustomFieldConfig('lineWidth', 1)
+    .setCustomFieldConfig('fillOpacity', 10)
+    .setCustomFieldConfig('spanNulls', true)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'multi', sort: 'desc' } as any)
+    .build();
+}
+
 // ---------------------------------------------------------------------------
 // §4.4.3-1a — v0.5 MR panels
 // ---------------------------------------------------------------------------

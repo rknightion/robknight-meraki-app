@@ -136,19 +136,26 @@ func (c *Client) GetOrganizationWirelessChannelUtilHistory(ctx context.Context, 
 	return points, nil
 }
 
-// WirelessUsagePoint is one interval sample from `GET /networks/{networkId}/wireless/usageHistory`.
-// The API returns sent+received separately (sentKbps, receivedKbps) plus a combined totalKbps;
-// we preserve all three so the caller can choose which to plot.
+// WirelessUsagePoint is one aggregate bandwidth sample for a network.
+//
+// As of 2026-04 `/networks/{id}/wireless/usageHistory` requires a `deviceSerial`
+// or `clientId` parameter and no longer returns aggregate network-wide totals,
+// so we source these samples from `/networks/{id}/clients/bandwidthUsageHistory`
+// which returns `{ts, total, upstream, downstream}` in **Mbps**. We convert to
+// Kbps internally so the field names (`TotalKbps` etc.) remain meaningful and
+// existing panel units don't need to shift.
 type WirelessUsagePoint struct {
-	StartTs        time.Time `json:"startTs"`
-	EndTs          time.Time `json:"endTs"`
-	TotalKbps      float64   `json:"totalKbps"`
-	SentKbps       float64   `json:"sentKbps"`
-	ReceivedKbps   float64   `json:"receivedKbps"`
+	StartTs      time.Time `json:"ts"`
+	TotalKbps    float64   `json:"total"`
+	SentKbps     float64   `json:"upstream"`
+	ReceivedKbps float64   `json:"downstream"`
 }
 
-// WirelessUsageOptions filters the network wireless usage-history call.
-// The endpoint supports an SSID filter (by number) and an optional resolution.
+// WirelessUsageOptions filters the network-usage call.
+//
+// SSID/Band filters are retained on the struct for wire-format compatibility
+// with earlier callers, but the replacement endpoint does not accept them;
+// they're silently ignored.
 type WirelessUsageOptions struct {
 	SSID       string
 	Band       string
@@ -161,34 +168,42 @@ func (o WirelessUsageOptions) values() url.Values {
 	if o.Window != nil {
 		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
 		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
-		if o.Resolution > 0 {
-			v.Set("resolution", strconv.Itoa(int(o.Resolution.Seconds())))
-		} else if o.Window.Resolution > 0 {
-			v.Set("resolution", strconv.Itoa(int(o.Window.Resolution.Seconds())))
-		}
-	} else if o.Resolution > 0 {
-		v.Set("resolution", strconv.Itoa(int(o.Resolution.Seconds())))
-	}
-	if o.SSID != "" {
-		v.Set("ssid", o.SSID)
-	}
-	if o.Band != "" {
-		v.Set("band", o.Band)
 	}
 	return v
 }
 
-// GetNetworkWirelessUsageHistory fetches per-interval usage samples for a single network.
-// Meraki returns the array un-paginated so we use c.Get rather than c.GetAll.
+// bandwidthUsagePoint mirrors one entry from clients/bandwidthUsageHistory.
+type bandwidthUsagePoint struct {
+	Ts         time.Time `json:"ts"`
+	Total      float64   `json:"total"`
+	Upstream   float64   `json:"upstream"`
+	Downstream float64   `json:"downstream"`
+}
+
+// GetNetworkWirelessUsageHistory fetches per-interval aggregate usage samples
+// for a single network by querying the bandwidthUsageHistory endpoint.
+//
+// Returns rates in kbps (the upstream endpoint emits Mbps — we multiply by
+// 1000 so the existing frontend panels that display `Kbits` still render the
+// correct absolute magnitude).
 func (c *Client) GetNetworkWirelessUsageHistory(ctx context.Context, networkID string, opts WirelessUsageOptions, ttl time.Duration) ([]WirelessUsagePoint, error) {
 	if networkID == "" {
-		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/wireless/usageHistory", Message: "missing network id"}}
+		return nil, &NotFoundError{APIError: APIError{Endpoint: "networks/{networkId}/clients/bandwidthUsageHistory", Message: "missing network id"}}
 	}
-	var out []WirelessUsagePoint
+	var raw []bandwidthUsagePoint
 	if err := c.Get(ctx,
-		"networks/"+url.PathEscape(networkID)+"/wireless/usageHistory",
-		"", opts.values(), ttl, &out); err != nil {
+		"networks/"+url.PathEscape(networkID)+"/clients/bandwidthUsageHistory",
+		"", opts.values(), ttl, &raw); err != nil {
 		return nil, err
+	}
+	out := make([]WirelessUsagePoint, 0, len(raw))
+	for _, p := range raw {
+		out = append(out, WirelessUsagePoint{
+			StartTs:      p.Ts,
+			TotalKbps:    p.Total * 1000.0,
+			SentKbps:     p.Upstream * 1000.0,
+			ReceivedKbps: p.Downstream * 1000.0,
+		})
 	}
 	return out, nil
 }
@@ -525,11 +540,21 @@ type WirelessSsidStatusOptions struct {
 }
 
 type rawBasicServiceSet struct {
-	Enabled bool `json:"enabled"`
-	Radio   struct {
+	// As of 2026-04 the `enabled` flag moved from the BSSID root onto the nested
+	// `ssid` object. Accept both (`EnabledLegacy` preserves back-compat for the
+	// pre-2026-04 wire format and for any test fixtures not yet updated).
+	EnabledLegacy bool `json:"enabled"`
+	SSID          struct {
+		Enabled bool `json:"enabled"`
+	} `json:"ssid"`
+	Radio struct {
 		Band           string `json:"band"`
 		IsBroadcasting bool   `json:"isBroadcasting"`
 	} `json:"radio"`
+}
+
+func (b rawBasicServiceSet) enabled() bool {
+	return b.SSID.Enabled || b.EnabledLegacy
 }
 
 type rawSsidStatusEntry struct {
@@ -540,8 +565,16 @@ type rawSsidStatusEntry struct {
 	BasicServiceSets []rawBasicServiceSet `json:"basicServiceSets"`
 }
 
+// ssidStatusesByDeviceResponse is the items-envelope returned as of 2026-04.
+type ssidStatusesByDeviceResponse struct {
+	Items []rawSsidStatusEntry `json:"items"`
+}
+
 // GetOrganizationWirelessSsidsStatusesByDevice returns per-device BSSID
-// broadcasting snapshot. Paginated via Link header; perPage 500 (max).
+// broadcasting snapshot.
+//
+// As of 2026-04 the response is wrapped in `{"items":[...],"meta":{...}}` — no
+// longer a raw array — so we paginate manually and decode the envelope.
 func (c *Client) GetOrganizationWirelessSsidsStatusesByDevice(ctx context.Context, orgID string, opts WirelessSsidStatusOptions, ttl time.Duration) ([]WirelessSsidStatusByDevice, error) {
 	if orgID == "" {
 		return nil, &NotFoundError{APIError: APIError{
@@ -556,17 +589,38 @@ func (c *Client) GetOrganizationWirelessSsidsStatusesByDevice(ctx context.Contex
 	for _, s := range opts.Serials {
 		v.Add("serials[]", s)
 	}
-	var raw []rawSsidStatusEntry
-	if _, err := c.GetAll(ctx,
-		"organizations/"+url.PathEscape(orgID)+"/wireless/ssids/statuses/byDevice",
-		orgID, v, ttl, &raw); err != nil {
-		return nil, err
+
+	endpoint := "organizations/" + url.PathEscape(orgID) + "/wireless/ssids/statuses/byDevice"
+	var all []rawSsidStatusEntry
+	path := endpoint
+	params := v
+	for pageNum := 0; pageNum < MaxPages; pageNum++ {
+		var pageParams url.Values
+		if pageNum == 0 {
+			pageParams = params
+		}
+		body, hdr, err := c.Do(ctx, "GET", path, orgID, pageParams, nil)
+		if err != nil {
+			return nil, err
+		}
+		var pageResp ssidStatusesByDeviceResponse
+		if err := decodeJSON(body, path, &pageResp); err != nil {
+			return nil, err
+		}
+		all = append(all, pageResp.Items...)
+		next := nextLink(hdr)
+		if next == "" {
+			break
+		}
+		path = next
 	}
-	out := make([]WirelessSsidStatusByDevice, 0, len(raw))
-	for _, e := range raw {
+	_ = ttl
+
+	out := make([]WirelessSsidStatusByDevice, 0, len(all))
+	for _, e := range all {
 		row := WirelessSsidStatusByDevice{Serial: e.Serial, NetworkID: e.Network.ID}
 		for _, b := range e.BasicServiceSets {
-			if b.Enabled {
+			if b.enabled() {
 				row.AnyEnabled = true
 			}
 			if !b.Radio.IsBroadcasting {
@@ -620,8 +674,18 @@ type rawApClientCountEntry struct {
 	} `json:"counts"`
 }
 
+// apClientCountsResponse is the items-envelope returned as of 2026-04.
+type apClientCountsResponse struct {
+	Items []rawApClientCountEntry `json:"items"`
+}
+
 // GetOrganizationWirelessClientsOverviewByDevice returns per-AP online client
-// counts for the organization. Paginated via Link header; perPage 1000.
+// counts for the organization.
+//
+// As of 2026-04 the response is wrapped in `{"items":[...],"meta":{...}}` — no
+// longer a raw array — so we paginate manually and decode the envelope rather
+// than going through c.GetAll (which expects a raw array and fails json.Unmarshal
+// on the outer object).
 func (c *Client) GetOrganizationWirelessClientsOverviewByDevice(ctx context.Context, orgID string, opts WirelessApClientCountsOptions, ttl time.Duration) ([]WirelessApClientCounts, error) {
 	if orgID == "" {
 		return nil, &NotFoundError{APIError: APIError{
@@ -636,14 +700,36 @@ func (c *Client) GetOrganizationWirelessClientsOverviewByDevice(ctx context.Cont
 	for _, s := range opts.Serials {
 		v.Add("serials[]", s)
 	}
-	var raw []rawApClientCountEntry
-	if _, err := c.GetAll(ctx,
-		"organizations/"+url.PathEscape(orgID)+"/wireless/clients/overview/byDevice",
-		orgID, v, ttl, &raw); err != nil {
-		return nil, err
+
+	endpoint := "organizations/" + url.PathEscape(orgID) + "/wireless/clients/overview/byDevice"
+	var all []rawApClientCountEntry
+	path := endpoint
+	params := v
+	for pageNum := 0; pageNum < MaxPages; pageNum++ {
+		var pageParams url.Values
+		if pageNum == 0 {
+			pageParams = params
+		}
+		body, hdr, err := c.Do(ctx, "GET", path, orgID, pageParams, nil)
+		if err != nil {
+			return nil, err
+		}
+		var pageResp apClientCountsResponse
+		if err := decodeJSON(body, path, &pageResp); err != nil {
+			return nil, err
+		}
+		all = append(all, pageResp.Items...)
+		next := nextLink(hdr)
+		if next == "" {
+			break
+		}
+		path = next
 	}
-	out := make([]WirelessApClientCounts, 0, len(raw))
-	for _, e := range raw {
+
+	_ = ttl // caching is deliberately skipped on this path; SWR not needed for this snapshot.
+
+	out := make([]WirelessApClientCounts, 0, len(all))
+	for _, e := range all {
 		out = append(out, WirelessApClientCounts{
 			Serial:      e.Serial,
 			NetworkID:   e.Network.ID,
@@ -899,21 +985,27 @@ func (c *Client) GetOrganizationWirelessDevicesEthernetStatuses(ctx context.Cont
 // WirelessCpuLoadPoint is one interval sample from
 // GET /organizations/{organizationId}/wireless/devices/system/cpu/load/history.
 //
-// Wire shape (per item):
+// Wire shape as of 2026-04:
 //
-//	{
-//	  "serial": "Q2...",
-//	  "network": {"id": "N_..."},
-//	  "history": [{"startTs": "...", "endTs": "...", "util": {"average": {"percentage": F}}}]
-//	}
+//	{"items":[
+//	  {
+//	    "serial": "Q2...",
+//	    "model": "MR...", "name": "...", "cpuCount": 4,
+//	    "network": {"id": "N_...", "name": "..."},
+//	    "series": [{"ts": "...", "cpuLoad5": 48096}]
+//	  }
+//	]}
 //
-// Flattened to one row per (serial, interval).
+// `cpuLoad5` is the raw Linux-style 5-minute load average multiplied by 2^16
+// (FSHIFT=16 fixed-point). Dividing by 65536 yields the load average; dividing
+// further by cpuCount and scaling by 100 yields a per-core utilization percent
+// in the conventional 0–100% range. We flatten to one row per (serial, sample)
+// with the percent pre-computed so callers render a meaningful 0–100 value.
 type WirelessCpuLoadPoint struct {
 	StartTs   time.Time
-	EndTs     time.Time
 	Serial    string
 	NetworkID string
-	CpuLoad5  float64 // 5-min average CPU load % (util.average.percentage)
+	CpuLoad5  float64 // 5-min CPU utilization percentage (0–100), derived from raw cpuLoad5.
 }
 
 // WirelessCpuLoadOptions filters the CPU-load history call.
@@ -924,14 +1016,9 @@ type WirelessCpuLoadOptions struct {
 	Interval   time.Duration
 }
 
-type rawCpuInterval struct {
-	StartTs time.Time `json:"startTs"`
-	EndTs   time.Time `json:"endTs"`
-	Util    struct {
-		Average struct {
-			Percentage float64 `json:"percentage"`
-		} `json:"average"`
-	} `json:"util"`
+type rawCpuSeriesPoint struct {
+	Ts       time.Time `json:"ts"`
+	CpuLoad5 float64   `json:"cpuLoad5"`
 }
 
 type rawCpuLoadEntry struct {
@@ -939,12 +1026,26 @@ type rawCpuLoadEntry struct {
 	Network struct {
 		ID string `json:"id"`
 	} `json:"network"`
-	History []rawCpuInterval `json:"history"`
+	CpuCount int                 `json:"cpuCount"`
+	Series   []rawCpuSeriesPoint `json:"series"`
 }
 
+type cpuLoadHistoryResponse struct {
+	Items []rawCpuLoadEntry `json:"items"`
+}
+
+// cpuLoadFSHIFT is the bit-shift used by the kernel to encode load averages as
+// a fixed-point integer in the raw /proc/loadavg format (FSHIFT=16 — `load *
+// 2^16`). Meraki exposes this same raw value as `cpuLoad5`, so we divide by it
+// to recover the load average.
+const cpuLoadFSHIFT = 65536.0
+
 // GetOrganizationWirelessDevicesCpuLoadHistory returns per-device CPU-load
-// history samples flattened to one (serial, interval) per row.
-// Paginated via Link header; perPage 1000. MaxTimespan 1 day per docs.
+// history samples flattened to one (serial, sample) per row.
+//
+// As of 2026-04 the response is wrapped in `{"items":[...]}` and each item
+// carries `series` (not `history`) of `{ts, cpuLoad5}` — no `util.average.percentage`
+// field anymore. `perPage` is clamped to 3–20 by the API.
 func (c *Client) GetOrganizationWirelessDevicesCpuLoadHistory(ctx context.Context, orgID string, opts WirelessCpuLoadOptions, ttl time.Duration) ([]WirelessCpuLoadPoint, error) {
 	if orgID == "" {
 		return nil, &NotFoundError{APIError: APIError{
@@ -952,17 +1053,10 @@ func (c *Client) GetOrganizationWirelessDevicesCpuLoadHistory(ctx context.Contex
 			Message:  "missing organization id",
 		}}
 	}
-	v := url.Values{"perPage": []string{"1000"}}
+	v := url.Values{"perPage": []string{"20"}}
 	if opts.Window != nil {
 		v.Set("t0", opts.Window.T0.UTC().Format("2006-01-02T15:04:05Z"))
 		v.Set("t1", opts.Window.T1.UTC().Format("2006-01-02T15:04:05Z"))
-		if opts.Interval > 0 {
-			v.Set("interval", strconv.Itoa(int(opts.Interval.Seconds())))
-		} else if opts.Window.Resolution > 0 {
-			v.Set("interval", strconv.Itoa(int(opts.Window.Resolution.Seconds())))
-		}
-	} else if opts.Interval > 0 {
-		v.Set("interval", strconv.Itoa(int(opts.Interval.Seconds())))
 	}
 	for _, id := range opts.NetworkIDs {
 		v.Add("networkIds[]", id)
@@ -970,21 +1064,53 @@ func (c *Client) GetOrganizationWirelessDevicesCpuLoadHistory(ctx context.Contex
 	for _, s := range opts.Serials {
 		v.Add("serials[]", s)
 	}
-	var raw []rawCpuLoadEntry
-	if _, err := c.GetAll(ctx,
-		"organizations/"+url.PathEscape(orgID)+"/wireless/devices/system/cpu/load/history",
-		orgID, v, ttl, &raw); err != nil {
-		return nil, err
+
+	endpoint := "organizations/" + url.PathEscape(orgID) + "/wireless/devices/system/cpu/load/history"
+	var all []rawCpuLoadEntry
+	path := endpoint
+	params := v
+	for pageNum := 0; pageNum < MaxPages; pageNum++ {
+		var pageParams url.Values
+		if pageNum == 0 {
+			pageParams = params
+		}
+		body, hdr, err := c.Do(ctx, "GET", path, orgID, pageParams, nil)
+		if err != nil {
+			return nil, err
+		}
+		var pageResp cpuLoadHistoryResponse
+		if err := decodeJSON(body, path, &pageResp); err != nil {
+			return nil, err
+		}
+		all = append(all, pageResp.Items...)
+		next := nextLink(hdr)
+		if next == "" {
+			break
+		}
+		path = next
 	}
+	_ = ttl
+	_ = opts.Interval // interval parameter removed from 2026-04 API.
+
 	var out []WirelessCpuLoadPoint
-	for _, e := range raw {
-		for _, h := range e.History {
+	for _, e := range all {
+		cores := float64(e.CpuCount)
+		if cores <= 0 {
+			cores = 1
+		}
+		for _, s := range e.Series {
+			// Convert raw kernel-format loadavg × 2^16 into a per-core
+			// utilization percent. Cap at 100 so transient load spikes above
+			// cpuCount don't push the gauge above its displayed maximum.
+			percent := s.CpuLoad5 / cpuLoadFSHIFT / cores * 100.0
+			if percent > 100 {
+				percent = 100
+			}
 			out = append(out, WirelessCpuLoadPoint{
-				StartTs:   h.StartTs,
-				EndTs:     h.EndTs,
+				StartTs:   s.Ts,
 				Serial:    e.Serial,
 				NetworkID: e.Network.ID,
-				CpuLoad5:  h.Util.Average.Percentage,
+				CpuLoad5:  percent,
 			})
 		}
 	}

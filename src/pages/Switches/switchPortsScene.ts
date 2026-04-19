@@ -8,7 +8,7 @@ import {
   SceneTimeRange,
 } from '@grafana/scenes';
 import { orgOnlyVariables } from '../../scene-helpers/variables';
-import { switchMacAddressTable, switchPortMap } from './panels';
+import { switchMacAddressTable, switchNeighborsTable, switchPortMap } from './panels';
 
 /**
  * Ports tab for a single switch — the port map table and MAC-address
@@ -42,6 +42,14 @@ export function switchPortsScene(serial: string): EmbeddedScene {
         new SceneFlexItem({
           minHeight: 480,
           body: switchPortMap(serial),
+        }),
+        // v0.8 — LLDP/CDP neighbours for this switch's ports, between the
+        // port map and the MAC table. Data comes from the org-wide
+        // topology/discovery feed filtered to this serial (one paginated
+        // call shared across every switch detail page in the same refresh).
+        new SceneFlexItem({
+          minHeight: 280,
+          body: switchNeighborsTable(serial),
         }),
         new SceneFlexItem({
           minHeight: 280,

@@ -229,24 +229,25 @@ func TestHandle_WirelessLatencyStats_EmitsPerNetworkFrames(t *testing.T) {
 // TestHandle_DeviceRadioStatus_Table verifies the radio-status handler emits a
 // wide table with one row per AP and booleans per band.
 func TestHandle_DeviceRadioStatus_Table(t *testing.T) {
-	const payload = `[
+	// 2026-04 wire shape: items-envelope, and `enabled` moved to ssid.enabled.
+	const payload = `{"items":[
 	  {
 	    "serial":"Q2AA-0001",
 	    "network":{"id":"N1"},
 	    "basicServiceSets":[
-	      {"enabled":true,"radio":{"band":"2.4","isBroadcasting":true}},
-	      {"enabled":true,"radio":{"band":"5","isBroadcasting":true}}
+	      {"ssid":{"enabled":true},"radio":{"band":"2.4","isBroadcasting":true}},
+	      {"ssid":{"enabled":true},"radio":{"band":"5","isBroadcasting":true}}
 	    ]
 	  },
 	  {
 	    "serial":"Q2AA-0002",
 	    "network":{"id":"N1"},
 	    "basicServiceSets":[
-	      {"enabled":true,"radio":{"band":"5","isBroadcasting":true}},
-	      {"enabled":false,"radio":{"band":"6","isBroadcasting":false}}
+	      {"ssid":{"enabled":true},"radio":{"band":"5","isBroadcasting":true}},
+	      {"ssid":{"enabled":false},"radio":{"band":"6","isBroadcasting":false}}
 	    ]
 	  }
-	]`
+	]}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

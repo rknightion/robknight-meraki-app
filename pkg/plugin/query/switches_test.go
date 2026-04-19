@@ -151,9 +151,13 @@ func TestHandle_SwitchStp_ExpandsBridgePriorities(t *testing.T) {
 // TestHandle_SwitchMacTable_PerClientRows verifies the MAC-table handler
 // surfaces one row per client connected to a given switch.
 func TestHandle_SwitchMacTable_PerClientRows(t *testing.T) {
+	// `vlan` is a STRING on the wire (verified live 2026-04-19 against org
+	// 1019781: `"vlan":"25"`). Fixture mirrors reality — the previous int
+	// fixture made the handler appear to work in tests while every live
+	// response failed to unmarshal and silently blanked the MAC table.
 	const payload = `[
-	  {"id":"C1","mac":"aa:bb:cc:dd:ee:01","description":"laptop","ip":"10.0.0.5","vlan":10,"switchport":"3","manufacturer":"Apple","user":"alice","usage":{"sent":1234,"recv":5678},"lastSeen":1713440000},
-	  {"mac":"aa:bb:cc:dd:ee:02","ip":"10.0.0.6","vlan":20,"switchport":"4","usage":{"sent":10,"recv":20},"lastSeen":1713440100}
+	  {"id":"C1","mac":"aa:bb:cc:dd:ee:01","description":"laptop","ip":"10.0.0.5","vlan":"10","switchport":"3","manufacturer":"Apple","user":"alice","usage":{"sent":1234,"recv":5678},"lastSeen":1713440000},
+	  {"mac":"aa:bb:cc:dd:ee:02","ip":"10.0.0.6","vlan":"20","switchport":"4","usage":{"sent":10,"recv":20},"lastSeen":1713440100}
 	]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/clients") {

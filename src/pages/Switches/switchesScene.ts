@@ -14,6 +14,8 @@ import {
 import { orgVariable } from '../../scene-helpers/variables';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import {
+  clientsPerSwitchBarChart,
+  fleetPoeHistoryTimeseries,
   switchInventoryTable,
   switchKpiRow,
   switchPortsBySpeedStatPanel,
@@ -69,6 +71,24 @@ export function switchesScene() {
               width: '70%',
               minHeight: 280,
               body: switchPortsUsageHistoryTimeseries(),
+            }),
+          ],
+        }),
+        // v0.8 — fleet PoE history + clients-per-switch. Left half is a
+        // 7d-ish timeseries (Meraki auto-buckets); right half is a
+        // one-row-per-switch "who's carrying clients" table.
+        new SceneFlexLayout({
+          direction: 'row',
+          children: [
+            new SceneFlexItem({
+              width: '60%',
+              minHeight: 280,
+              body: fleetPoeHistoryTimeseries(),
+            }),
+            new SceneFlexItem({
+              width: '40%',
+              minHeight: 280,
+              body: clientsPerSwitchBarChart(),
             }),
           ],
         }),

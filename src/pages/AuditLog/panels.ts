@@ -12,12 +12,14 @@ import { QueryKind } from '../../datasource/types';
 
 interface AuditLogQueryOpts {
   refId?: string;
+  kind: QueryKind.ConfigurationChanges | QueryKind.ConfigurationChangesTimeline;
   maxDataPoints?: number;
 }
 
 /**
- * Build a `SceneQueryRunner` for the ConfigurationChanges kind. Variables
- * are baked in so both panels in this file share exactly the same shape:
+ * Build a `SceneQueryRunner` for a ConfigurationChanges-family kind. Variables
+ * are baked in so both panels on the audit-log page share exactly the same
+ * shape:
  *   - orgId: `$org`
  *   - metrics: `['$admin']` — admin-id filter (empty string → no filter)
  *
@@ -27,19 +29,15 @@ interface AuditLogQueryOpts {
  * in a typical org are org-level (`networkId: null`), so filtering by any
  * specific network on a single-network org returns zero rows. Keeping the
  * page org-scoped matches Meraki Dashboard's own audit view.
- *
- * Backend frame shape (documented):
- *   (ts, adminName, adminEmail, adminId, page, label, networkId,
- *    oldValue, newValue)
  */
-function configurationChangesQuery(opts: AuditLogQueryOpts = {}): SceneQueryRunner {
-  const { refId = 'A', maxDataPoints } = opts;
+function configurationChangesQuery(opts: AuditLogQueryOpts): SceneQueryRunner {
+  const { refId = 'A', kind, maxDataPoints } = opts;
   return new SceneQueryRunner({
     datasource: MERAKI_DS_REF,
     queries: [
       {
         refId,
-        kind: QueryKind.ConfigurationChanges,
+        kind,
         orgId: '$org',
         metrics: ['$admin'],
       },
@@ -49,37 +47,21 @@ function configurationChangesQuery(opts: AuditLogQueryOpts = {}): SceneQueryRunn
 }
 
 /**
- * Change-volume timeline — one bar per time bucket, counting the rows
- * emitted by the backend frame. We pivot through `groupingToMatrix` with
- * a placeholder column value so the bar chart counts occurrences per
- * admin bucket naturally; empty frames simply render the "No changes"
- * noValue placeholder without exploding the transform pipeline.
- *
- * Mirrors `alertsTimelineBarChart` / `eventsTimelineBarChart` so the
- * visual density matches the rest of the app's "timeline" surfaces.
+ * Change-volume timeline — one stacked bar per time bucket, one series per
+ * `page` value. Backed by the server-side `ConfigurationChangesTimeline`
+ * aggregator which emits a wide numeric frame `{ts, <page1>, <page2>, ...}`
+ * with zero-filled buckets; the viz gets real numeric fields so it no
+ * longer reports "missing a number field" (the previous client-side
+ * `groupingToMatrix` pivot emitted string cells). Mirrors the
+ * events-timeline pattern — see `src/pages/Events/panels.ts`.
  */
 export function auditLogTimelineBarChart(): VizPanel {
-  const runner = configurationChangesQuery();
-
-  const pivoted = new SceneDataTransformer({
-    $data: runner,
-    transformations: [
-      {
-        id: 'groupingToMatrix',
-        options: {
-          columnField: 'page',
-          rowField: 'ts',
-          valueField: 'page',
-          emptyValue: 'null',
-        },
-      },
-    ],
-  });
+  const runner = configurationChangesQuery({ kind: QueryKind.ConfigurationChangesTimeline });
 
   return PanelBuilders.timeseries()
     .setTitle('Change volume')
     .setDescription('Configuration-change events over the selected window, stacked by page.')
-    .setData(pivoted)
+    .setData(runner)
     .setNoValue('No configuration changes in the selected range.')
     .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
     .setColor({ mode: FieldColorModeId.PaletteClassic })
@@ -91,20 +73,30 @@ export function auditLogTimelineBarChart(): VizPanel {
 }
 
 /**
- * Full change-log table — one row per configuration change in the
- * selected window. Columns follow the backend frame shape:
- *   ts, adminName, adminEmail, adminId, page, label, networkId,
- *   oldValue, newValue
+ * Full change-log table — one row per configuration change in the selected
+ * window. The backend emits:
  *
- * `adminId`, `oldValue`, and `newValue` are hidden by default so the
- * main view stays compact; they remain available in the field inspector
- * for drilldown or copy-paste. The `ts` column is the default sort —
- * Grafana's table viz sorts descending naturally when the frame arrives
- * sorted newest-first from the backend, but we also pin the override so
- * client-side re-sorting preserves newest-first as the resting state.
+ *   ts, adminName, adminEmail, adminId, networkName, networkId, ssidName,
+ *   ssidNumber, page, label, oldValue, newValue, clientType, networkUrl
+ *
+ * Visibility + ordering:
+ *  - `adminId`, `networkId`, `networkUrl` are hidden by default (available
+ *    via the field inspector) — operators read the friendly names.
+ *  - `oldValue` / `newValue` are shown so readers see *what* changed without
+ *    opening the field inspector. They hold raw JSON strings for API edits
+ *    and quoted scalars for dashboard edits; Grafana's auto cell renderer
+ *    truncates with a hover tooltip, and the inspect icon opens the full
+ *    payload for big diffs.
+ *  - Per-field `noValue: '—'` overrides keep null cells (e.g. org-level
+ *    changes have no networkName/ssidName/clientType) rendering as an em-
+ *    dash instead of bleeding into the panel-level "no data" message.
+ *    That's why we do NOT call `setNoValue()` at the panel level — on the
+ *    table viz, Grafana applies panel-level noValue per cell, so setting
+ *    it there made every null cell read "No configuration changes in the
+ *    selected range."
  */
 export function auditLogTable(): VizPanel {
-  const runner = configurationChangesQuery();
+  const runner = configurationChangesQuery({ kind: QueryKind.ConfigurationChanges });
 
   const organized = new SceneDataTransformer({
     $data: runner,
@@ -114,10 +106,35 @@ export function auditLogTable(): VizPanel {
         options: {
           excludeByName: {
             adminId: true,
-            oldValue: true,
-            newValue: true,
+            networkId: true,
+            networkUrl: true,
           },
-          renameByName: {},
+          indexByName: {
+            ts: 0,
+            adminName: 1,
+            adminEmail: 2,
+            networkName: 3,
+            ssidName: 4,
+            ssidNumber: 5,
+            clientType: 6,
+            page: 7,
+            label: 8,
+            oldValue: 9,
+            newValue: 10,
+          },
+          renameByName: {
+            ts: 'Time',
+            adminName: 'Admin',
+            adminEmail: 'Email',
+            networkName: 'Network',
+            ssidName: 'SSID',
+            ssidNumber: 'SSID #',
+            clientType: 'Client',
+            page: 'Source',
+            label: 'Change',
+            oldValue: 'Old value',
+            newValue: 'New value',
+          },
         },
       },
     ],
@@ -127,15 +144,21 @@ export function auditLogTable(): VizPanel {
     .setTitle('Configuration changes')
     .setDescription('Audit log of Meraki Dashboard configuration changes for the selected organization.')
     .setData(organized)
-    .setNoValue('No configuration changes in the selected range.')
     .setOverrides((b) => {
-      b.matchFieldsWithName('ts').overrideCustomFieldConfig('width', 190);
-      b.matchFieldsWithName('adminName').overrideCustomFieldConfig('width', 180);
-      b.matchFieldsWithName('adminEmail').overrideCustomFieldConfig('width', 220);
-      b.matchFieldsWithName('page').overrideCustomFieldConfig('width', 180);
-      b.matchFieldsWithName('label').overrideCustomFieldConfig('width', 220);
-      b.matchFieldsWithName('networkId').overrideCustomFieldConfig('width', 180);
+      b.matchFieldsWithName('Time').overrideCustomFieldConfig('width', 190);
+      b.matchFieldsWithName('Admin').overrideCustomFieldConfig('width', 160);
+      b.matchFieldsWithName('Email').overrideCustomFieldConfig('width', 220);
+      b.matchFieldsWithName('Network').overrideCustomFieldConfig('width', 180).overrideNoValue('— org-wide');
+      b.matchFieldsWithName('SSID').overrideCustomFieldConfig('width', 140).overrideNoValue('—');
+      b.matchFieldsWithName('SSID #').overrideCustomFieldConfig('width', 80).overrideNoValue('—');
+      b.matchFieldsWithName('Client').overrideCustomFieldConfig('width', 110).overrideNoValue('dashboard');
+      b.matchFieldsWithName('Source').overrideCustomFieldConfig('width', 160);
+      b.matchFieldsWithName('Change').overrideCustomFieldConfig('width', 260);
+      // oldValue / newValue hold JSON blobs — give them room and enable cell
+      // inspect so the operator can pop the full payload.
+      b.matchFieldsWithName('Old value').overrideCustomFieldConfig('inspect', true as any).overrideNoValue('—');
+      b.matchFieldsWithName('New value').overrideCustomFieldConfig('inspect', true as any).overrideNoValue('—');
     })
-    .setOption('sortBy', [{ displayName: 'ts', desc: true }] as any)
+    .setOption('sortBy', [{ displayName: 'Time', desc: true }] as any)
     .build();
 }

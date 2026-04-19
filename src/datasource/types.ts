@@ -82,6 +82,10 @@ export enum QueryKind {
 
   /* API optimisation — §7.3 (phase 12). */
   ConfigurationChanges = 'configurationChanges',
+  /* Wide numeric frame `{ts, <page1>, <page2>, ...}` bucketed for the audit-log
+   * timeline bar chart. Replaces a client-side groupingToMatrix transform that
+   * emitted string cells and made the viz report "missing a number field". */
+  ConfigurationChangesTimeline = 'configurationChangesTimeline',
   DeviceAvailabilityChanges = 'deviceAvailabilityChanges',
 
   /* §2.2 — per-device uplink loss/latency history (31-day window). */
@@ -213,6 +217,30 @@ export enum QueryKind {
    * narrows to one int64 `count` field so the standard reduce → threshold
    * chain works. */
   DeviceOfflineCount = 'deviceOfflineCount',
+
+  /* v0.8 — richer switch visualisations.
+   *  - SwitchFleetPowerHistory:      fleet-wide PoE draw over a 186-day
+   *                                  window, auto-bucketed to 20m/4h/1d.
+   *  - SwitchPortsClientsOverview:   per-switch active-port + online-client
+   *                                  counts from the org-wide clients-overview
+   *                                  feed (one paginated call).
+   *  - SwitchNeighborsTopology:      per-port LLDP+CDP peer from the org-wide
+   *                                  topology discovery feed.
+   *  - NetworkDhcpServersSeen:       DHCPv4 servers seen on switch ports in a
+   *                                  network; auto-resolves networkId from
+   *                                  serials when only serials are passed.
+   *  - NetworkSwitchStacks:          list of switch stacks in a network, can
+   *                                  be filtered to stacks containing a
+   *                                  specific serial.
+   *  - SwitchRoutingInterfaces:      L3 SVIs on an L3 switch OR on its stack.
+   *                                  Returns empty frame on L2 models so the
+   *                                  always-visible panel shows no-value text. */
+  SwitchFleetPowerHistory = 'switchFleetPowerHistory',
+  SwitchPortsClientsOverview = 'switchPortsClientsOverview',
+  SwitchNeighborsTopology = 'switchNeighborsTopology',
+  NetworkDhcpServersSeen = 'networkDhcpServersSeen',
+  NetworkSwitchStacks = 'networkSwitchStacks',
+  SwitchRoutingInterfaces = 'switchRoutingInterfaces',
 }
 
 export interface MerakiQuery extends DataQuery {

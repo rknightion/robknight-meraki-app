@@ -26,10 +26,17 @@ const configurationChangesTTL = 5 * time.Minute
 // silently truncating — the configurationChanges spec is stricter than our KnownEndpointRanges
 // Resolve() flow, which is meant for timeseries endpoints with resolution parameters.
 //
-// Frame shape: one long-format row per change entry, column order optimised for the
-// default Grafana table viz (time first, then actor, then context, then payload diff).
-// oldValue/newValue are JSON-encoded strings — the scene panel leaves them as-is so users
-// can inspect them in the panel's field inspector.
+// Frame shape: one long-format row per change entry. Columns are ordered so the default
+// table viz reads top-to-bottom as "when → who → scope → what → before/after → how":
+//
+//	ts, adminName, adminEmail, adminId, networkName, networkId, ssidName, ssidNumber,
+//	page, label, oldValue, newValue, clientType, networkUrl
+//
+// networkName, ssidName, ssidNumber, clientType, and networkUrl were added in v0.8 (audit-
+// log polish pass) so readers can understand org-level vs network-scoped changes without
+// looking up GUIDs. oldValue/newValue remain raw JSON-encoded strings — the scene panel
+// surfaces them as-is so operators can inspect the full diff in cell tooltips or via the
+// panel's field inspector.
 func handleConfigurationChanges(ctx context.Context, client *meraki.Client, q MerakiQuery, tr TimeRange, _ Options) ([]*data.Frame, error) {
 	if q.OrgID == "" {
 		return nil, fmt.Errorf("configurationChanges: orgId is required")
@@ -54,15 +61,20 @@ func handleConfigurationChanges(ctx context.Context, client *meraki.Client, q Me
 	}
 
 	var (
-		ts         []time.Time
-		adminName  []string
-		adminEmail []string
-		adminID    []string
-		page       []string
-		label      []string
-		networkID  []string
-		oldValue   []string
-		newValue   []string
+		ts          []time.Time
+		adminName   []string
+		adminEmail  []string
+		adminID     []string
+		networkName []string
+		networkID   []string
+		ssidName    []string
+		ssidNumber  []*int64
+		page        []string
+		label       []string
+		oldValue    []string
+		newValue    []string
+		clientType  []string
+		networkURL  []string
 	)
 	for _, ch := range changes {
 		var t time.Time
@@ -73,11 +85,27 @@ func handleConfigurationChanges(ctx context.Context, client *meraki.Client, q Me
 		adminName = append(adminName, ch.AdminName)
 		adminEmail = append(adminEmail, ch.AdminEmail)
 		adminID = append(adminID, ch.AdminID)
+		networkName = append(networkName, ch.NetworkName)
+		networkID = append(networkID, ch.NetworkID)
+		ssidName = append(ssidName, ch.SSIDName)
+		// ssidNumber is a nullable int in the Meraki response — keep the nullability so the
+		// table viz renders empty cells as blanks rather than 0s that look like SSID 0.
+		if ch.SSIDNumber != nil {
+			v := int64(*ch.SSIDNumber)
+			ssidNumber = append(ssidNumber, &v)
+		} else {
+			ssidNumber = append(ssidNumber, nil)
+		}
 		page = append(page, ch.Page)
 		label = append(label, ch.Label)
-		networkID = append(networkID, ch.NetworkID)
 		oldValue = append(oldValue, ch.OldValue)
 		newValue = append(newValue, ch.NewValue)
+		var ct string
+		if ch.Client != nil {
+			ct = ch.Client.Type
+		}
+		clientType = append(clientType, ct)
+		networkURL = append(networkURL, ch.NetworkURL)
 	}
 
 	return []*data.Frame{
@@ -86,11 +114,16 @@ func handleConfigurationChanges(ctx context.Context, client *meraki.Client, q Me
 			data.NewField("adminName", nil, adminName),
 			data.NewField("adminEmail", nil, adminEmail),
 			data.NewField("adminId", nil, adminID),
+			data.NewField("networkName", nil, networkName),
+			data.NewField("networkId", nil, networkID),
+			data.NewField("ssidName", nil, ssidName),
+			data.NewField("ssidNumber", nil, ssidNumber),
 			data.NewField("page", nil, page),
 			data.NewField("label", nil, label),
-			data.NewField("networkId", nil, networkID),
 			data.NewField("oldValue", nil, oldValue),
 			data.NewField("newValue", nil, newValue),
+			data.NewField("clientType", nil, clientType),
+			data.NewField("networkUrl", nil, networkURL),
 		),
 	}, nil
 }

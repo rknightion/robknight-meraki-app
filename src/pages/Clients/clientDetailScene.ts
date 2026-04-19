@@ -1,5 +1,4 @@
 import {
-  CustomVariable,
   EmbeddedScene,
   SceneControlsSpacer,
   SceneFlexItem,
@@ -10,7 +9,11 @@ import {
   SceneVariableSet,
   VariableValueSelectors,
 } from '@grafana/scenes';
-import { networkVariable, orgVariable } from '../../scene-helpers/variables';
+import {
+  clientVariable,
+  networkVariable,
+  orgVariable,
+} from '../../scene-helpers/variables';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
 import {
   clientLatencyTrend,
@@ -19,10 +22,11 @@ import {
 } from './panels';
 
 /**
- * Per-client drilldown scene. The MAC arrives via the route param and is
- * baked into a one-shot CustomVariable named `$client` so every panel on
- * the detail page reuses the standard `metrics: ['$client']` / `mac=$client`
- * plumbing without reading the URL directly.
+ * Per-client drilldown scene. The MAC arrives via the route param and seeds
+ * the `$client` TextBoxVariable so every panel on the detail page reuses the
+ * standard `metrics: ['$client']` / `mac=$client` plumbing. The picker stays
+ * editable — operators can paste a different MAC without going back to the
+ * Search tab.
  *
  * Layout (top-down):
  *   1. Config guard banner.
@@ -36,19 +40,7 @@ export function clientDetailScene(mac: string): EmbeddedScene {
       variables: [
         orgVariable(),
         networkVariable(),
-        new CustomVariable({
-          name: 'client',
-          label: 'MAC',
-          // The CustomVariable's `text`/`value` are what panels see; the
-          // `query` field is the picker's free-form options. Setting all
-          // three to the route-param MAC pins the variable to the URL
-          // identity while keeping the picker editable.
-          query: mac,
-          value: mac,
-          text: mac,
-          isMulti: false,
-          includeAll: false,
-        }),
+        clientVariable({ name: 'client', label: 'MAC', value: mac }),
       ],
     }),
     controls: [

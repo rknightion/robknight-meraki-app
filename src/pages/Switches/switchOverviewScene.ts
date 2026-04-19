@@ -11,16 +11,21 @@ import {
 } from '@grafana/scenes';
 import { orgOnlyVariables } from '../../scene-helpers/variables';
 import {
+  dhcpSeenServersTable,
+  switchL3InterfacesTable,
   switchOverviewKpiRow,
   switchPoeBudgetStat,
+  switchStackMembersTable,
   switchVlanDistributionDonut,
 } from './panels';
 
 /**
  * Overview tab for a single switch — KPI tiles (status, model, firmware,
- * client count) plus §4.4.3-1b additions: a PoE draw stat and a VLAN
- * distribution donut. The deeper per-port data lives on the Ports tab,
- * keeping this page fast to render and quick to eyeball.
+ * client count) + PoE draw + VLAN donut. v0.8 adds a two-column row of
+ * stack / L3-interfaces context (rendered as "not in a stack" / "no L3
+ * interfaces" empty states on L2-only or standalone switches — no feature
+ * flags, panels always visible) and a full-width DHCP-servers-seen table
+ * (rogue detection) scoped to the switch's network.
  */
 export function switchOverviewScene(serial: string): EmbeddedScene {
   const kpiItems = switchOverviewKpiRow(serial).map(
@@ -61,6 +66,29 @@ export function switchOverviewScene(serial: string): EmbeddedScene {
         new SceneFlexItem({
           minHeight: 320,
           body: switchVlanDistributionDonut(serial),
+        }),
+        // v0.8 — stack membership + L3 SVIs side-by-side. Both panels
+        // always render (memory `feedback_optional_feature_fallback`); the
+        // empty-state text carries the semantic for L2 / non-stacked.
+        new SceneFlexLayout({
+          direction: 'row',
+          children: [
+            new SceneFlexItem({
+              width: '50%',
+              minHeight: 220,
+              body: switchStackMembersTable(serial),
+            }),
+            new SceneFlexItem({
+              width: '50%',
+              minHeight: 220,
+              body: switchL3InterfacesTable(serial),
+            }),
+          ],
+        }),
+        // DHCP-seen full width — rogue detection surfaces prominently.
+        new SceneFlexItem({
+          minHeight: 240,
+          body: dhcpSeenServersTable(serial),
         }),
       ],
     }),

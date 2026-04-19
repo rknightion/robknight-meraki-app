@@ -67,21 +67,32 @@ func handleSwitchPorts(ctx context.Context, client *meraki.Client, q MerakiQuery
 	}
 
 	var (
-		serials      []string
-		switchNames  []string
-		models       []string
-		stackIDs     []string
-		networkIDs   []string
-		networkNames []string
-		portIDs      []string
-		enableds     []bool
-		statuses     []string
-		duplexes     []string
-		speedsMbps   []int64
-		clientCounts []int64
-		poePowerW    []float64
-		vlans        []string
-		allowedVlans []string
+		serials         []string
+		switchNames     []string
+		models          []string
+		stackIDs        []string
+		networkIDs      []string
+		networkNames    []string
+		portIDs         []string
+		enableds        []bool
+		statuses        []string
+		duplexes        []string
+		speedsMbps      []int64
+		clientCounts    []int64
+		poePowerW       []float64
+		vlans           []string
+		allowedVlans    []string
+		errorsCol       []string
+		warningsCol     []string
+		isUplink        []bool
+		stpState        []string
+		activeProfile   []string
+		trafficKbps     []float64
+		trafficKbpsSent []float64
+		trafficKbpsRecv []float64
+		usageKbSent     []int64
+		usageKbRecv     []int64
+		secureAuth      []string
 	)
 
 	for _, sw := range switches {
@@ -101,6 +112,40 @@ func handleSwitchPorts(ctx context.Context, client *meraki.Client, q MerakiQuery
 			poePowerW = append(poePowerW, p.PowerUsageInWh)
 			vlans = append(vlans, vlanString(p.Vlan))
 			allowedVlans = append(allowedVlans, p.AllowedVlans)
+			errorsCol = append(errorsCol, strings.Join(p.Errors, ", "))
+			warningsCol = append(warningsCol, strings.Join(p.Warnings, ", "))
+			isUplink = append(isUplink, p.IsUplink)
+			if p.SpanningTree != nil {
+				stpState = append(stpState, strings.Join(p.SpanningTree.Statuses, ", "))
+			} else {
+				stpState = append(stpState, "")
+			}
+			if p.ActiveProfile != nil {
+				activeProfile = append(activeProfile, p.ActiveProfile.Name)
+			} else {
+				activeProfile = append(activeProfile, "")
+			}
+			if p.TrafficInKbps != nil {
+				trafficKbps = append(trafficKbps, p.TrafficInKbps.Total)
+				trafficKbpsSent = append(trafficKbpsSent, p.TrafficInKbps.Sent)
+				trafficKbpsRecv = append(trafficKbpsRecv, p.TrafficInKbps.Recv)
+			} else {
+				trafficKbps = append(trafficKbps, 0)
+				trafficKbpsSent = append(trafficKbpsSent, 0)
+				trafficKbpsRecv = append(trafficKbpsRecv, 0)
+			}
+			if p.UsageInKb != nil {
+				usageKbSent = append(usageKbSent, p.UsageInKb.Sent)
+				usageKbRecv = append(usageKbRecv, p.UsageInKb.Recv)
+			} else {
+				usageKbSent = append(usageKbSent, 0)
+				usageKbRecv = append(usageKbRecv, 0)
+			}
+			if p.SecurePort != nil {
+				secureAuth = append(secureAuth, p.SecurePort.AuthenticationStatus)
+			} else {
+				secureAuth = append(secureAuth, "")
+			}
 		}
 	}
 
@@ -115,10 +160,21 @@ func handleSwitchPorts(ctx context.Context, client *meraki.Client, q MerakiQuery
 			data.NewField("portId", nil, portIDs),
 			data.NewField("enabled", nil, enableds),
 			data.NewField("status", nil, statuses),
+			data.NewField("isUplink", nil, isUplink),
 			data.NewField("duplex", nil, duplexes),
 			data.NewField("speedMbps", nil, speedsMbps),
+			data.NewField("stpState", nil, stpState),
+			data.NewField("activeProfile", nil, activeProfile),
 			data.NewField("clientCount", nil, clientCounts),
 			data.NewField("poePowerW", nil, poePowerW),
+			data.NewField("trafficKbps", nil, trafficKbps),
+			data.NewField("trafficKbpsSent", nil, trafficKbpsSent),
+			data.NewField("trafficKbpsRecv", nil, trafficKbpsRecv),
+			data.NewField("usageKbSent", nil, usageKbSent),
+			data.NewField("usageKbRecv", nil, usageKbRecv),
+			data.NewField("errors", nil, errorsCol),
+			data.NewField("warnings", nil, warningsCol),
+			data.NewField("secureAuth", nil, secureAuth),
 			data.NewField("vlan", nil, vlans),
 			data.NewField("allowedVlans", nil, allowedVlans),
 		),
@@ -311,16 +367,30 @@ func handleSwitchPortConfig(ctx context.Context, client *meraki.Client, q Meraki
 	}
 
 	var (
-		serials      []string
-		portIDs      []string
-		names        []string
-		enableds     []bool
-		types        []string
-		vlans        []string
-		voiceVlans   []string
-		allowedVlans []string
-		poeEnabled   []bool
-		tags         []string
+		serials                 []string
+		portIDs                 []string
+		names                   []string
+		enableds                []bool
+		types                   []string
+		vlans                   []string
+		voiceVlans              []string
+		allowedVlans            []string
+		poeEnabled              []bool
+		tags                    []string
+		rstpEnabled             []bool
+		stpGuard                []string
+		linkNegotiation         []string
+		udld                    []string
+		isolationEnabled        []bool
+		stormControlEnabled     []bool
+		daiTrusted              []bool
+		portScheduleID          []string
+		adaptivePolicyGroupID   []string
+		accessPolicyType        []string
+		accessPolicyNumber      []int64
+		macAllowList            []string
+		stickyMacAllowList      []string
+		stickyMacAllowListLimit []int64
 	)
 
 	for _, serial := range q.Serials {
@@ -342,6 +412,20 @@ func handleSwitchPortConfig(ctx context.Context, client *meraki.Client, q Meraki
 			allowedVlans = append(allowedVlans, p.AllowedVlans)
 			poeEnabled = append(poeEnabled, p.PoeEnabled)
 			tags = append(tags, strings.Join(p.Tags, ","))
+			rstpEnabled = append(rstpEnabled, p.RstpEnabled)
+			stpGuard = append(stpGuard, p.StpGuard)
+			linkNegotiation = append(linkNegotiation, p.LinkNegotiation)
+			udld = append(udld, p.Udld)
+			isolationEnabled = append(isolationEnabled, p.IsolationEnabled)
+			stormControlEnabled = append(stormControlEnabled, p.StormControlEnabled)
+			daiTrusted = append(daiTrusted, p.DaiTrusted)
+			portScheduleID = append(portScheduleID, p.PortScheduleID)
+			adaptivePolicyGroupID = append(adaptivePolicyGroupID, p.AdaptivePolicyGroupID)
+			accessPolicyType = append(accessPolicyType, p.AccessPolicyType)
+			accessPolicyNumber = append(accessPolicyNumber, int64(p.AccessPolicyNumber))
+			macAllowList = append(macAllowList, strings.Join(p.MacAllowList, ", "))
+			stickyMacAllowList = append(stickyMacAllowList, strings.Join(p.StickyMacAllowList, ", "))
+			stickyMacAllowListLimit = append(stickyMacAllowListLimit, int64(p.StickyMacAllowListLimit))
 		}
 	}
 
@@ -356,6 +440,20 @@ func handleSwitchPortConfig(ctx context.Context, client *meraki.Client, q Meraki
 			data.NewField("voiceVlan", nil, voiceVlans),
 			data.NewField("allowedVlans", nil, allowedVlans),
 			data.NewField("poeEnabled", nil, poeEnabled),
+			data.NewField("rstpEnabled", nil, rstpEnabled),
+			data.NewField("stpGuard", nil, stpGuard),
+			data.NewField("linkNegotiation", nil, linkNegotiation),
+			data.NewField("udld", nil, udld),
+			data.NewField("isolationEnabled", nil, isolationEnabled),
+			data.NewField("stormControlEnabled", nil, stormControlEnabled),
+			data.NewField("daiTrusted", nil, daiTrusted),
+			data.NewField("portScheduleId", nil, portScheduleID),
+			data.NewField("adaptivePolicyGroupId", nil, adaptivePolicyGroupID),
+			data.NewField("accessPolicyType", nil, accessPolicyType),
+			data.NewField("accessPolicyNumber", nil, accessPolicyNumber),
+			data.NewField("macAllowList", nil, macAllowList),
+			data.NewField("stickyMacAllowList", nil, stickyMacAllowList),
+			data.NewField("stickyMacAllowListLimit", nil, stickyMacAllowListLimit),
 			data.NewField("tags", nil, tags),
 		),
 	}, nil
@@ -868,7 +966,8 @@ func handleSwitchMacTable(ctx context.Context, client *meraki.Client, q MerakiQu
 			serialsCol = append(serialsCol, serial)
 			macs = append(macs, c.MAC)
 			ips = append(ips, c.IP)
-			vlans = append(vlans, vlanString(c.VLAN))
+			// VLAN is already a string on the wire ("25", "" for trunk).
+			vlans = append(vlans, c.VLAN)
 			ports = append(ports, c.SwitchPort)
 			descs = append(descs, c.Description)
 			users = append(users, c.User)

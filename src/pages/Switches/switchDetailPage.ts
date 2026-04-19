@@ -1,11 +1,14 @@
 import { SceneAppPage } from '@grafana/scenes';
 import { switchOverviewScene } from './switchOverviewScene';
 import { switchPortsScene } from './switchPortsScene';
+import { switchAlertsScene } from './switchAlertsScene';
 import { portDetailPage } from './portDetailPage';
 
 /**
- * Per-switch detail page — a tabbed `SceneAppPage` with two children:
- * Overview (KPI tiles) and Ports (the colour-coded port map).
+ * Per-switch detail page — a tabbed `SceneAppPage` with three children:
+ * Overview (KPI tiles + stack/L3/DHCP-seen context), Ports (the colour-
+ * coded port map + neighbours + MAC table), and Alerts (assurance-alerts
+ * feed filtered to this serial).
  *
  * The Ports tab additionally owns a nested drilldown for per-port detail
  * pages. We set the tab's `routePath` to `'ports/*'` (trailing wildcard)
@@ -19,12 +22,13 @@ export function switchDetailPage(serial: string, parentUrl: string): SceneAppPag
   const encodedSerial = encodeURIComponent(serial);
   const baseUrl = `${parentUrl}/${encodedSerial}`;
   const portsTabUrl = `${baseUrl}/ports`;
+  const alertsTabUrl = `${baseUrl}/alerts`;
 
   return new SceneAppPage({
     // TODO: resolve to the real switch name once the KPI row surfaces it.
     // The model column of the Devices frame would be a good fallback.
     title: serial,
-    subTitle: 'Switch detail — overview and per-port status.',
+    subTitle: 'Switch detail — overview, per-port status, and alerts.',
     titleIcon: 'sitemap',
     url: baseUrl,
     // Wildcard so the tabs and nested `ports/:portId/*` drilldown route
@@ -56,6 +60,12 @@ export function switchDetailPage(serial: string, parentUrl: string): SceneAppPag
             },
           },
         ],
+      }),
+      new SceneAppPage({
+        title: 'Alerts',
+        url: alertsTabUrl,
+        routePath: 'alerts',
+        getScene: () => switchAlertsScene(serial),
       }),
     ],
   });

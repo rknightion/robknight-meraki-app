@@ -196,6 +196,19 @@ export function switchPortMap(serial: string): VizPanel {
             // deployments). Removing the column avoids the "No port
             // status..." noValue leaking into every cell.
             stackId: true,
+            serial: true,
+            switchName: true,
+            model: true,
+            // Keep errors/warnings/stpState/activeProfile/trafficKbps visible by
+            // default — they're the v0.8 additions most operators care about.
+            // Hide the secondary traffic fields, secure-port state, and the
+            // isUplink flag (operators can restore via the panel editor).
+            trafficKbpsSent: true,
+            trafficKbpsRecv: true,
+            usageKbSent: true,
+            usageKbRecv: true,
+            secureAuth: true,
+            isUplink: true,
           },
           renameByName: {},
         },
@@ -205,7 +218,7 @@ export function switchPortMap(serial: string): VizPanel {
   return PanelBuilders.table()
     .setTitle('Port map')
     .setDescription(
-      'Per-port status for this switch — link speed, client count, PoE draw, configured VLAN, and allowed trunk VLANs. Click a port ID to open packet counters and config.'
+      'Per-port status — link state, speed, client count, PoE draw, live STP role, bound port profile, current traffic, and any Meraki-reported errors/warnings. Click a port ID for packet counters and config.'
     )
     .setData(organized)
     // Cell-level "missing value" placeholder. Previously this was a long
@@ -244,6 +257,22 @@ export function switchPortMap(serial: string): VizPanel {
       b.matchFieldsWithName('poePowerW').overrideCustomFieldConfig('width', 110);
       b.matchFieldsWithName('poePowerW').overrideUnit('watt');
       b.matchFieldsWithName('vlan').overrideCustomFieldConfig('width', 80);
+      // v0.8 additions: STP state / active profile / traffic rate / errors.
+      b.matchFieldsWithName('stpState').overrideCustomFieldConfig('width', 180);
+      b.matchFieldsWithName('stpState').overrideDisplayName('STP');
+      b.matchFieldsWithName('activeProfile').overrideCustomFieldConfig('width', 160);
+      b.matchFieldsWithName('activeProfile').overrideDisplayName('Profile');
+      b.matchFieldsWithName('trafficKbps').overrideUnit('Kbits');
+      b.matchFieldsWithName('trafficKbps').overrideCustomFieldConfig('width', 130);
+      b.matchFieldsWithName('trafficKbps').overrideDisplayName('Traffic');
+      b.matchFieldsWithName('errors').overrideDisplayName('Errors');
+      b.matchFieldsWithName('warnings').overrideDisplayName('Warnings');
+      b.matchFieldsWithName('errors').overrideCustomFieldConfig('cellOptions', {
+        type: 'color-text',
+      } as any);
+      b.matchFieldsWithName('warnings').overrideCustomFieldConfig('cellOptions', {
+        type: 'color-text',
+      } as any);
     })
     .build();
 }
@@ -309,11 +338,55 @@ export function switchPortConfigPanel(serial: string, portId: string): VizPanel 
     serials: [serial],
     metrics: [portId],
   });
+  // Hide metadata columns that duplicate the URL context (serial + portId);
+  // rename the v0.8 additions to human-friendly labels. Frame lists serial
+  // + portId before every other field; dropping them keeps the grid readable.
+  const organized = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: {
+            serial: true,
+            portId: true,
+          },
+          renameByName: {},
+        },
+      },
+    ],
+  });
   return PanelBuilders.table()
     .setTitle('Port configuration')
-    .setDescription('Configured port settings for this interface.')
-    .setData(runner)
+    .setDescription(
+      'Configured port settings — VLAN, PoE, STP, port-schedule, access policy, storm-control, DAI trust, MAC allow-list, adaptive policy group.'
+    )
+    .setData(organized)
     .setNoValue('No configuration reported for this port.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('name').overrideDisplayName('Name');
+      b.matchFieldsWithName('enabled').overrideDisplayName('Enabled');
+      b.matchFieldsWithName('type').overrideDisplayName('Type');
+      b.matchFieldsWithName('vlan').overrideDisplayName('VLAN');
+      b.matchFieldsWithName('voiceVlan').overrideDisplayName('Voice VLAN');
+      b.matchFieldsWithName('allowedVlans').overrideDisplayName('Allowed VLANs');
+      b.matchFieldsWithName('poeEnabled').overrideDisplayName('PoE');
+      b.matchFieldsWithName('rstpEnabled').overrideDisplayName('RSTP');
+      b.matchFieldsWithName('stpGuard').overrideDisplayName('STP guard');
+      b.matchFieldsWithName('linkNegotiation').overrideDisplayName('Link negotiation');
+      b.matchFieldsWithName('udld').overrideDisplayName('UDLD');
+      b.matchFieldsWithName('isolationEnabled').overrideDisplayName('Isolation');
+      b.matchFieldsWithName('stormControlEnabled').overrideDisplayName('Storm control');
+      b.matchFieldsWithName('daiTrusted').overrideDisplayName('DAI trusted');
+      b.matchFieldsWithName('portScheduleId').overrideDisplayName('Port schedule');
+      b.matchFieldsWithName('adaptivePolicyGroupId').overrideDisplayName('Adaptive policy');
+      b.matchFieldsWithName('accessPolicyType').overrideDisplayName('Access policy');
+      b.matchFieldsWithName('accessPolicyNumber').overrideDisplayName('Access policy #');
+      b.matchFieldsWithName('macAllowList').overrideDisplayName('MAC allow-list');
+      b.matchFieldsWithName('stickyMacAllowList').overrideDisplayName('Sticky MAC allow-list');
+      b.matchFieldsWithName('stickyMacAllowListLimit').overrideDisplayName('Sticky MAC limit');
+      b.matchFieldsWithName('tags').overrideDisplayName('Tags');
+    })
     .build();
 }
 
@@ -625,6 +698,505 @@ export function switchMacAddressTable(serial: string): VizPanel {
  * feed. We reduce with `sum` across matching rows so the donut slice is the
  * total port count for that VLAN regardless of how many switches carry it.
  */
+// v0.8 — fleet PoE history + clients-per-switch + neighbors + alerts + DHCP
+// rogue detection + stacks + L3 routing. See /Users/rob/.claude/plans/
+// i-want-us-to-groovy-petal.md for rationale.
+//
+// Conventions for the v0.8 section:
+//   - Every new panel uses `noValue` text so empty responses don't render
+//     a confusing blank. L3/stack panels specifically render "Not an L3
+//     switch" / "Not in a stack" per memory `feedback_optional_feature_fallback`.
+//   - Drill-ins on the Neighbors table link to the port detail page the
+//     same way switchPortMap does, so the URL cascade stays consistent.
+
+/**
+ * Fleet-wide PoE history timeseries. Single series across the org over the
+ * selected time range (Meraki auto-buckets the data based on the requested
+ * window — ~20m buckets at ≤ 1 week, 4h at ≤ 1 month, 1d at 186d max).
+ */
+export function fleetPoeHistoryTimeseries(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchFleetPowerHistory,
+  });
+  return PanelBuilders.timeseries()
+    .setTitle('Fleet PoE draw')
+    .setDescription(
+      'Total Power-over-Ethernet draw across every switch port in the organization, over the selected time range. ' +
+        'Meraki auto-buckets this series (20-minute / 4-hour / 1-day intervals) based on the requested window.'
+    )
+    .setData(runner)
+    .setNoValue('No PoE history available for this organization.')
+    .setUnit('watt')
+    .setCustomFieldConfig('lineWidth', 2)
+    .setCustomFieldConfig('fillOpacity', 15)
+    .setCustomFieldConfig('spanNulls', true)
+    .setOption('legend', { showLegend: true, displayMode: 'list', placement: 'bottom' } as any)
+    .setOption('tooltip', { mode: 'single' } as any)
+    .build();
+}
+
+/**
+ * Clients-per-switch horizontal bar chart, backed by the org-wide clients
+ * overview feed (one paginated call across the estate). Ports-with-clients
+ * count sits beside the online-clients sum — side-by-side bars per switch.
+ */
+export function clientsPerSwitchBarChart(): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchPortsClientsOverview,
+  });
+  // Drop metadata columns from the aggregation so bargauge's lastNotNull
+  // reducer only sees the numeric fields. Keep switchName available as the
+  // display name via a filterFieldsByName → switchName row index trick would
+  // be over-engineered; instead the backend already aggregates per-switch
+  // and the panel uses `showValues=auto` which includes the row label.
+  const organized = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: {
+            networkId: true,
+            networkName: true,
+            model: true,
+            activePortCount: true,
+          },
+          renameByName: {
+            switchName: 'Switch',
+            clientsOnline: 'Clients online',
+          },
+          indexByName: {},
+        },
+      },
+    ],
+  });
+  return PanelBuilders.table()
+    .setTitle('Clients per switch')
+    .setDescription(
+      'Online clients per switch across the organization, aggregated from the per-port clients-overview feed in a single API call. ' +
+        'Defaults to the last 24 hours; adjust the panel time range to narrow the timespan.'
+    )
+    .setData(organized)
+    .setNoValue('No clients reported on any switch ports in the organization.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('Clients online').overrideCustomFieldConfig('cellOptions', {
+        type: 'gauge',
+        mode: 'gradient',
+      } as any);
+      b.matchFieldsWithName('serial').overrideCustomFieldConfig('width', 140);
+      b.matchFieldsWithName('Switch').overrideCustomFieldConfig('width', 200);
+    })
+    .build();
+}
+
+/**
+ * Per-switch neighbors table — one row per LLDP/CDP peer per port. Drill-in
+ * on `portId` follows the same port-detail URL pattern as the port map.
+ */
+export function switchNeighborsTable(serial: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchNeighborsTopology,
+    serials: [serial],
+  });
+  // Hide the serial + network columns — every row on the per-switch detail
+  // page carries the same values, they're noise in this context.
+  const organized = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: {
+            serial: true,
+            switchName: true,
+            networkId: true,
+            networkName: true,
+            peerChassisId: true,
+            peerCapabilities: true,
+          },
+          renameByName: {
+            portId: 'Port',
+            source: 'Source',
+            peerSystemName: 'Peer',
+            peerDescription: 'Description',
+            peerPortId: 'Peer port',
+            peerAddress: 'Peer address',
+            lastUpdatedAt: 'Last seen',
+          },
+        },
+      },
+    ],
+  });
+  return PanelBuilders.table()
+    .setTitle('Neighbors (LLDP / CDP)')
+    .setDescription(
+      'Switch-port peers discovered via LLDP and CDP. A single port can appear twice — once per protocol — when the peer advertises both.'
+    )
+    .setData(organized)
+    .setNoValue('No LLDP/CDP neighbours detected on this switch in the last 24 hours.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('Port').overrideLinks([
+        {
+          title: 'Open port',
+          url: `${PLUGIN_BASE_URL}/${ROUTES.Switches}/${encodeURIComponent(
+            serial
+          )}/ports/\${__value.raw:percentencode}\${__url.params}`,
+        },
+      ]);
+      b.matchFieldsWithName('Port').overrideCustomFieldConfig('width', 80);
+      b.matchFieldsWithName('Source').overrideCustomFieldConfig('width', 80);
+      b.matchFieldsWithName('Peer').overrideCustomFieldConfig('width', 200);
+      b.matchFieldsWithName('Peer port').overrideCustomFieldConfig('width', 160);
+      b.matchFieldsWithName('Peer address').overrideCustomFieldConfig('width', 140);
+    })
+    .build();
+}
+
+/**
+ * Per-switch alerts table — scopes `KindAlerts` to `serials: [serial]` so
+ * the backend filters the assurance-alerts feed to this switch only. Uses
+ * `alertStatus: 'all'` so active + resolved + dismissed are all shown
+ * (status column is colour-coded by the default Meraki semantic values).
+ */
+export function switchAlertsTable(serial: string): VizPanel {
+  const runner = new SceneQueryRunner({
+    datasource: MERAKI_DS_REF,
+    queries: [
+      {
+        refId: 'A',
+        kind: QueryKind.Alerts,
+        orgId: '$org',
+        serials: [serial],
+        // Severity-via-metrics contract — blank entry = "all severities"
+        // (see src/pages/Alerts/panels.ts comment block).
+        metrics: [''],
+        alertStatus: 'all',
+      },
+    ],
+  });
+  const organized = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: {
+            description: true,
+            network_id: true,
+            device_productType: true,
+            device_serial: true,
+            device_name: true,
+            drilldownUrl: true,
+          },
+          renameByName: {
+            occurredAt: 'Timestamp',
+            severity: 'Severity',
+            status: 'Status',
+            category: 'Category',
+            alertType: 'Alert type',
+            network_name: 'Network',
+            title: 'Title',
+          },
+        },
+      },
+    ],
+  });
+  return PanelBuilders.table()
+    .setTitle('Alerts')
+    .setDescription(
+      'Assurance alerts scoped to this switch across the selected time range. Resolved and dismissed alerts are shown alongside active ones, colour-coded in the Status column.'
+    )
+    .setData(organized)
+    .setNoValue('No alerts reported for this switch in the selected time range.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('Severity').overrideCustomFieldConfig('cellOptions', {
+        type: 'color-text',
+      } as any);
+      b.matchFieldsWithName('Severity').overrideMappings([
+        {
+          type: 'value' as any,
+          options: {
+            critical: { color: 'red', index: 0, text: 'critical' },
+            warning: { color: 'orange', index: 1, text: 'warning' },
+            informational: { color: 'blue', index: 2, text: 'info' },
+            info: { color: 'blue', index: 3, text: 'info' },
+          },
+        },
+      ]);
+      b.matchFieldsWithName('Status').overrideCustomFieldConfig('cellOptions', {
+        type: 'color-text',
+      } as any);
+      b.matchFieldsWithName('Status').overrideMappings([
+        {
+          type: 'value' as any,
+          options: {
+            active: { color: 'red', index: 0, text: 'active' },
+            resolved: { color: 'green', index: 1, text: 'resolved' },
+            dismissed: { color: 'blue', index: 2, text: 'dismissed' },
+          },
+        },
+      ]);
+      b.matchFieldsWithName('Timestamp').overrideCustomFieldConfig('width', 180);
+      b.matchFieldsWithName('Severity').overrideCustomFieldConfig('width', 100);
+      b.matchFieldsWithName('Status').overrideCustomFieldConfig('width', 100);
+      b.matchFieldsWithName('Category').overrideCustomFieldConfig('width', 140);
+      b.matchFieldsWithName('Network').overrideCustomFieldConfig('width', 160);
+    })
+    .build();
+}
+
+/**
+ * DHCP servers seen on a switch's network — rogue-detection panel. Query
+ * passes `serials: [serial]` so the backend resolves the network via the
+ * cached org-level switches feed (no extra API calls for the frontend).
+ * `trusted=false` rows are highlighted red by a cell colour override.
+ */
+export function dhcpSeenServersTable(serial: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.NetworkDhcpServersSeen,
+    serials: [serial],
+  });
+  const organized = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: {
+            clientId: true,
+            lastPacket: true,
+          },
+          renameByName: {
+            mac: 'DHCP MAC',
+            ipv4: 'IPv4',
+            vlan: 'VLAN',
+            seenBy: 'Seen by',
+            lastSeen: 'Last seen',
+            trusted: 'Trusted',
+          },
+        },
+      },
+    ],
+  });
+  return PanelBuilders.table()
+    .setTitle('DHCP servers seen on this switch network')
+    .setDescription(
+      'DHCPv4 server offers observed on any switch port in this switch\u2019s network over the last 24 hours. ' +
+        '"Trusted" reflects the network\u2019s configured allow-list — untrusted servers are strong rogue-DHCP candidates.'
+    )
+    .setData(organized)
+    .setNoValue('No DHCPv4 offers observed on this network in the last 24 hours.')
+    .setOverrides((b) => {
+      b.matchFieldsWithName('Trusted').overrideCustomFieldConfig('cellOptions', {
+        type: 'color-text',
+      } as any);
+      b.matchFieldsWithName('Trusted').overrideMappings([
+        {
+          type: 'value' as any,
+          options: {
+            'true': { color: 'green', index: 0, text: 'yes' },
+            'false': { color: 'red', index: 1, text: 'no' },
+          },
+        },
+      ]);
+      b.matchFieldsWithName('DHCP MAC').overrideCustomFieldConfig('width', 160);
+      b.matchFieldsWithName('IPv4').overrideCustomFieldConfig('width', 140);
+      b.matchFieldsWithName('VLAN').overrideCustomFieldConfig('width', 80);
+      b.matchFieldsWithName('Last seen').overrideCustomFieldConfig('width', 180);
+    })
+    .build();
+}
+
+/**
+ * Stack members table. Filters server-side to stacks containing `serial` so
+ * the panel shows "Not in a stack" for standalone switches.
+ */
+export function switchStackMembersTable(serial: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.NetworkSwitchStacks,
+    serials: [serial],
+  });
+  const organized = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: { networkId: true },
+          renameByName: {
+            stackId: 'Stack ID',
+            stackName: 'Name',
+            memberSerials: 'Members',
+          },
+        },
+      },
+    ],
+  });
+  return PanelBuilders.table()
+    .setTitle('Stack')
+    .setDescription('Switch-stack membership — empty when the switch is standalone.')
+    .setData(organized)
+    .setNoValue('This switch is not a stack member.')
+    .build();
+}
+
+/**
+ * L3 interfaces table — one row per SVI on a standalone L3 switch, or on
+ * the containing stack if the switch is in one. L2 models get a
+ * no-value message (the backend returns an empty frame on 404).
+ */
+export function switchL3InterfacesTable(serial: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchRoutingInterfaces,
+    serials: [serial],
+  });
+  const organized = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'organize',
+        options: {
+          excludeByName: { interfaceId: true, multicastRouting: true },
+          renameByName: {
+            name: 'Name',
+            subnet: 'Subnet',
+            vlanId: 'VLAN',
+            ipv4Address: 'IPv4 address',
+            defaultGateway: 'Default gateway',
+            source: 'Source',
+          },
+        },
+      },
+    ],
+  });
+  return PanelBuilders.table()
+    .setTitle('L3 interfaces')
+    .setDescription(
+      'Layer-3 switched virtual interfaces configured on this switch or its stack. L2-only models show no interfaces.'
+    )
+    .setData(organized)
+    .setNoValue('No L3 interfaces on this switch — this model may be L2-only.')
+    .build();
+}
+
+/**
+ * Per-port inline stat row — live STP state / active port profile / traffic
+ * rate / power draw sourced from the widened `switch_ports` frame. Filters
+ * client-side by serial + portId. Renders four stat tiles as a wide frame.
+ */
+export function portDetailKpiStats(serial: string, portId: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchPorts,
+    serials: [serial],
+  });
+  // Filter the multi-port frame down to this port, then filter to just the
+  // columns we want to surface. `filterByValue` on portId (a string) then
+  // `filterFieldsByName` to the four target columns gives us a wide frame
+  // the stat viz can render as four tiles with `reduceOptions.fields = /.*/`.
+  const filtered = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'filterByValue',
+        options: {
+          filters: [
+            {
+              fieldName: 'portId',
+              config: { id: 'equal', options: { value: portId } },
+            },
+          ],
+          type: 'include',
+          match: 'any',
+        },
+      },
+      {
+        id: 'filterFieldsByName',
+        options: {
+          include: { names: ['stpState', 'activeProfile', 'trafficKbps', 'poePowerW'] },
+        },
+      },
+    ],
+  });
+  return PanelBuilders.stat()
+    .setTitle('Port state')
+    .setDescription('Live port state: STP role, active port profile, current throughput, power draw.')
+    .setData(filtered)
+    .setNoValue('—')
+    .setOption('reduceOptions', {
+      values: false,
+      calcs: ['lastNotNull'],
+      fields: '/.*/',
+    } as any)
+    .setOption('colorMode', 'value' as any)
+    .setOption('textMode', 'value_and_name' as any)
+    .setOverrides((b) => {
+      b.matchFieldsWithName('trafficKbps').overrideUnit('Kbits');
+      b.matchFieldsWithName('trafficKbps').overrideDisplayName('Traffic');
+      b.matchFieldsWithName('poePowerW').overrideUnit('watt');
+      b.matchFieldsWithName('poePowerW').overrideDisplayName('PoE');
+      b.matchFieldsWithName('stpState').overrideDisplayName('STP');
+      b.matchFieldsWithName('activeProfile').overrideDisplayName('Profile');
+    })
+    .build();
+}
+
+/**
+ * Per-port neighbour — one-row "who is the peer on this port" key/value,
+ * sourced from the same neighbors feed used by the switch Ports tab.
+ */
+export function portDetailNeighborPanel(serial: string, portId: string): VizPanel {
+  const runner = oneQuery({
+    kind: QueryKind.SwitchNeighborsTopology,
+    serials: [serial],
+  });
+  const filtered = new SceneDataTransformer({
+    $data: runner,
+    transformations: [
+      {
+        id: 'filterByValue',
+        options: {
+          filters: [
+            {
+              fieldName: 'portId',
+              config: { id: 'equal', options: { value: portId } },
+            },
+          ],
+          type: 'include',
+          match: 'any',
+        },
+      },
+      {
+        id: 'organize',
+        options: {
+          excludeByName: {
+            serial: true,
+            switchName: true,
+            networkId: true,
+            networkName: true,
+            portId: true,
+            peerChassisId: true,
+            peerCapabilities: true,
+          },
+          renameByName: {
+            source: 'Source',
+            peerSystemName: 'Peer',
+            peerDescription: 'Description',
+            peerPortId: 'Peer port',
+            peerAddress: 'Peer address',
+            lastUpdatedAt: 'Last seen',
+          },
+        },
+      },
+    ],
+  });
+  return PanelBuilders.table()
+    .setTitle('Neighbor (LLDP / CDP)')
+    .setDescription('Port-level LLDP/CDP peer. Shows up to two rows when both protocols report a peer.')
+    .setData(filtered)
+    .setNoValue('No LLDP/CDP neighbour reported on this port in the last 24 hours.')
+    .build();
+}
+
 export function switchVlanDistributionDonut(serial?: string): VizPanel {
   // Per-switch detail scenes scope the donut to one serial; the fleet page
   // omits the serial for an org-wide view. Scoping server-side keeps the

@@ -120,7 +120,7 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 	"organizations/{organizationId}/apiRequests/overview": {
 		MaxTimespan: 31 * 24 * time.Hour,
 	},
-	"networks/{networkId}/wireless/usageHistory": {
+	"networks/{networkId}/clients/bandwidthUsageHistory": {
 		MaxTimespan: 31 * 24 * time.Hour,
 		AllowedResolutions: []time.Duration{
 			5 * time.Minute,
@@ -339,6 +339,12 @@ var KnownEndpointRanges = map[string]EndpointTimeRange{
 		MaxTimespan: 186 * 24 * time.Hour,
 	},
 	"organizations/{organizationId}/summary/top/applications/categories/byUsage": {
+		MaxTimespan: 186 * 24 * time.Hour,
+	},
+
+	// v0.8 — fleet-wide PoE history. Meraki auto-buckets based on window
+	// (20m/4h/1d) so no `AllowedResolutions` config; max 186 days.
+	"organizations/{organizationId}/summary/switch/power/history": {
 		MaxTimespan: 186 * 24 * time.Hour,
 	},
 }

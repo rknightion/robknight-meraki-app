@@ -25,6 +25,11 @@ import (
 // value strings. We keep oldValue/newValue as raw strings (not pre-decoded) so the UI can
 // render whatever makes sense — full JSON tree, single-line diff, or a "changed N fields"
 // tally — without losing information.
+//
+// NetworkName/NetworkURL/SSIDName/SSIDNumber/Client are all optional — present only on
+// changes that are network- or SSID-scoped, or that were made via an API client. The
+// audit-log panel renders NetworkName when present and falls back to NetworkID otherwise,
+// so org-level changes show a sensible placeholder instead of a raw GUID.
 type ConfigurationChange struct {
 	TS         *time.Time `json:"ts,omitempty"`
 	AdminName  string     `json:"adminName,omitempty"`
@@ -36,7 +41,22 @@ type ConfigurationChange struct {
 	NewValue   string     `json:"newValue,omitempty"`
 	// NetworkID is present on network-scoped changes (missing for org-level ones). We keep
 	// it because the filters scene variable binds to it.
-	NetworkID string `json:"networkId,omitempty"`
+	NetworkID   string                     `json:"networkId,omitempty"`
+	NetworkName string                     `json:"networkName,omitempty"`
+	NetworkURL  string                     `json:"networkUrl,omitempty"`
+	SSIDName    string                     `json:"ssidName,omitempty"`
+	SSIDNumber  *int                       `json:"ssidNumber,omitempty"`
+	Client      *ConfigurationChangeClient `json:"client,omitempty"`
+}
+
+// ConfigurationChangeClient is Meraki's nested `client` object. Populated when the change
+// was made via an API key or a programmatic client; omitted for dashboard UI edits. We
+// surface `Type` as a distinct column so operators can filter "API-driven changes" from
+// human edits without regexing the `page` column (which reads "via API" for both REST and
+// mobile-app calls).
+type ConfigurationChangeClient struct {
+	ID   string `json:"id,omitempty"`
+	Type string `json:"type,omitempty"`
 }
 
 // ConfigurationChangesOptions filters the configurationChanges call. All fields are
