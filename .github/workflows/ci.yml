@@ -240,8 +240,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # required for playwright-gh-pages
-          persist-credentials: true
+          # deploy-report-pages authenticates via its own github-token input
+          # and the inner actions/checkout@v5 it runs; persisting credentials
+          # on the outer checkout produced a second Authorization header on
+          # GitHub's git backend ("Duplicate header: Authorization" → 400).
+          persist-credentials: false
       - name: Publish report
         uses: grafana/plugin-actions/playwright-gh-pages/deploy-report-pages@deploy-report-pages/v1.1.0
         with:
