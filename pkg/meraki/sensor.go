@@ -37,6 +37,17 @@ type SensorReading struct {
 	Noise       *NoiseReading       `json:"noise,omitempty"`
 	Battery     *BatteryReading     `json:"battery,omitempty"`
 	IAQ         *IAQReading         `json:"indoorAirQuality,omitempty"`
+
+	// MT40 smart power monitor fields. Each sensor sample populates at most
+	// one of these; the union is discriminated by `Metric`.
+	RealPower           *RealPowerReading           `json:"realPower,omitempty"`
+	ApparentPower       *ApparentPowerReading       `json:"apparentPower,omitempty"`
+	Voltage             *VoltageReading             `json:"voltage,omitempty"`
+	Current             *CurrentReading             `json:"current,omitempty"`
+	Frequency           *FrequencyReading           `json:"frequency,omitempty"`
+	PowerFactor         *PowerFactorReading         `json:"powerFactor,omitempty"`
+	DownstreamPower     *DownstreamPowerReading     `json:"downstreamPower,omitempty"`
+	RemoteLockoutSwitch *RemoteLockoutSwitchReading `json:"remoteLockoutSwitch,omitempty"`
 }
 
 type TemperatureReading struct {
@@ -82,6 +93,41 @@ type BatteryReading struct {
 
 type IAQReading struct {
 	Score float64 `json:"score"`
+}
+
+// MT40 smart-power-monitor readings. Meraki reports power using a union of
+// scalar fields with different key names per metric (`draw` vs `level` vs
+// `percentage`) — keep the types narrow to mirror the wire format.
+type RealPowerReading struct {
+	Draw float64 `json:"draw"`
+}
+
+type ApparentPowerReading struct {
+	Draw float64 `json:"draw"`
+}
+
+type VoltageReading struct {
+	Level float64 `json:"level"`
+}
+
+type CurrentReading struct {
+	Draw float64 `json:"draw"`
+}
+
+type FrequencyReading struct {
+	Level float64 `json:"level"`
+}
+
+type PowerFactorReading struct {
+	Percentage float64 `json:"percentage"`
+}
+
+type DownstreamPowerReading struct {
+	Enabled bool `json:"enabled"`
+}
+
+type RemoteLockoutSwitchReading struct {
+	Locked bool `json:"locked"`
 }
 
 // SensorReadingsLatestOptions filters the latest-readings response.
@@ -135,32 +181,42 @@ type SensorReadingHistoryPoint struct {
 	Noise       *NoiseReading       `json:"noise,omitempty"`
 	Battery     *BatteryReading     `json:"battery,omitempty"`
 	IAQ         *IAQReading         `json:"indoorAirQuality,omitempty"`
+
+	RealPower           *RealPowerReading           `json:"realPower,omitempty"`
+	ApparentPower       *ApparentPowerReading       `json:"apparentPower,omitempty"`
+	Voltage             *VoltageReading             `json:"voltage,omitempty"`
+	Current             *CurrentReading             `json:"current,omitempty"`
+	Frequency           *FrequencyReading           `json:"frequency,omitempty"`
+	PowerFactor         *PowerFactorReading         `json:"powerFactor,omitempty"`
+	DownstreamPower     *DownstreamPowerReading     `json:"downstreamPower,omitempty"`
+	RemoteLockoutSwitch *RemoteLockoutSwitchReading `json:"remoteLockoutSwitch,omitempty"`
 }
 
 // SensorReadingsHistoryOptions filters a historical-readings query. When Window is non-nil it
 // takes precedence; otherwise Timespan is used with the API's default `t1=now`.
+//
+// NOTE: the endpoint has no `interval` parameter, so resolution/quantization is
+// deliberately absent from this struct. Long-range queries are chunked into
+// 7-day windows by the handler rather than bucketed server-side.
 type SensorReadingsHistoryOptions struct {
 	NetworkIDs []string
 	Serials    []string
 	Metrics    []string
 	Window     *TimeRangeWindow
 	Timespan   time.Duration
-	Resolution time.Duration
 }
 
 func (o SensorReadingsHistoryOptions) values() url.Values {
 	v := url.Values{"perPage": []string{"1000"}}
+	// The /organizations/{orgId}/sensor/readings/history endpoint does not
+	// accept an `interval` parameter — Meraki returns raw samples at the
+	// sensor's native cadence. Sending `interval` against this endpoint is a
+	// no-op at best; `t0`/`t1` or `timespan` are the only time-scope knobs.
 	if o.Window != nil {
 		v.Set("t0", o.Window.T0.UTC().Format(time.RFC3339))
 		v.Set("t1", o.Window.T1.UTC().Format(time.RFC3339))
-		if o.Window.Resolution > 0 {
-			v.Set("interval", strconv.Itoa(int(o.Window.Resolution.Seconds())))
-		}
 	} else if o.Timespan > 0 {
 		v.Set("timespan", strconv.Itoa(int(o.Timespan.Seconds())))
-		if o.Resolution > 0 {
-			v.Set("interval", strconv.Itoa(int(o.Resolution.Seconds())))
-		}
 	}
 	for _, id := range o.NetworkIDs {
 		v.Add("networkIds[]", id)

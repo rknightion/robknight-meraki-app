@@ -30,6 +30,7 @@ interface QueryParams {
   metrics?: SensorMetric[];
   timespanSeconds?: number;
   maxDataPoints?: number;
+  band?: string;
 }
 
 function oneQuery(params: QueryParams): SceneQueryRunner {
@@ -43,6 +44,7 @@ function oneQuery(params: QueryParams): SceneQueryRunner {
     metrics,
     timespanSeconds,
     maxDataPoints,
+    band,
   } = params;
 
   const query: Record<string, unknown> & { refId: string } = { refId, kind };
@@ -63,6 +65,9 @@ function oneQuery(params: QueryParams): SceneQueryRunner {
   }
   if (typeof timespanSeconds === 'number') {
     query.timespanSeconds = timespanSeconds;
+  }
+  if (band) {
+    query.band = band;
   }
 
   return new SceneQueryRunner({
@@ -253,6 +258,7 @@ function apChannelUtilPanel(serial: string, band?: string): VizPanel {
         kind: QueryKind.WirelessChannelUtil,
         serials: [serial],
         maxDataPoints: 500,
+        band,
       })
     )
     .setUnit('percent')

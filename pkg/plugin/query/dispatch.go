@@ -288,6 +288,12 @@ type MerakiQuery struct {
 	// severity=$severity=empty into severity="all" → Meraki HTTP 500.
 	// Single-valued, never interpolated as a template.
 	AlertStatus string `json:"alertStatus,omitempty"`
+	// Band is a wireless-only filter for wirelessChannelUtil ("2.4" | "5" |
+	// "6"). When set, the handler drops frames whose band label doesn't
+	// match. Dedicated field rather than a Metrics[0] overload because the
+	// per-band AP RF panels pass a hard-coded literal and we want that to
+	// skip template interpolation unconditionally.
+	Band string `json:"band,omitempty"`
 }
 
 // TimeRange is Grafana's panel time range in unix milliseconds (same encoding

@@ -8,20 +8,22 @@ import {
   SceneVariableSet,
   VariableValueSelectors,
 } from '@grafana/scenes';
+import { orgVariable } from '../../scene-helpers/variables';
 import { apRfPanels } from './panels';
-import { wirelessBandVariable } from './variables';
 
 /**
  * Per-AP RF tab — one channel-utilisation timeseries per Wi-Fi band. Each
  * panel carries a `HideWhenEmpty` behavior so silent bands collapse instead
- * of leaving dead chart real estate on single-band APs. The `$band` variable
- * is exposed so users can force a single-band view across the stack.
+ * of leaving dead chart real estate on single-band APs. The per-band filter
+ * is passed through the query contract (`band` field on MerakiQuery) — no
+ * user-facing picker, since the three fixed panels already decompose the
+ * view by band.
  */
 export function apRfScene(serial: string): EmbeddedScene {
   return new EmbeddedScene({
     $timeRange: new SceneTimeRange({ from: 'now-6h', to: 'now' }),
     $variables: new SceneVariableSet({
-      variables: [wirelessBandVariable()],
+      variables: [orgVariable()],
     }),
     controls: [
       new VariableValueSelectors({}),

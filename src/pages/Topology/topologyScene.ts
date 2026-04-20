@@ -11,25 +11,20 @@ import {
 } from '@grafana/scenes';
 import { orgVariable } from '../../scene-helpers/variables';
 import { configGuardFlexItem } from '../../scene-helpers/ConfigGuard';
-import { networkGeomapPanel, networkLinkGraphPanel } from './panels';
+import { networkLinkGraphPanel } from './panels';
 import { topologyNetworkVariable } from './variables';
 
 /**
  * Topology / Network Map (v0.5 §4.4.4-D).
  *
- *   Row 1: Org-wide geomap of networks (one marker per network).
- *   Row 2: Per-network LLDP/CDP link graph for the selected $network.
+ * A single full-page LLDP/CDP device link graph scoped to the selected
+ * `$network`. Single-select is load-bearing: the backend caps the
+ * per-network device fan-out so org-wide expansion would blow through
+ * the rate budget.
  *
- * The page uses a single-select `$network` variable rather than the
- * shared multi-select `networkVariable()` because Row 2's per-device
- * fan-out is gated to one network at a time. Row 1 is org-scoped via
- * `$org` and ignores the network filter.
- *
- * The scene is snapshot-oriented (no native timeseries) so we use a
- * narrow time picker mostly as a "force refresh" affordance rather than
- * a true range selector. The `networkGeo` data has a 1 h TTL and
- * `deviceLldpCdp` 15 m so even a frequent refresh stays inside the
- * cache window.
+ * The scene is snapshot-oriented (no native timeseries) so the time
+ * picker acts as a "force refresh" affordance — `deviceLldpCdp` has a
+ * 15 m cache TTL so even a frequent refresh stays inside the window.
  */
 export function topologyScene(): EmbeddedScene {
   return new EmbeddedScene({
@@ -48,11 +43,7 @@ export function topologyScene(): EmbeddedScene {
       children: [
         configGuardFlexItem(),
         new SceneFlexItem({
-          minHeight: 480,
-          body: networkGeomapPanel(),
-        }),
-        new SceneFlexItem({
-          minHeight: 520,
+          minHeight: 900,
           body: networkLinkGraphPanel(),
         }),
       ],

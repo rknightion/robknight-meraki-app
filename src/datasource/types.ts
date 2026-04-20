@@ -269,6 +269,12 @@ export interface MerakiQuery extends DataQuery {
    * into the severity slot, triggering Meraki HTTP 500.
    */
   alertStatus?: 'active' | 'resolved' | 'dismissed' | 'all';
+  /**
+   * Wireless-only band filter for `wirelessChannelUtil`. One of "2.4", "5",
+   * "6". When set, the handler emits only frames matching that band. Omit
+   * (or leave empty) to keep every band the AP reports on.
+   */
+  band?: string;
 }
 
 export interface MerakiDSOptions extends DataSourceJsonData {

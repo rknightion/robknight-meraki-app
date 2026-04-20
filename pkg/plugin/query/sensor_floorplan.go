@@ -72,7 +72,7 @@ func handleSensorFloorPlan(ctx context.Context, client *meraki.Client, q MerakiQ
 			readingsBySerial[s.Serial] = row
 		}
 		for _, r := range s.Readings {
-			v, ok := sensorValue(r.Metric, r.Temperature, r.Humidity, r.Door, r.Water, r.CO2, r.PM25, r.TVOC, r.Noise, r.Battery, r.IAQ)
+			v, ok := sensorValue(r.Metric, r.Temperature, r.Humidity, r.Door, r.Water, r.CO2, r.PM25, r.TVOC, r.Noise, r.Battery, r.IAQ, r.RealPower, r.ApparentPower, r.Voltage, r.Current, r.Frequency, r.PowerFactor, r.DownstreamPower, r.RemoteLockoutSwitch)
 			if !ok {
 				continue
 			}
@@ -93,7 +93,9 @@ func handleSensorFloorPlan(ctx context.Context, client *meraki.Client, q MerakiQ
 	}
 	var placements []placed
 	anyPlanSeen := false
+	selectedNetworks := make(map[string]struct{}, len(q.NetworkIDs))
 	for _, netID := range q.NetworkIDs {
+		selectedNetworks[netID] = struct{}{}
 		plans, perr := client.GetNetworkFloorPlans(ctx, netID, sensorFloorPlanTTL)
 		if perr != nil {
 			return nil, fmt.Errorf("sensorFloorPlan: floor plans (network %s): %w", netID, perr)
@@ -116,6 +118,40 @@ func handleSensorFloorPlan(ctx context.Context, client *meraki.Client, q MerakiQ
 					hasAnchor: dev.Lat != 0 || dev.Lng != 0,
 				})
 			}
+		}
+	}
+
+	// Fallback: when Meraki Dashboard has no floor plans for the selected
+	// network(s), the operator still expects to see "latest reading per
+	// sensor" somewhere on the overview. The inventory table at device-level
+	// already carries `lat`/`lng`/`address` for each MT unit; synthesize
+	// placements from those so the panel becomes a no-floor-plan-required
+	// latest-readings grid instead of silently reading "no sensors placed".
+	// When a real floor plan IS configured, this fallback is skipped — we
+	// never want to mix plan-relative and device-level coordinates on the
+	// same panel (the anchor frame-of-reference is different).
+	if !anyPlanSeen {
+		devices, derr := client.GetOrganizationDevices(ctx, q.OrgID, []string{"sensor"}, devicesTTL)
+		if derr != nil {
+			return nil, fmt.Errorf("sensorFloorPlan: devices fallback: %w", derr)
+		}
+		for _, d := range devices {
+			// Narrow to the panel's network scope. An empty networkIds filter
+			// resolves to "all networks" earlier in the query pipeline, but
+			// callers always pass at least one network here via `$network`.
+			if len(selectedNetworks) > 0 {
+				if _, ok := selectedNetworks[d.NetworkID]; !ok {
+					continue
+				}
+			}
+			placements = append(placements, placed{
+				planID:    "",
+				planName:  "(no floor plan)",
+				serial:    d.Serial,
+				lat:       d.Lat,
+				lng:       d.Lng,
+				hasAnchor: d.Lat != 0 || d.Lng != 0,
+			})
 		}
 	}
 
@@ -179,15 +215,16 @@ func handleSensorFloorPlan(ctx context.Context, client *meraki.Client, q MerakiQ
 	)
 
 	if !anyPlanSeen {
-		// Frame stays zero-row — the viz branches on the notice, not on
-		// "rows == 0", so a sensor that's reporting but un-placed reads
-		// differently from "no floor plan configured at all".
+		// Rows now come from the device-level fallback (if any sensors
+		// reported). The info notice tells operators that assigning a floor
+		// plan in Meraki Dashboard upgrades this tile into a spatial
+		// heatmap — without dropping useful data in the meantime.
 		if frame.Meta == nil {
 			frame.Meta = &data.FrameMeta{}
 		}
 		frame.Meta.Notices = append(frame.Meta.Notices, data.Notice{
 			Severity: data.NoticeSeverityInfo,
-			Text:     "no floor plan configured for the selected network(s); assign a floor plan in Meraki Dashboard to enable the heatmap view",
+			Text:     "No Meraki Dashboard floor plan configured for this network — showing latest sensor readings by device. Create a floor plan under Network-wide → Map & floor plans to enable the spatial heatmap view.",
 		})
 	}
 

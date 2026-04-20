@@ -4,6 +4,7 @@ import { sensorDetailScene } from './sensorDetailScene';
 import { prefixRoute } from '../../utils/utils.routing';
 import { ROUTES } from '../../constants';
 import { familyGateWrap } from '../../scene-helpers/familyGate';
+import { applyDeviceNameTitle } from '../../scene-helpers/device-name-title';
 
 export const sensorsPage = new SceneAppPage({
   title: 'Sensors',
@@ -17,7 +18,7 @@ export const sensorsPage = new SceneAppPage({
       routePath: ':serial/*',
       getPage: (match, parent) => {
         const serial = decodeURIComponent(match.params.serial);
-        return new SceneAppPage({
+        const page = new SceneAppPage({
           title: serial,
           subTitle: 'Sensor detail — all metrics reported by this device.',
           titleIcon: 'cube',
@@ -25,6 +26,8 @@ export const sensorsPage = new SceneAppPage({
           routePath: `${match.params.serial}/*`,
           getScene: () => sensorDetailScene(serial),
         });
+        applyDeviceNameTitle(page, serial, 'sensor');
+        return page;
       },
     },
   ],

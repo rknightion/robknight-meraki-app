@@ -37,22 +37,39 @@ var metricNames = []string{
 	"noise",
 	"battery",
 	"indoorAirQuality",
+	// MT40 smart power monitor
+	"realPower",
+	"apparentPower",
+	"voltage",
+	"current",
+	"frequency",
+	"powerFactor",
+	"downstreamPower",
+	"remoteLockoutSwitch",
 }
 
 // metricLabel maps Meraki's camelCase metric id to a human-friendly legend
 // label. When a metric is not in the table we fall back to the raw id so
 // future metrics keep working before we update the map.
 var metricLabel = map[string]string{
-	"temperature":      "Temperature",
-	"humidity":         "Humidity",
-	"door":             "Door",
-	"water":            "Water",
-	"co2":              "CO₂",
-	"pm25":             "PM2.5",
-	"tvoc":             "TVOC",
-	"noise":            "Noise",
-	"battery":          "Battery",
-	"indoorAirQuality": "IAQ",
+	"temperature":         "Temperature",
+	"humidity":            "Humidity",
+	"door":                "Door",
+	"water":               "Water",
+	"co2":                 "CO₂",
+	"pm25":                "PM2.5",
+	"tvoc":                "TVOC",
+	"noise":               "Noise",
+	"battery":             "Battery",
+	"indoorAirQuality":    "IAQ",
+	"realPower":           "Real power",
+	"apparentPower":       "Apparent power",
+	"voltage":             "Voltage",
+	"current":             "Current",
+	"frequency":           "Frequency",
+	"powerFactor":         "Power factor",
+	"downstreamPower":     "Downstream power",
+	"remoteLockoutSwitch": "Remote lockout",
 }
 
 // handleSensorReadingsLatest emits one row per (serial, metric) from the
@@ -84,7 +101,7 @@ func handleSensorReadingsLatest(ctx context.Context, client *meraki.Client, q Me
 	)
 	for _, s := range sensors {
 		for _, r := range s.Readings {
-			v, ok := sensorValue(r.Metric, r.Temperature, r.Humidity, r.Door, r.Water, r.CO2, r.PM25, r.TVOC, r.Noise, r.Battery, r.IAQ)
+			v, ok := sensorValue(r.Metric, r.Temperature, r.Humidity, r.Door, r.Water, r.CO2, r.PM25, r.TVOC, r.Noise, r.Battery, r.IAQ, r.RealPower, r.ApparentPower, r.Voltage, r.Current, r.Frequency, r.PowerFactor, r.DownstreamPower, r.RemoteLockoutSwitch)
 			if !ok {
 				// No union field populated for the metric we were told about;
 				// skip it rather than emit a misleading 0.
@@ -127,15 +144,25 @@ type sensorHistoryKey struct {
 	networkName string
 }
 
+// sensorHistoryChunk is the Meraki-imposed maximum timespan per
+// /organizations/{orgId}/sensor/readings/history request. The OpenAPI spec
+// limits `t1-t0` to 7 days; longer panel ranges are split into sequential
+// chunks below and concatenated client-side. Kept as a named constant so the
+// chunking loop and the endpoint-range table agree.
+const sensorHistoryChunk = 7 * 24 * time.Hour
+
 // handleSensorReadingsHistory fetches a windowed historical series and emits
 // one frame per (serial, metric) pair. Each frame carries Prometheus-style
 // labels on its value field so Grafana's timeseries viz can infer the legend
 // and series grouping natively — without the labels we were emitting a
 // single long-format frame and the panel rendered an empty chart.
 //
-// Time-range resolution: we ask meraki.KnownEndpointRanges to quantize the
-// panel's (from, to, maxDataPoints) tuple to the nearest Meraki-allowed
-// bucket before sending, otherwise the API rejects with 400.
+// Long-range handling: the Meraki endpoint rejects any request where
+// `t1-t0` exceeds 7 days. When the panel asks for a wider window (the
+// "Battery (30d)" tile being the canonical example), we walk the range in
+// 7-day chunks and merge the resulting readings before grouping. This keeps
+// panels with sparse-sample metrics (battery samples months apart) working
+// without having to pick a scene time-range that papers over the API limit.
 //
 // Label mode: when opts.LabelMode == "name", the `DisplayNameFromDS` on each
 // frame resolves to the device name (via a cached /devices lookup) instead
@@ -156,21 +183,45 @@ func handleSensorReadingsHistory(ctx context.Context, client *meraki.Client, q M
 	if !ok {
 		return nil, fmt.Errorf("sensorReadingsHistory: missing endpoint spec")
 	}
-	// Quantize resolution to panel width (MaxDataPoints).
-	window, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
+	// Resolve applies the freshness floor; we ignore the spec's MaxTimespan
+	// here because the chunking loop below handles wide windows. We still
+	// use the resolved t0/t1 so the freshness-floor behaviour (shaving the
+	// live tail back by 60s to avoid lag artefacts) stays consistent with
+	// the rest of the handlers.
+	resolved, err := spec.Resolve(from, to, tr.MaxDataPoints, nil)
 	if err != nil {
 		return nil, fmt.Errorf("sensorReadingsHistory: resolve window: %w", err)
 	}
-
-	reqOpts := meraki.SensorReadingsHistoryOptions{
-		NetworkIDs: q.NetworkIDs,
-		Serials:    q.Serials,
-		Metrics:    q.Metrics,
-		Window:     &window,
+	// spec.Resolve clamps w.Timespan to MaxTimespan (7d). For our chunking
+	// loop we need the ORIGINAL caller-requested span. Reconstruct it from
+	// the freshness-adjusted `t1` and the caller's `from`, falling back to
+	// the resolved window when that would produce an inverted range.
+	effectiveFrom := from
+	if effectiveFrom.After(resolved.T1) {
+		effectiveFrom = resolved.T0
 	}
-	points, err := client.GetOrganizationSensorReadingsHistory(ctx, q.OrgID, reqOpts, sensorHistoryTTL)
-	if err != nil {
-		return nil, err
+	effectiveTo := resolved.T1
+
+	var points []meraki.SensorReadingHistoryPoint
+	cursor := effectiveFrom
+	for cursor.Before(effectiveTo) {
+		chunkEnd := cursor.Add(sensorHistoryChunk)
+		if chunkEnd.After(effectiveTo) {
+			chunkEnd = effectiveTo
+		}
+		chunk := meraki.TimeRangeWindow{T0: cursor, T1: chunkEnd, Timespan: chunkEnd.Sub(cursor)}
+		reqOpts := meraki.SensorReadingsHistoryOptions{
+			NetworkIDs: q.NetworkIDs,
+			Serials:    q.Serials,
+			Metrics:    q.Metrics,
+			Window:     &chunk,
+		}
+		chunkPoints, chunkErr := client.GetOrganizationSensorReadingsHistory(ctx, q.OrgID, reqOpts, sensorHistoryTTL)
+		if chunkErr != nil {
+			return nil, chunkErr
+		}
+		points = append(points, chunkPoints...)
+		cursor = chunkEnd
 	}
 
 	// If the user opted into name-based labels, resolve serial→name from the
@@ -192,7 +243,7 @@ func handleSensorReadingsHistory(ctx context.Context, client *meraki.Client, q M
 	}
 	groups := make(map[sensorHistoryKey]*seriesBuf)
 	for _, p := range points {
-		v, ok := sensorValue(p.Metric, p.Temperature, p.Humidity, p.Door, p.Water, p.CO2, p.PM25, p.TVOC, p.Noise, p.Battery, p.IAQ)
+		v, ok := sensorValue(p.Metric, p.Temperature, p.Humidity, p.Door, p.Water, p.CO2, p.PM25, p.TVOC, p.Noise, p.Battery, p.IAQ, p.RealPower, p.ApparentPower, p.Voltage, p.Current, p.Frequency, p.PowerFactor, p.DownstreamPower, p.RemoteLockoutSwitch)
 		if !ok {
 			continue
 		}
@@ -368,6 +419,14 @@ func sensorValue(
 	noise *meraki.NoiseReading,
 	battery *meraki.BatteryReading,
 	iaq *meraki.IAQReading,
+	realPower *meraki.RealPowerReading,
+	apparentPower *meraki.ApparentPowerReading,
+	voltage *meraki.VoltageReading,
+	current *meraki.CurrentReading,
+	frequency *meraki.FrequencyReading,
+	powerFactor *meraki.PowerFactorReading,
+	downstreamPower *meraki.DownstreamPowerReading,
+	remoteLockout *meraki.RemoteLockoutSwitchReading,
 ) (float64, bool) {
 	switch metric {
 	case "temperature":
@@ -415,6 +474,44 @@ func sensorValue(
 	case "indoorAirQuality":
 		if iaq != nil {
 			return iaq.Score, true
+		}
+	case "realPower":
+		if realPower != nil {
+			return realPower.Draw, true
+		}
+	case "apparentPower":
+		if apparentPower != nil {
+			return apparentPower.Draw, true
+		}
+	case "voltage":
+		if voltage != nil {
+			return voltage.Level, true
+		}
+	case "current":
+		if current != nil {
+			return current.Draw, true
+		}
+	case "frequency":
+		if frequency != nil {
+			return frequency.Level, true
+		}
+	case "powerFactor":
+		if powerFactor != nil {
+			return powerFactor.Percentage, true
+		}
+	case "downstreamPower":
+		if downstreamPower != nil {
+			if downstreamPower.Enabled {
+				return 1, true
+			}
+			return 0, true
+		}
+	case "remoteLockoutSwitch":
+		if remoteLockout != nil {
+			if remoteLockout.Locked {
+				return 1, true
+			}
+			return 0, true
 		}
 	}
 	return 0, false

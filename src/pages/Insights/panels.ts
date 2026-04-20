@@ -243,44 +243,24 @@ export function licensingKpiRow(): VizPanel[] {
  * "no value" placeholder set via `.setNoValue('—')`. We don't conditionally
  * hide this panel based on `coterm=true` — a single-tile "—" for per-device
  * orgs is less surprising than an empty gap appearing on co-term orgs.
+ *
+ * `reduceOptions.fields` MUST name `cotermExpiration` explicitly: the default
+ * empty-string selector only picks numeric fields, so a time-typed field like
+ * this one is silently skipped and the tile renders blank.
  */
 export function cotermExpirationStat(): VizPanel {
   const runner = oneQuery({ kind: QueryKind.LicensesOverview });
 
-  // Keep only the cotermExpiration column so the stat viz picks up exactly
-  // one time value.
-  const data = new SceneDataTransformer({
-    $data: runner,
-    transformations: [
-      {
-        id: 'organize',
-        options: {
-          excludeByName: {
-            active: true,
-            expiring30: true,
-            expired: true,
-            recentlyQueued: true,
-            unusedActive: true,
-            total: true,
-            coterm: true,
-            cotermStatus: true,
-          },
-          renameByName: {},
-        },
-      },
-    ],
-  });
-
   return PanelBuilders.stat()
     .setTitle('Co-term expiration')
     .setDescription('For co-terminated organizations, the date all licenses expire. Shows "—" for per-device orgs.')
-    .setData(data)
+    .setData(runner)
     .setUnit('dateTimeFromNow')
     .setNoValue('—')
     .setOption('reduceOptions', {
       values: false,
       calcs: ['lastNotNull'],
-      fields: '',
+      fields: 'cotermExpiration',
     } as any)
     .setOption('colorMode', 'none' as any)
     .build();

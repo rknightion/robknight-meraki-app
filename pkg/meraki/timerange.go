@@ -103,16 +103,14 @@ func quantizeUp(desired time.Duration, allowed []time.Duration) time.Duration {
 // Keys are the logical endpoint path used in pkg/meraki (the path after /api/v1). Values
 // reflect Meraki's published limits as of the Dashboard API v1.
 var KnownEndpointRanges = map[string]EndpointTimeRange{
+	// Per Meraki OpenAPI spec: `timespan` must be ≤ 7 days and `t1` can be at
+	// most 7 days after `t0`. The endpoint also has NO `interval` query
+	// parameter — Meraki returns raw sensor samples at whatever cadence the
+	// device reports, so we leave AllowedResolutions empty and the handler
+	// does not emit `interval`. For windows wider than 7 days, the
+	// sensorReadingsHistory handler paginates into 7-day chunks.
 	"organizations/{organizationId}/sensor/readings/history": {
-		MaxTimespan: 730 * 24 * time.Hour, // 2 years
-		AllowedResolutions: []time.Duration{
-			60 * time.Second,
-			5 * time.Minute,
-			15 * time.Minute,
-			1 * time.Hour,
-			6 * time.Hour,
-			24 * time.Hour,
-		},
+		MaxTimespan: 7 * 24 * time.Hour,
 	},
 	"organizations/{organizationId}/apiRequests": {
 		MaxTimespan: 31 * 24 * time.Hour,

@@ -268,14 +268,16 @@ func TestHandle_LicensesList_FiltersByState(t *testing.T) {
 	}
 }
 
-// TestHandle_LicensesList_CoTermEmitsNotice verifies the overview probe
-// short-circuits list fetching on a co-term org and surfaces a helpful notice
-// so the UI can render an explanatory banner instead of an empty table.
-func TestHandle_LicensesList_CoTermEmitsNotice(t *testing.T) {
+// TestHandle_LicensesList_CoTermSynthesisesRows verifies the overview probe
+// short-circuits /licenses (which 400s on co-term orgs) and synthesises one
+// row per licensedDeviceCounts entry with the shared co-term expiration
+// threaded through. Panels that key on `seatCount` / `expirationDate` /
+// `daysUntilExpiry` still render meaningful data.
+func TestHandle_LicensesList_CoTermSynthesisesRows(t *testing.T) {
 	srv := newInsightsServer().
 		handle("/licenses/overview", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"status":"OK","expirationDate":"2027-03-13T00:00:00Z","licensedDeviceCounts":{"MR":5}}`))
+			_, _ = w.Write([]byte(`{"status":"OK","expirationDate":"2099-03-13T00:00:00Z","licensedDeviceCounts":{"MR":5,"MS":3}}`))
 		}).
 		handle("/licenses", func(_ http.ResponseWriter, _ *http.Request) {
 			t.Error("licenses list endpoint was called despite co-term probe")
@@ -285,15 +287,39 @@ func TestHandle_LicensesList_CoTermEmitsNotice(t *testing.T) {
 	frame := runSingleFrame(t, client, MerakiQuery{RefID: "A", Kind: KindLicensesList, OrgID: "o1"}, TimeRange{}, Options{})
 
 	rows, _ := frame.RowLen()
-	if rows != 0 {
-		t.Fatalf("rows = %d, want 0 on co-term probe", rows)
+	if rows != 2 {
+		t.Fatalf("rows = %d, want 2 (one per model in licensedDeviceCounts)", rows)
 	}
-	// Expect a frame notice explaining the empty response.
+
+	// Sorted-key order: MR then MS.
+	licenseType, _ := frame.FieldByName("licenseType")
+	if got, _ := licenseType.ConcreteAt(0); got != "MR" {
+		t.Fatalf("row 0 licenseType = %v, want MR", got)
+	}
+	if got, _ := licenseType.ConcreteAt(1); got != "MS" {
+		t.Fatalf("row 1 licenseType = %v, want MS", got)
+	}
+
+	seat, _ := frame.FieldByName("seatCount")
+	if got, _ := seat.ConcreteAt(0); got != int64(5) {
+		t.Fatalf("row 0 seatCount = %v, want 5", got)
+	}
+	if got, _ := seat.ConcreteAt(1); got != int64(3) {
+		t.Fatalf("row 1 seatCount = %v, want 3", got)
+	}
+
+	// Every row shares the same expiration date pulled from the overview.
+	wantExp := time.Date(2099, 3, 13, 0, 0, 0, 0, time.UTC)
+	if got := fieldTime(t, frame, "expirationDate"); !got.Equal(wantExp) {
+		t.Fatalf("row 0 expirationDate = %v, want %v", got, wantExp)
+	}
+
+	// Notice still carries "co-termination" so the UI can badge the table.
 	if frame.Meta == nil || len(frame.Meta.Notices) == 0 {
 		t.Fatalf("expected at least one notice on co-term frame; meta=%+v", frame.Meta)
 	}
-	if !strings.Contains(frame.Meta.Notices[0].Text, "co-termination") {
-		t.Fatalf("notice text = %q, want 'co-termination' substring", frame.Meta.Notices[0].Text)
+	if !strings.Contains(frame.Meta.Notices[0].Text, "Co-termination") {
+		t.Fatalf("notice text = %q, want 'Co-termination' substring", frame.Meta.Notices[0].Text)
 	}
 }
 

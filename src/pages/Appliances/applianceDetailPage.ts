@@ -3,6 +3,7 @@ import { applianceFirewallScene } from './applianceFirewallScene';
 import { applianceOverviewScene } from './applianceOverviewScene';
 import { applianceUplinksScene } from './applianceUplinksScene';
 import { applianceVpnScene } from './applianceVpnScene';
+import { applyDeviceNameTitle } from '../../scene-helpers/device-name-title';
 
 /**
  * Per-appliance detail page — a tabbed `SceneAppPage` with four children:
@@ -21,7 +22,7 @@ export function applianceDetailPage(serial: string, parentUrl: string): SceneApp
   const encodedSerial = encodeURIComponent(serial);
   const baseUrl = `${parentUrl}/${encodedSerial}`;
 
-  return new SceneAppPage({
+  const page = new SceneAppPage({
     title: serial,
     subTitle:
       'Appliance detail — uplink status, VPN peers, loss/latency, and firewall summary.',
@@ -56,4 +57,6 @@ export function applianceDetailPage(serial: string, parentUrl: string): SceneApp
       }),
     ],
   });
+  applyDeviceNameTitle(page, serial, 'appliance');
+  return page;
 }

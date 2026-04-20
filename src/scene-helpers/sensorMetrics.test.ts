@@ -7,8 +7,12 @@ import {
 } from './sensorMetrics';
 
 describe('sensor metric metadata', () => {
-  it('exposes all ten Meraki MT metrics we support', () => {
-    expect(ALL_SENSOR_METRICS).toHaveLength(10);
+  it('exposes every Meraki MT metric family the plugin supports (MT10–MT40)', () => {
+    // 10 environmental metrics (temperature, humidity, CO₂, PM2.5, TVOC,
+    // noise, IAQ, battery, door, water) plus 8 MT40 smart-power metrics
+    // (realPower, apparentPower, voltage, current, frequency, powerFactor,
+    // downstreamPower, remoteLockoutSwitch).
+    expect(ALL_SENSOR_METRICS).toHaveLength(18);
   });
 
   it('maps temperature to celsius for Grafana unit formatting', () => {
@@ -18,11 +22,22 @@ describe('sensor metric metadata', () => {
     expect(temp.unit).toBe('celsius');
   });
 
-  it('flags discrete metrics (door, water) so panels render them as state timelines', () => {
+  it('flags discrete metrics (door, water, MT40 power switches) so panels render them as state timelines', () => {
     expect(SENSOR_METRIC_BY_ID.door.discrete).toBe(true);
     expect(SENSOR_METRIC_BY_ID.water.discrete).toBe(true);
+    expect(SENSOR_METRIC_BY_ID.downstreamPower.discrete).toBe(true);
+    expect(SENSOR_METRIC_BY_ID.remoteLockoutSwitch.discrete).toBe(true);
     // Continuous metrics must not be marked discrete — panel selection branches on this.
     expect(SENSOR_METRIC_BY_ID.temperature.discrete).toBeFalsy();
+    expect(SENSOR_METRIC_BY_ID.realPower.discrete).toBeFalsy();
+  });
+
+  it('maps MT40 power metrics to Grafana electrical units', () => {
+    expect(SENSOR_METRIC_BY_ID.realPower.unit).toBe('watt');
+    expect(SENSOR_METRIC_BY_ID.apparentPower.unit).toBe('voltamp');
+    expect(SENSOR_METRIC_BY_ID.voltage.unit).toBe('volt');
+    expect(SENSOR_METRIC_BY_ID.current.unit).toBe('amp');
+    expect(SENSOR_METRIC_BY_ID.frequency.unit).toBe('hertz');
   });
 });
 

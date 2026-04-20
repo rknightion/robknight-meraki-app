@@ -379,8 +379,9 @@ export function sensorMetricCard(meta: SensorMetricMeta): VizPanel {
 }
 
 /**
- * Discrete (door / water) state-over-time panel. State timeline renders the
- * 0/1 samples we emit for these metrics as coloured bars.
+ * Discrete state-over-time panel (door, water, MT40 downstreamPower, MT40
+ * remoteLockoutSwitch). State timeline renders the 0/1 samples as coloured
+ * bars using the metric's `discreteLabels` metadata.
  */
 function sensorDiscreteStateCard(meta: SensorMetricMeta): VizPanel {
   return PanelBuilders.statetimeline()
@@ -395,24 +396,26 @@ function sensorDiscreteStateCard(meta: SensorMetricMeta): VizPanel {
       })
     )
     .setNoValue('No events in the selected range.')
-    .setMappings([
-      {
-        type: 'value' as any,
-        options: {
-          '0': {
-            text: meta.id === 'door' ? 'Closed' : 'Dry',
-            color: 'green',
-            index: 0,
-          },
-          '1': {
-            text: meta.id === 'door' ? 'Open' : 'Water detected',
-            color: 'red',
-            index: 1,
-          },
-        },
-      },
-    ])
+    .setMappings([discreteValueMapping(meta)])
     .build();
+}
+
+/**
+ * Build the Grafana `value` field-mapping entry for a discrete metric. Reads
+ * `meta.discreteLabels` when present; falls back to neutral On/Off labels so
+ * the panel is still readable if a new discrete metric ships without
+ * metadata.
+ */
+function discreteValueMapping(meta: SensorMetricMeta): { type: any; options: Record<string, { text: string; color: string; index: number }> } {
+  const off = meta.discreteLabels?.off ?? { text: 'Off', color: 'green' };
+  const on = meta.discreteLabels?.on ?? { text: 'On', color: 'red' };
+  return {
+    type: 'value' as any,
+    options: {
+      '0': { text: off.text, color: off.color, index: 0 },
+      '1': { text: on.text, color: on.color, index: 1 },
+    },
+  };
 }
 
 /**
@@ -551,23 +554,7 @@ export function sensorDetailMetricPanel(serial: string, meta: SensorMetricMeta):
       .setTitle(`${meta.label} events`)
       .setData(runner)
       .setNoValue('No events in the selected range.')
-      .setMappings([
-        {
-          type: 'value' as any,
-          options: {
-            '0': {
-              text: meta.id === 'door' ? 'Closed' : 'Dry',
-              color: 'green',
-              index: 0,
-            },
-            '1': {
-              text: meta.id === 'door' ? 'Open' : 'Water detected',
-              color: 'red',
-              index: 1,
-            },
-          },
-        },
-      ])
+      .setMappings([discreteValueMapping(meta)])
       .build();
   }
 
@@ -869,12 +856,15 @@ export function sensorFloorPlanHeatmap(): VizPanel {
     networkIds: ['$network'],
   });
   return PanelBuilders.stat()
-    .setTitle('Floor plan — latest readings')
+    .setTitle('Sensor locations — latest readings')
     .setDescription(
-      'Latest readings for every sensor placed on a floor plan in the ' +
-        'selected network(s). When anchor coordinates are missing the ' +
-        'panel renders a grid; when the network has no floor plan ' +
-        'configured, an info notice is shown instead.'
+      'Latest readings for every sensor in the selected network(s). ' +
+        'When a Meraki Dashboard floor plan exists, rows carry anchor ' +
+        'coordinates for a spatial heatmap upgrade. When no floor plan ' +
+        'is configured, the panel falls back to device-level coordinates ' +
+        '(from Network-wide → Monitor → Map) and renders as a grid of ' +
+        'latest readings — a panel-level info notice confirms which mode ' +
+        'is active.'
     )
     .setData(
       new SceneDataTransformer({
@@ -895,7 +885,7 @@ export function sensorFloorPlanHeatmap(): VizPanel {
         ],
       })
     )
-    .setNoValue('No sensors placed on a floor plan for this network.')
+    .setNoValue('No sensor readings available for the selected network(s).')
     .setOption('reduceOptions', {
       values: true,
       calcs: ['lastNotNull'],

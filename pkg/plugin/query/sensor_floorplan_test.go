@@ -153,14 +153,30 @@ func TestHandle_SensorFloorPlan_WithoutAnchors(t *testing.T) {
 	}
 }
 
-// TestHandle_SensorFloorPlan_NoPlanConfigured asserts the zero-plan branch:
-// the handler emits a zero-row frame and attaches an informational notice
-// so the UI renders a "no floor plan configured" message instead of a
-// silent empty chart.
+// TestHandle_SensorFloorPlan_NoPlanConfigured asserts the no-plan branch
+// falls back to device-level coordinates: when Meraki Dashboard has no
+// floor plans configured, the handler must still surface "latest reading
+// per sensor" rows (synthesized from /organizations/{id}/devices) plus an
+// info notice explaining how to upgrade into the spatial heatmap view.
+// The pre-fallback behaviour (zero-row + notice) silently hid the sensor
+// inventory from operators who hadn't set up Map & floor plans yet.
 func TestHandle_SensorFloorPlan_NoPlanConfigured(t *testing.T) {
+	devices := `[
+	  {"serial":"Q-MT-0001","networkId":"N1","productType":"sensor","lat":37.77,"lng":-122.38,"address":"HQ"},
+	  {"serial":"Q-MT-0002","networkId":"N1","productType":"sensor"}
+	]`
+	readings := `[
+	  {"serial":"Q-MT-0001","network":{"id":"N1","name":"Lab"},"readings":[
+	    {"ts":"2026-04-17T10:00:00Z","metric":"temperature","temperature":{"celsius":21.5,"fahrenheit":70.7}}
+	  ]},
+	  {"serial":"Q-MT-0002","network":{"id":"N1","name":"Lab"},"readings":[
+	    {"ts":"2026-04-17T10:00:00Z","metric":"co2","co2":{"concentration":640}}
+	  ]}
+	]`
 	srv := floorPlanTestServer(t, map[string]string{
 		"/floorPlans":             `[]`,
-		"/sensor/readings/latest": `[]`,
+		"/sensor/readings/latest": readings,
+		"/devices":                devices,
 	})
 	t.Cleanup(srv.Close)
 
@@ -178,19 +194,31 @@ func TestHandle_SensorFloorPlan_NoPlanConfigured(t *testing.T) {
 		t.Fatalf("decode frame: %v", err)
 	}
 	rows, _ := frame.RowLen()
-	if rows != 0 {
-		t.Fatalf("got %d rows, want 0 (no floor plan configured)", rows)
+	if rows != 2 {
+		t.Fatalf("got %d rows, want 2 (one per reporting sensor — Q-MT-0001 temperature + Q-MT-0002 co2)", rows)
+	}
+	planName, _ := frame.FieldByName("floor_plan_name")
+	if v, _ := planName.At(0).(string); v != "(no floor plan)" {
+		t.Fatalf("row 0 floor_plan_name = %q, want \"(no floor plan)\"", v)
+	}
+	// Q-MT-0001 has device-level anchor; Q-MT-0002 does not.
+	xField, _ := frame.FieldByName("x")
+	if xp, _ := xField.At(0).(*float64); xp == nil {
+		t.Fatalf("row 0 x: expected device-level lng anchor, got nil")
+	}
+	if xp, _ := xField.At(1).(*float64); xp != nil {
+		t.Fatalf("row 1 x: expected nil (no device anchor), got %v", *xp)
 	}
 	if frame.Meta == nil || len(frame.Meta.Notices) == 0 {
 		t.Fatalf("expected a frame notice for no-floor-plan branch; got meta=%+v", frame.Meta)
 	}
 	found := false
 	for _, n := range frame.Meta.Notices {
-		if strings.Contains(strings.ToLower(n.Text), "no floor plan") {
+		if strings.Contains(strings.ToLower(n.Text), "no meraki dashboard floor plan") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected 'no floor plan' notice text; got %+v", frame.Meta.Notices)
+		t.Fatalf("expected 'no meraki dashboard floor plan' notice text; got %+v", frame.Meta.Notices)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -146,25 +147,35 @@ func TestHandle_SensorReadingsHistory(t *testing.T) {
 	}
 }
 
-// TestHandle_SensorReadingsHistory_RespectsMaxDataPoints confirms that
-// QueryRequest.MaxDataPoints threads through TimeRange into the sensor
-// history resolution quantization. A narrower panel (MaxDataPoints=60) over
-// a 6h range should pick a coarser bucket than a wide panel
-// (MaxDataPoints=2000) over the same range — 300s vs 60s respectively given
-// the sensor history endpoint's allowed resolution set.
-func TestHandle_SensorReadingsHistory_RespectsMaxDataPoints(t *testing.T) {
-	// We only care about the interval query param; an empty readings payload
-	// keeps the body small and avoids serialising samples we'll never assert
-	// on. The handler returns an empty frame on no rows, which is fine.
+// TestHandle_SensorReadingsHistory_ChunksLongWindows confirms that the
+// handler splits queries exceeding Meraki's 7-day maximum timespan into
+// sequential 7-day chunks and concatenates readings across them. The Meraki
+// sensor-history endpoint rejects `t1-t0 > 7d`, so a 30-day panel range
+// (e.g. the "Battery (30d)" tile) MUST hit the API multiple times or the
+// result is an empty frame. Also asserts the handler does NOT emit an
+// `interval` query param — the endpoint has no such field per the OpenAPI
+// spec; sending one was silently ignored but not part of the contract.
+func TestHandle_SensorReadingsHistory_ChunksLongWindows(t *testing.T) {
 	const payload = `[]`
-	intervals := make(chan string, 2)
+	type call struct {
+		t0, t1   string
+		interval string
+	}
+	calls := make([]call, 0)
+	var mu sync.Mutex
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "/sensor/readings/history") {
 			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
 			return
 		}
-		intervals <- r.URL.Query().Get("interval")
+		mu.Lock()
+		calls = append(calls, call{
+			t0:       r.URL.Query().Get("t0"),
+			t1:       r.URL.Query().Get("t1"),
+			interval: r.URL.Query().Get("interval"),
+		})
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(payload))
 	}))
@@ -175,46 +186,39 @@ func TestHandle_SensorReadingsHistory_RespectsMaxDataPoints(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	// Pin the window so the freshness floor doesn't collapse it in tests.
 	now := time.Now().UTC()
-	from := now.Add(-6 * time.Hour).UnixMilli()
+	from := now.Add(-30 * 24 * time.Hour).UnixMilli()
 	to := now.UnixMilli()
-
-	callWith := func(mdp int64) string {
-		_, err := Handle(context.Background(), client, &QueryRequest{
-			Range:         TimeRange{From: from, To: to},
-			MaxDataPoints: mdp,
-			Queries:       []MerakiQuery{{RefID: "A", Kind: KindSensorReadingsHistory, OrgID: "o1"}},
-		}, Options{})
-		if err != nil {
-			t.Fatalf("Handle(mdp=%d): %v", mdp, err)
-		}
-		select {
-		case got := <-intervals:
-			return got
-		default:
-			t.Fatalf("Handle(mdp=%d) did not hit the server", mdp)
-			return ""
-		}
+	if _, err := Handle(context.Background(), client, &QueryRequest{
+		Range:         TimeRange{From: from, To: to},
+		MaxDataPoints: 500,
+		Queries:       []MerakiQuery{{RefID: "A", Kind: KindSensorReadingsHistory, OrgID: "o1"}},
+	}, Options{}); err != nil {
+		t.Fatalf("Handle: %v", err)
 	}
 
-	// Allowed resolutions for sensor history are [60s, 5m, 15m, 1h, 6h, 24h].
-	// 6h window / MDP=60 ⇒ desired ~360s ⇒ quantize up to 900s (15m).
-	// 6h window / MDP=2000 ⇒ desired ~10.8s ⇒ quantize up to 60s (1m).
-	// The load-bearing assertion is that MaxDataPoints now influences the
-	// resolution at all — previously it was hard-coded to 0 and every call
-	// picked the coarsest bucket regardless of panel width.
-	narrow := callWith(60)
-	wide := callWith(2000)
-	if narrow == wide {
-		t.Fatalf("expected interval to differ with MaxDataPoints; got narrow=%q wide=%q",
-			narrow, wide)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// 30 days / 7-day chunk ⇒ 5 chunks (4 full 7d windows plus a partial).
+	if len(calls) != 5 {
+		t.Fatalf("expected 5 chunked requests, got %d: %+v", len(calls), calls)
 	}
-	if narrow != "900" {
-		t.Fatalf("narrow interval = %q, want 900 (MDP=60 over 6h quantizes to 15m)", narrow)
-	}
-	if wide != "60" {
-		t.Fatalf("wide interval = %q, want 60 (MDP=2000 over 6h quantizes to 1m)", wide)
+	for i, c := range calls {
+		if c.interval != "" {
+			t.Fatalf("call %d: unexpected interval param %q (endpoint has no interval field)", i, c.interval)
+		}
+		if c.t0 == "" || c.t1 == "" {
+			t.Fatalf("call %d: missing t0/t1 (t0=%q t1=%q)", i, c.t0, c.t1)
+		}
+		t0, err0 := time.Parse(time.RFC3339, c.t0)
+		t1, err1 := time.Parse(time.RFC3339, c.t1)
+		if err0 != nil || err1 != nil {
+			t.Fatalf("call %d: t0/t1 parse: %v / %v", i, err0, err1)
+		}
+		if span := t1.Sub(t0); span > 7*24*time.Hour+time.Second {
+			t.Fatalf("call %d: chunk timespan %s exceeds 7d limit", i, span)
+		}
 	}
 }
 

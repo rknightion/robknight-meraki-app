@@ -17,8 +17,17 @@ export interface SensorMetricMeta {
   unit?: string;
   min?: number;
   max?: number;
-  /** When true, the metric is a discrete 0/1 state (door, water). Panels render it as state-over-time rather than a numeric line. */
+  /** When true, the metric is a discrete 0/1 state (door, water, MT40 power switches). Panels render it as state-over-time rather than a numeric line. */
   discrete?: boolean;
+  /**
+   * Value-to-label mapping for discrete metrics. 0 = `off`, 1 = `on`. State
+   * timeline panels use this to colour and label the bars without having to
+   * hard-code per-metric branches.
+   */
+  discreteLabels?: {
+    off: { text: string; color: string };
+    on: { text: string; color: string };
+  };
 }
 
 /**
@@ -35,8 +44,50 @@ export const ALL_SENSOR_METRICS: SensorMetricMeta[] = [
   { id: 'noise', label: 'Noise', unit: 'decdb' },
   { id: 'indoorAirQuality', label: 'IAQ score', min: 0, max: 500 },
   { id: 'battery', label: 'Battery', unit: 'percent', min: 0, max: 100 },
-  { id: 'door', label: 'Door', discrete: true },
-  { id: 'water', label: 'Water', discrete: true },
+  {
+    id: 'door',
+    label: 'Door',
+    discrete: true,
+    discreteLabels: {
+      off: { text: 'Closed', color: 'green' },
+      on: { text: 'Open', color: 'red' },
+    },
+  },
+  {
+    id: 'water',
+    label: 'Water',
+    discrete: true,
+    discreteLabels: {
+      off: { text: 'Dry', color: 'green' },
+      on: { text: 'Water detected', color: 'red' },
+    },
+  },
+  // MT40 smart power monitor metrics. Meraki's native cadence is ~15s per
+  // metric per sensor; treat them the same as environmental timeseries.
+  { id: 'realPower', label: 'Real power', unit: 'watt', min: 0 },
+  { id: 'apparentPower', label: 'Apparent power', unit: 'voltamp', min: 0 },
+  { id: 'voltage', label: 'Voltage', unit: 'volt', min: 0 },
+  { id: 'current', label: 'Current', unit: 'amp', min: 0 },
+  { id: 'frequency', label: 'Frequency', unit: 'hertz' },
+  { id: 'powerFactor', label: 'Power factor', unit: 'percent', min: 0, max: 100 },
+  {
+    id: 'downstreamPower',
+    label: 'Downstream power',
+    discrete: true,
+    discreteLabels: {
+      off: { text: 'Disabled', color: 'red' },
+      on: { text: 'Enabled', color: 'green' },
+    },
+  },
+  {
+    id: 'remoteLockoutSwitch',
+    label: 'Remote lockout',
+    discrete: true,
+    discreteLabels: {
+      off: { text: 'Unlocked', color: 'green' },
+      on: { text: 'Locked', color: 'orange' },
+    },
+  },
 ];
 
 /**

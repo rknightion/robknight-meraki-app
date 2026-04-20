@@ -2,6 +2,7 @@ import { SceneAppPage } from '@grafana/scenes';
 import { cellularOverviewScene } from './cellularOverviewScene';
 import { cellularPortForwardingScene } from './cellularPortForwardingScene';
 import { cellularUplinkScene } from './cellularUplinkScene';
+import { applyDeviceNameTitle } from '../../scene-helpers/device-name-title';
 
 /**
  * Per-gateway detail page — a tabbed `SceneAppPage` with three children:
@@ -17,7 +18,7 @@ export function cellularGatewayDetailPage(serial: string, parentUrl: string): Sc
   const encodedSerial = encodeURIComponent(serial);
   const baseUrl = `${parentUrl}/${encodedSerial}`;
 
-  return new SceneAppPage({
+  const page = new SceneAppPage({
     title: serial,
     subTitle: 'Cellular gateway detail — status, uplink, and port forwarding.',
     titleIcon: 'signal',
@@ -44,4 +45,6 @@ export function cellularGatewayDetailPage(serial: string, parentUrl: string): Sc
       }),
     ],
   });
+  applyDeviceNameTitle(page, serial, 'cellularGateway');
+  return page;
 }

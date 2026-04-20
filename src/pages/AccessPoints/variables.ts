@@ -1,4 +1,4 @@
-import { CustomVariable, QueryVariable } from '@grafana/scenes';
+import { QueryVariable } from '@grafana/scenes';
 import { VariableRefresh } from '@grafana/schema';
 import { MERAKI_DS_REF } from '../../scene-helpers/datasource';
 import { QueryKind } from '../../datasource/types';
@@ -30,26 +30,6 @@ export function apVariable(): QueryVariable {
     isMulti: false,
     refresh: VariableRefresh.onDashboardLoad,
     sort: 1,
-  });
-}
-
-/**
- * $band — static wireless band filter. `CustomVariable` is served without an
- * HTTP roundtrip; the three Wi-Fi bands are a stable vocabulary and we don't
- * need to paginate them. The RF scene uses this to scope the per-band panel
- * overrides.
- */
-export function wirelessBandVariable(): CustomVariable {
-  return new CustomVariable({
-    name: 'band',
-    label: 'Band',
-    query: 'All : ,2.4,5,6',
-    value: '',
-    text: 'All',
-    includeAll: true,
-    defaultToAll: true,
-    allValue: '',
-    isMulti: false,
   });
 }
 

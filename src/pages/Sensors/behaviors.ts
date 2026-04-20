@@ -65,36 +65,39 @@ export class HideWhenEmpty extends SceneObjectBase<HideWhenEmptyState> {
         }
         const series = state.data?.series ?? [];
         const nonEmpty = series.some(frameHasActualData);
-        const parent = getVisualParent(this);
+        const parent = this.parent as Hidable | undefined;
         if (!parent) {
           return;
         }
         parent.setState({ isHidden: !nonEmpty });
       });
+      // Subscribing only catches FUTURE state transitions. If the runner has
+      // already reached Done (cache hit, singleflight sibling already loaded)
+      // by the time activation fires, we'd miss it. Evaluate the current
+      // state once up front so freshly-cached empty results still collapse.
+      const current = (provider.state as { data?: { state?: LoadingState; series?: unknown[] } }).data;
+      if (current?.state === LoadingState.Done || current?.state === LoadingState.Error) {
+        const series = (current.series ?? []) as DataFrame[];
+        const nonEmpty = series.some(frameHasActualData);
+        const parent = this.parent as Hidable | undefined;
+        if (parent) {
+          parent.setState({ isHidden: !nonEmpty });
+        }
+      }
       return () => sub.unsubscribe();
     });
   }
 }
 
-/** Scene objects whose state carries an `isHidden` flag. */
-type Hidable = SceneObject<SceneObjectState & { isHidden?: boolean }>;
-
 /**
- * Walk up from a behavior to the nearest ancestor that supports `isHidden`.
- * Behaviors themselves have no visibility knob; in practice we want to hide
- * the FlexItem or CSSGridItem that wraps the panel.
+ * Scene objects whose state carries an `isHidden` flag. In practice the
+ * direct parent of this behavior is always a SceneFlexItem or
+ * SceneCSSGridItem — both of whose renderers honour `isHidden`. We don't
+ * walk up looking for an ancestor that already has the key in state,
+ * because `SceneFlexItem` and friends omit `isHidden` from state until
+ * it's first set, and the `in` operator would then walk past them.
  */
-function getVisualParent(obj: SceneObject): Hidable | undefined {
-  let cur: SceneObject | undefined = obj.parent;
-  while (cur) {
-    const state = cur.state as SceneObjectState & { isHidden?: boolean };
-    if ('isHidden' in state) {
-      return cur as Hidable;
-    }
-    cur = cur.parent;
-  }
-  return undefined;
-}
+type Hidable = SceneObject<SceneObjectState & { isHidden?: boolean }>;
 
 /**
  * Walk DOWN from the given root to find the first query-runner-like data

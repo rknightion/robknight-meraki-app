@@ -58,6 +58,9 @@ func handleWirelessChannelUtil(ctx context.Context, client *meraki.Client, q Mer
 		Serials:    q.Serials,
 		Window:     &window,
 	}
+	if q.Band != "" {
+		reqOpts.Bands = []string{q.Band}
+	}
 	points, err := client.GetOrganizationWirelessChannelUtilHistory(ctx, q.OrgID, reqOpts, wirelessChannelUtilTTL)
 	if err != nil {
 		return nil, err

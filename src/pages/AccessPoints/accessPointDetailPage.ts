@@ -2,6 +2,7 @@ import { SceneAppPage } from '@grafana/scenes';
 import { apOverviewScene } from './apOverviewScene';
 import { apClientsScene } from './apClientsScene';
 import { apRfScene } from './apRfScene';
+import { applyDeviceNameTitle } from '../../scene-helpers/device-name-title';
 
 /**
  * Per-AP detail page — a tabbed `SceneAppPage` with three children:
@@ -18,7 +19,7 @@ export function accessPointDetailPage(serial: string, parentUrl: string): SceneA
   const encodedSerial = encodeURIComponent(serial);
   const baseUrl = `${parentUrl}/${encodedSerial}`;
 
-  return new SceneAppPage({
+  const page = new SceneAppPage({
     title: serial,
     subTitle: 'Access point detail — status, connected clients, and RF utilisation.',
     titleIcon: 'signal',
@@ -47,4 +48,6 @@ export function accessPointDetailPage(serial: string, parentUrl: string): SceneA
       }),
     ],
   });
+  applyDeviceNameTitle(page, serial, 'wireless');
+  return page;
 }

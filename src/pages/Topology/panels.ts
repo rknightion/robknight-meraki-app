@@ -35,54 +35,7 @@ function oneQuery(params: {
 }
 
 /**
- * Row 1 — org-wide network geomap.
- *
- * Backed by the `networkGeo` query kind (one wide table frame:
- * networkId, name, lat, lng). Coordinates are derived server-side from
- * the centroid of every device in each network — Meraki's networks
- * endpoint does not carry geo, but the devices feed does (and we
- * already cache it for 5 m).
- *
- * The Geomap viz auto-detects lat/lng/name fields by name. Networks
- * with no geo-tagged devices are dropped server-side and counted in a
- * `data.Notice` attached to the frame, so operators see "X networks
- * lack coordinates" surfaced as a panel-level banner.
- */
-export function networkGeomapPanel(): VizPanel {
-  const runner = oneQuery({ kind: QueryKind.NetworkGeo });
-  return PanelBuilders.geomap()
-    .setTitle('Network locations')
-    .setDescription(
-      'One marker per network, positioned at the centroid of its geo-tagged ' +
-        'devices. Set device locations in Meraki Dashboard to populate.'
-    )
-    .setData(runner)
-    .setNoValue('No networks have geo-tagged devices yet.')
-    // Explicit markers layer — PanelBuilders.geomap() ships no data layers
-    // by default, so without this the map renders but no points appear.
-    // `mode: 'coords'` points the viz at the `lat`/`lng` numeric fields
-    // the networkGeo handler emits; `name` is what shows in the layer list.
-    .setOption('layers', [
-      {
-        type: 'markers',
-        name: 'Networks',
-        config: {},
-        location: {
-          mode: 'coords',
-          latitude: 'lat',
-          longitude: 'lng',
-        },
-        tooltip: true,
-      },
-    ] as any)
-    // Auto-fit the view around the marker layer so an operator with
-    // networks spread across continents isn't stuck at the zero meridian.
-    .setOption('view', { id: 'fit', allLayers: true, padding: 5 } as any)
-    .build();
-}
-
-/**
- * Row 2 — per-network device link graph.
+ * Per-network device link graph (the full Topology page).
  *
  * Backed by the `deviceLldpCdp` query kind which emits the two-frame
  * Grafana Node Graph contract:

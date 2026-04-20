@@ -2,6 +2,7 @@ import { SceneAppPage } from '@grafana/scenes';
 import { cameraAnalyticsScene } from './cameraAnalyticsScene';
 import { cameraOverviewScene } from './cameraOverviewScene';
 import { cameraBoundariesScene } from './cameraBoundariesScene';
+import { applyDeviceNameTitle } from '../../scene-helpers/device-name-title';
 
 /**
  * Per-camera detail page — a tabbed `SceneAppPage` with three children:
@@ -18,7 +19,7 @@ export function cameraDetailPage(serial: string, parentUrl: string): SceneAppPag
   const encodedSerial = encodeURIComponent(serial);
   const baseUrl = `${parentUrl}/${encodedSerial}`;
 
-  return new SceneAppPage({
+  const page = new SceneAppPage({
     title: serial,
     subTitle: 'Camera detail — onboarding status, boundary detections, and configured boundaries.',
     titleIcon: 'camera',
@@ -45,4 +46,6 @@ export function cameraDetailPage(serial: string, parentUrl: string): SceneAppPag
       }),
     ],
   });
+  applyDeviceNameTitle(page, serial, 'camera');
+  return page;
 }

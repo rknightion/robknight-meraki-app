@@ -3,6 +3,7 @@ import { switchOverviewScene } from './switchOverviewScene';
 import { switchPortsScene } from './switchPortsScene';
 import { switchAlertsScene } from './switchAlertsScene';
 import { portDetailPage } from './portDetailPage';
+import { applyDeviceNameTitle } from '../../scene-helpers/device-name-title';
 
 /**
  * Per-switch detail page — a tabbed `SceneAppPage` with three children:
@@ -24,9 +25,7 @@ export function switchDetailPage(serial: string, parentUrl: string): SceneAppPag
   const portsTabUrl = `${baseUrl}/ports`;
   const alertsTabUrl = `${baseUrl}/alerts`;
 
-  return new SceneAppPage({
-    // TODO: resolve to the real switch name once the KPI row surfaces it.
-    // The model column of the Devices frame would be a good fallback.
+  const page = new SceneAppPage({
     title: serial,
     subTitle: 'Switch detail — overview, per-port status, and alerts.',
     titleIcon: 'sitemap',
@@ -69,4 +68,6 @@ export function switchDetailPage(serial: string, parentUrl: string): SceneAppPag
       }),
     ],
   });
+  applyDeviceNameTitle(page, serial, 'switch');
+  return page;
 }

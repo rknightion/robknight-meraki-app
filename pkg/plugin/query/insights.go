@@ -183,14 +183,13 @@ func handleLicensesList(ctx context.Context, client *meraki.Client, q MerakiQuer
 		return nil, fmt.Errorf("licensesList: orgId is required")
 	}
 
-	// Quick probe: if the org is co-term, there's no list to fetch.
+	// Quick probe: co-term orgs 400 on /licenses, but the overview response
+	// carries a per-model count breakdown + a shared expiration date. Synth
+	// one row per model so the inventory table, renewal calendar, and any
+	// downstream filters still render meaningful data instead of an empty
+	// frame that panels can't distinguish from "no licenses".
 	if overview, err := client.GetOrganizationLicensesOverview(ctx, q.OrgID, licensesOverviewTTL); err == nil && overview != nil && overview.IsCoterm() {
-		frame := emptyLicensesFrame()
-		frame.AppendNotices(data.Notice{
-			Severity: data.NoticeSeverityInfo,
-			Text:     "Organization uses co-termination licensing; see overview KPIs.",
-		})
-		return []*data.Frame{frame}, nil
+		return cotermLicensesListFrame(overview), nil
 	}
 
 	opts := meraki.LicenseListOptions{
@@ -353,22 +352,76 @@ func subscriptionLicensesListFrame(ctx context.Context, client *meraki.Client, o
 	return []*data.Frame{frame}, nil
 }
 
-// emptyLicensesFrame constructs the zero-row licenses_list frame with the
-// full column set. Used for the co-term notice path so the UI binds the same
-// columns regardless of which branch emitted the frame.
-func emptyLicensesFrame() *data.Frame {
-	return data.NewFrame("licenses_list",
-		data.NewField("id", nil, []string{}),
-		data.NewField("licenseType", nil, []string{}),
-		data.NewField("state", nil, []string{}),
-		data.NewField("deviceSerial", nil, []string{}),
-		data.NewField("networkId", nil, []string{}),
-		data.NewField("seatCount", nil, []int64{}),
-		data.NewField("activationDate", nil, []time.Time{}),
-		data.NewField("expirationDate", nil, []time.Time{}),
-		data.NewField("headLicenseId", nil, []string{}),
-		data.NewField("daysUntilExpiry", nil, []int64{}),
+// cotermLicensesListFrame synthesises a licenses_list-shaped frame from the
+// co-term overview so the existing per-device panels (inventory table, renewal
+// calendar) still render useful data on co-term orgs, where /licenses itself
+// returns HTTP 400. One row per model/SKU entry in licensedDeviceCounts;
+// every row shares the overview's single `expirationDate` (co-termination ⇒
+// all licenses expire together). Keys are emitted in sorted order so frame
+// contents are deterministic for tests and diffs.
+func cotermLicensesListFrame(overview *meraki.LicensesOverview) []*data.Frame {
+	models := make([]string, 0, len(overview.LicensedDeviceCounts))
+	for m := range overview.LicensedDeviceCounts {
+		models = append(models, m)
+	}
+	sort.Strings(models)
+
+	now := time.Now().UTC()
+	var exp time.Time
+	if overview.ExpirationDate != nil {
+		exp = overview.ExpirationDate.UTC()
+	}
+	days := int64(-1)
+	if !exp.IsZero() {
+		days = int64(exp.Sub(now) / (24 * time.Hour))
+	}
+	state := overview.Status
+	if state == "" {
+		state = "coterm"
+	}
+
+	var (
+		ids             []string
+		licenseTypes    []string
+		states          []string
+		serials         []string
+		networkIDs      []string
+		seatCounts      []int64
+		activations     []time.Time
+		expirations     []time.Time
+		headLicenseIDs  []string
+		daysUntilExpiry []int64
 	)
+	for _, m := range models {
+		ids = append(ids, "coterm-"+m)
+		licenseTypes = append(licenseTypes, m)
+		states = append(states, state)
+		serials = append(serials, "")
+		networkIDs = append(networkIDs, "")
+		seatCounts = append(seatCounts, overview.LicensedDeviceCounts[m])
+		activations = append(activations, time.Time{})
+		expirations = append(expirations, exp)
+		headLicenseIDs = append(headLicenseIDs, "")
+		daysUntilExpiry = append(daysUntilExpiry, days)
+	}
+
+	frame := data.NewFrame("licenses_list",
+		data.NewField("id", nil, ids),
+		data.NewField("licenseType", nil, licenseTypes),
+		data.NewField("state", nil, states),
+		data.NewField("deviceSerial", nil, serials),
+		data.NewField("networkId", nil, networkIDs),
+		data.NewField("seatCount", nil, seatCounts),
+		data.NewField("activationDate", nil, activations),
+		data.NewField("expirationDate", nil, expirations),
+		data.NewField("headLicenseId", nil, headLicenseIDs),
+		data.NewField("daysUntilExpiry", nil, daysUntilExpiry),
+	)
+	frame.AppendNotices(data.Notice{
+		Severity: data.NoticeSeverityInfo,
+		Text:     "Co-termination licensing: rows are synthesised from /licenses/overview (one per model/SKU, seatCount = licensed device count). All co-term licenses share a single expirationDate; deviceSerial and networkId are blank because co-term licenses aren't bound to a device or network.",
+	})
+	return []*data.Frame{frame}
 }
 
 // handleApiRequestsOverview aggregates the response-code tallies into four

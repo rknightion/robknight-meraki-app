@@ -193,4 +193,13 @@ export type SensorMetric =
   | 'tvoc'
   | 'noise'
   | 'battery'
-  | 'indoorAirQuality';
+  | 'indoorAirQuality'
+  // MT40 smart power monitor
+  | 'realPower'
+  | 'apparentPower'
+  | 'voltage'
+  | 'current'
+  | 'frequency'
+  | 'powerFactor'
+  | 'downstreamPower'
+  | 'remoteLockoutSwitch';
