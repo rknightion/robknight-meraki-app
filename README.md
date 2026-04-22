@@ -1,3 +1,7 @@
+# Update: do not use this 
+While I had grand plans for this plugin to finally sort out Meraki o11y in Grafana the [recent news from Grafanacon](https://grafana.com/blog/grafana-marketplace-pilot/?pg=grafanacon-2026-announcements&plcmt=in-text#crest-data) and the announcement of the new plugin marketplace and the launch partners Crest would mean I'm now 'competing' with a paid plugin in an active partnership with Grafana Labs which as an employee of Grafana Labs I do not want to do. So development will not continue further on this.  
+
+
 # Cisco Meraki — Grafana App Plugin
 
 An open-source Grafana app plugin that turns your Cisco Meraki estate into an observability-ready
